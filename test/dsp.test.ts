@@ -233,6 +233,15 @@ describe("dsp adapter", () => {
     assert.equal(note.noise, 0.4);
     assert.equal(note.resonance, 0.85);
   });
+
+  it("keeps musical sound defaults off the old 0.5 parking lot for drums and pitched lanes", () => {
+    const project = defaultProject();
+    assert.equal(project.working.kick.sound.drive.value < 0.3, true);
+    assert.equal(project.working.bass.sound.fm.value < 0.2, true);
+    assert.equal(project.working.bass.sound.noise.value < 0.1, true);
+    assert.equal(project.working.lead.sound.attack.value < 0.1, true);
+    assert.equal(project.working.chords.sound.fm.value, 0.5);
+  });
 });
 
 function peak(buf: Float32Array): number {

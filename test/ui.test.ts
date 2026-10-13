@@ -8,7 +8,7 @@ import { createSet, record } from "../src/core/performance.ts";
 import { generatePhrase } from "../src/core/phrase.ts";
 import { lanePages, pageCount, pageGroupColor } from "../src/ui/pages.ts";
 import { menuLed, padLeds, stepLed, stepLeds, trackLeds } from "../src/ui/leds.ts";
-import { HEADER_H, HEIGHT, PARAM_H, pixel, renderScreen, VIZ_H, type Screen } from "../src/ui/screen.ts";
+import { BAR_Y, FONT_H, HEADER_H, HEIGHT, NAME_Y, PARAM_H, VALUE_Y, VIZ_H, pixel, renderScreen, type Screen } from "../src/ui/screen.ts";
 import { defaultUi, openSetMode } from "../src/ui/state.ts";
 import { reduce, relDelta, type Session } from "../src/ui/input.ts";
 
@@ -134,9 +134,9 @@ describe("surface", () => {
     const screen = renderScreen(state.project, state.ui, 0);
     assert.equal(screen.header, "G1 LEN");
     assert.equal(screen.labels[0].text, "G1 LEN");
-    const marked = screen.labels.find((label) => label.invert);
-    assert.ok(marked?.invert);
-    assert.ok((marked?.text ?? "").includes("15"));
+    const marked = screen.labels.filter((label) => label.invert);
+    assert.ok(marked.some((label) => label.text === "15"));
+    assert.ok(marked.some((label) => label.text === "LEN"));
     assert.equal(HEADER_H + VIZ_H + PARAM_H, 64);
     assert.equal(pixel(screen, 0, HEADER_H - 1), 1);
     assert.equal(pixel(screen, 14, HEADER_H - 1), 1);
@@ -161,12 +161,15 @@ describe("surface", () => {
     assert.equal(pixel(screen, 0, HEADER_H + VIZ_H - 1), 0);
     const kickMid = 8;
     const masterMid = 7 * 16 + 8;
-    assert.equal(pixel(screen, kickMid, HEIGHT - 9), 1);
-    assert.equal(pixel(screen, masterMid, HEADER_H + 1), 0);
-    assert.equal(pixel(screen, masterMid + 1, HEIGHT - 9), 0);
-    assert.ok(screen.labels.some((label) => label.text === "M" && label.x >= 16 && label.x < 32));
-    assert.ok(screen.labels.some((label) => label.text === "ML" && label.x >= 64 && label.x < 80));
-    assert.equal(screen.labels.filter((label) => label.y > 1).length, 2);
+    const faderTop = HEADER_H + 7;
+    assert.equal(pixel(screen, kickMid, HEIGHT - 8), 1);
+    // Master at 0: no fill beside the dotted guide (guide only on even rows).
+    assert.equal(pixel(screen, masterMid + 1, faderTop), 0);
+    assert.equal(pixel(screen, masterMid + 1, HEIGHT - 8), 0);
+    const codes = screen.labels.filter((label) => label.y === HEADER_H + 1).map((label) => label.text);
+    assert.deepEqual(codes, ["KCK", "SNR", "HAT", "PRC", "BAS", "LEA", "CHD", "MST"]);
+    assert.ok(screen.labels.some((label) => label.text === "M" && label.y === HEIGHT - 6 && label.x >= 16 && label.x < 32));
+    assert.ok(screen.labels.some((label) => label.text === "ML" && label.y === HEIGHT - 6 && label.x >= 64 && label.x < 80));
   });
 
   it("leaves a one-pixel gap between adjacent same-pitch hits", () => {
@@ -223,16 +226,35 @@ describe("surface", () => {
     assert.ok(head >= 120);
   });
 
-  it("draws one generator per line and leaves transport out of the header", () => {
+  it("draws eight parameter columns and leaves transport out of the header", () => {
     const screen = renderScreen(defaultProject(), defaultUi(), 0, true);
     assert.equal(screen.labels[0].text.includes("PLAY"), false);
     assert.equal(screen.labels[0].text.includes("STOP"), false);
     assert.match(screen.labels[0].text, /^KCK /);
     assert.equal(screen.labels[0].text.includes("JRN"), false);
     assert.equal(screen.labels[0].text.includes("SET"), false);
-    const rows = screen.labels.filter((label) => label.y > HEADER_H);
-    assert.equal(rows.length, 8);
-    assert.ok(rows.every((label) => label.text.startsWith("G")));
+    const names = screen.labels.filter((label) => label.y === NAME_Y);
+    assert.deepEqual(names.map((label) => label.text), ["LEN", "HIT", "ROT", "PRB", "V", "P", "C", "A"]);
+    const values = screen.labels.filter((label) => label.y === VALUE_Y);
+    assert.equal(values.length, 8);
+    assert.equal(NAME_Y, BAR_Y + 2);
+    assert.equal(NAME_Y + FONT_H + 1, HEIGHT);
+    assert.ok(BAR_Y > VALUE_Y);
+    // Default gen1 length=16/64 → quarter bar in column 0 (inner width 14).
+    assert.equal(pixel(screen, 1, BAR_Y), 1);
+    assert.equal(pixel(screen, 1 + 3, BAR_Y), 1);
+    assert.equal(pixel(screen, 1 + 4, BAR_Y), 0);
+    values.forEach((label, index) => {
+      assert.equal(label.cell, index);
+      const left = index * 16;
+      assert.ok(label.x >= left && label.x + label.text.length * 5 <= left + 16);
+    });
+    names.forEach((label, index) => {
+      assert.equal(label.cell, index);
+      const left = index * 16;
+      const mid = left + 8;
+      assert.ok(label.x < mid && label.x + label.text.length * 5 > mid);
+    });
     assert.equal(pixel(screen, 0, HEADER_H), 1);
     assert.equal(pixel(screen, 1, HEADER_H), 0);
     assert.equal(pixel(screen, 1, HEADER_H + VIZ_H - 2), 0);
@@ -246,7 +268,7 @@ describe("surface", () => {
     const mix = renderScreen(defaultProject(), { ...defaultUi(), context: "mix" }, 0);
     assert.equal(pixel(mix, 15, HEADER_H - 1), 1);
     assert.equal(mix.viz, "mixer");
-    assert.ok(mix.labels.every((label) => label.y === 1 || label.text === "M" || label.text === "L" || label.text === "ML"));
+    assert.ok(mix.labels.some((label) => label.text === "KCK" && label.y === HEADER_H + 1));
     const bassProject = defaultProject();
     bassProject.working.bass.degree = modulated(0.5, 0, 8, 1);
     bassProject.working.bass.follow = 0;
@@ -255,10 +277,8 @@ describe("surface", () => {
     assert.ok(columnSpan(bass, 0) <= VIZ_H / 2);
     assert.ok(pitchSpread(bass) > columnSpan(bass, 0));
     const chords = renderScreen(defaultProject(), { ...defaultUi(), context: "chords" }, 0);
-    const chordRows = chords.labels.filter((label) => label.y > HEADER_H);
-    assert.equal(chordRows.length, 2);
-    assert.match(chordRows[0].text, /^CHANGE /);
-    assert.match(chordRows[1].text, /^LENGTH /);
+    const chordNames = chords.labels.filter((label) => label.y === NAME_Y).map((label) => label.text);
+    assert.deepEqual(chordNames, ["V", "P", "C", "A", "V", "P", "C", "A"]);
   });
 
   it("shows a modulated generator while its knob is held and the lane phrase after release", () => {

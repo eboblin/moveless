@@ -5,7 +5,17 @@ import { phraseLoop, soundMotions } from "../dsp/schedule.ts";
 import { packPhraseBody } from "../dsp/voice.ts";
 import { reduce, type MidiMsg, type Session } from "../ui/input.ts";
 import { MENU_CC, menuLed, padLeds, stepLeds, trackLeds } from "../ui/leds.ts";
-import { renderScreen } from "../ui/screen.ts";
+import {
+  CHAR_W,
+  FONT_H,
+  HEADER_H,
+  HEIGHT,
+  PARAM_COL_W,
+  VIZ_H,
+  cellTextX,
+  plotParamMeter,
+  renderScreen,
+} from "../ui/screen.ts";
 import { defaultUi } from "../ui/state.ts";
 import type { Project } from "../core/types.ts";
 
@@ -15,10 +25,15 @@ interface HostGlobals {
   print?: (x: number, y: number, text: string, color: number) => void;
   fill_rect?: (x: number, y: number, w: number, h: number, value: number) => void;
   text_width?: (text: string) => number;
+  set_font?: (path: string) => boolean;
+  get_font_height?: () => number;
   move_midi_internal_send?: (packet: number[]) => void;
   host_module_set_param?: (key: string, value: string) => void;
   shadow_set_param?: (slot: number, key: string, value: string) => void;
 }
+
+/** Schwung 4×5 param-page face — shorter than the host’s default 5×7. */
+const MODULE_FONT = "/data/UserData/schwung/modules/overtake/ptnmove/font.png";
 
 function boot(): Session {
   return { project: defaultProject(), ui: defaultUi(), tick: 0, playing: true };
@@ -87,14 +102,33 @@ function paint(): void {
   const screen = renderScreen(session.project, session.ui, session.tick, session.playing);
   blit(screen.pixels);
   const host = globalThis as HostGlobals;
+  const invertedCells = new Set<number>();
   for (const label of screen.labels) {
-    if (!label.invert) {
-      host.print?.(label.x, label.y, label.text, 1);
+    if (label.invert && label.cell !== undefined) invertedCells.add(label.cell);
+  }
+  const cellTop = HEADER_H + VIZ_H;
+  const cellH = HEIGHT - cellTop;
+  for (const cell of invertedCells) {
+    host.fill_rect?.(cell * PARAM_COL_W, cellTop, PARAM_COL_W, cellH, 1);
+  }
+  for (const meter of screen.meters) {
+    if (!invertedCells.has(meter.cell)) continue;
+    plotParamMeter(meter, (x, y) => host.set_pixel?.(x, y, 0));
+  }
+  for (const label of screen.labels) {
+    const width = host.text_width?.(label.text) ?? label.text.length * CHAR_W;
+    const x = label.cell !== undefined ? cellTextX(label.cell, label.text, width) : label.x;
+    if (label.cell !== undefined) {
+      host.print?.(x, label.y, label.text, invertedCells.has(label.cell) ? 0 : 1);
       continue;
     }
-    const width = host.text_width?.(label.text) ?? label.text.length * 6;
-    host.fill_rect?.(label.x, label.y, width, 7, 1);
-    host.print?.(label.x, label.y, label.text, 0);
+    if (!label.invert) {
+      host.print?.(x, label.y, label.text, 1);
+      continue;
+    }
+    const height = host.get_font_height?.() || FONT_H;
+    host.fill_rect?.(x, label.y, width, height, 1);
+    host.print?.(x, label.y, label.text, 0);
   }
   if (!host.move_midi_internal_send) return;
   const blinkOn = Math.floor(session.tick / (PPQN / 2)) % 2 === 0;
@@ -152,6 +186,8 @@ export function init(): void {
   sentPads = [];
   sentTracks = [];
   sentMenu = -1;
+  const host = globalThis as HostGlobals;
+  host.set_font?.(MODULE_FONT);
   syncVoice(true);
   paint();
 }

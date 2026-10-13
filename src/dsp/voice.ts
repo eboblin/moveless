@@ -251,7 +251,8 @@ function drumSample(engine: Engine, drum: DrumVoice): number {
   const mixed = bodyOsc * drum.env + noisy * drum.noiseEnv + click;
   const coef = 0.025 + drum.tone * drum.tone * 0.95;
   drum.low += (mixed - drum.low) * coef;
-  const driven = shapeDrive(drum.low, drum.drive);
+  // Drive is squared so the top of the knob stays the smash zone, not a dead plateau.
+  const driven = shapeDrive(drum.low, drum.drive * drum.drive);
 
   drum.env *= Math.exp(-1 / (Math.max(0.015, drum.decay) * SAMPLE_RATE));
   drum.noiseEnv *= Math.exp(-1 / (Math.max(0.012, drum.noiseDecay) * SAMPLE_RATE));
@@ -262,7 +263,10 @@ function drumSample(engine: Engine, drum: DrumVoice): number {
 
 function noteSample(engine: Engine, note: NoteVoice): [number, number] {
   const inc = (TWO_PI * note.freq) / SAMPLE_RATE;
-  note.phase += inc + Math.sin(note.phase) * note.fm * inc * 8;
+  // FM/reso use a square curve: the old linear*8 died around unit 0.16; this
+  // keeps the musical throw across most of the knob and leaves 1.0 as chaos.
+  const fm = note.fm * note.fm * 5;
+  note.phase += inc + Math.sin(note.phase) * fm * inc;
   const ratio = 1 + (note.detune - 0.5) * 0.35;
   note.phase2 += inc * ratio;
   const primary = wave(note.phase, note.shape);
@@ -271,8 +275,9 @@ function noteSample(engine: Engine, note: NoteVoice): [number, number] {
   const coef = 0.015 + note.cutoff * note.cutoff * 0.92;
   note.low += (noisy - note.low) * coef;
   const diff = noisy - note.low;
-  note.band += (diff - note.band) * (0.08 + note.resonance * 0.45);
-  const resonated = note.low + note.band * note.resonance * 5;
+  const reso = note.resonance * note.resonance;
+  note.band += (diff - note.band) * (0.08 + reso * 0.45);
+  const resonated = note.low + note.band * reso * 4;
   const attackSamples = 1 + note.attack * 0.2 * SAMPLE_RATE;
   if (note.age < attackSamples) note.env = (note.age + 1) / attackSamples;
   else note.env *= Math.exp(-1 / ((0.04 + note.release * 1.6) * SAMPLE_RATE));

@@ -3,20 +3,39 @@ import { generatePhrase, laneSteps } from "../core/phrase.ts";
 import { evalModulated } from "../core/modulate.ts";
 import { LANE_CODE, type ContextId, type LaneId, type Project, type TimedEvent } from "../core/types.ts";
 import { readControl } from "./controls.ts";
-import { pagesFor } from "./pages.ts";
+import { pagesFor, type Binding, type Page } from "./pages.ts";
 import type { UiState } from "./state.ts";
 
 export const WIDTH = 128;
 export const HEIGHT = 64;
-export const HEADER_H = 10;
-export const VIZ_H = 32;
-export const PARAM_H = 22;
+/** Title at y=1 (5 px) + pager underline — no spare rows under the 4×5 face. */
+export const HEADER_H = 7;
+/** Typical advance for the bundled 4×5 face (cap body + 1 px gap). */
+export const CHAR_W = 5;
+export const FONT_H = 5;
+export const PARAM_COLS = 8;
+export const PARAM_COL_W = WIDTH / PARAM_COLS;
+/** Bottom strip packed: value → bar → name, 1 px pad under the name. */
+export const NAME_Y = HEIGHT - FONT_H - 1;
+export const BAR_Y = NAME_Y - 2;
+export const VALUE_Y = BAR_Y - FONT_H - 1;
+export const VIZ_H = VALUE_Y - HEADER_H - 1;
+export const PARAM_H = HEIGHT - HEADER_H - VIZ_H;
 
 export interface Label {
   x: number;
   y: number;
   text: string;
   invert?: boolean;
+  /** Param column 0..7 — paint centers text in this fixed-width cell. */
+  cell?: number;
+}
+
+export interface ParamMeter {
+  cell: number;
+  /** 0..1 unipolar, or -1..1 when bipolar. */
+  level: number;
+  bipolar: boolean;
 }
 
 export interface Screen {
@@ -25,6 +44,7 @@ export interface Screen {
   params: string;
   pixels: Uint8Array;
   labels: Label[];
+  meters: ParamMeter[];
 }
 
 export function renderScreen(project: Project, ui: UiState, tick: number, playing = false, now = Date.now()): Screen {
@@ -51,11 +71,13 @@ export function renderScreen(project: Project, ui: UiState, tick: number, playin
   else if (mixer) drawMixer(pixels, project, focus);
   else if (generator) drawGenerator(pixels, project, context, generator, focusState?.showPattern ?? false, playing ? stepAt(project, tick) : -1);
   else if (vizLane) drawPhrase(pixels, project, vizLane, playing ? stepAt(project, tick) : -1);
+  const meters = mixer || !page ? [] : paramMeters(project, context, page);
+  if (meters.length) drawParamMeters(pixels, meters, 1);
   const labels = mixer
-    ? [{ x: 1, y: 1, text: header.slice(0, LINE_LIMIT) }, ...mixerIndicators(project)]
+    ? [{ x: 1, y: 1, text: header.slice(0, LINE_LIMIT) }, ...mixerChannelLabels(project, focus)]
     : drawLabels(project, context, page, focus);
   if (notice) labels.push(...noticeLabels(notice.title, notice.value));
-  return { header, viz, params, pixels, labels };
+  return { header, viz, params, pixels, labels, meters };
 }
 
 function fillViz(pixels: Uint8Array): void {
@@ -66,11 +88,20 @@ function fillViz(pixels: Uint8Array): void {
 
 const MIX_CHANNELS = ["kick", "snare", "hat", "perc", "bass", "lead", "chords", "master"] as const;
 const MIX_COL_W = 16;
-const MIX_IND_H = 8;
+const MIX_LABEL_H = 7;
+const MIX_IND_H = 7;
 
-/** Eight vertical level faders under the header; mute/lock sit in the bottom strip. */
+function mixCode(id: (typeof MIX_CHANNELS)[number]): string {
+  return id === "master" ? "MST" : LANE_CODE[id];
+}
+
+function mixFocusLabel(id: (typeof MIX_CHANNELS)[number]): string {
+  return id === "master" ? "MASTER" : LANE_CODE[id];
+}
+
+/** Eight vertical faders: lane codes above, mute/lock below. */
 function drawMixer(pixels: Uint8Array, project: Project, focus: string | null): void {
-  const top = HEADER_H;
+  const top = HEADER_H + MIX_LABEL_H;
   const bottom = HEIGHT - MIX_IND_H - 1;
   const trackH = Math.max(1, bottom - top);
   for (let i = 0; i < MIX_CHANNELS.length; i++) {
@@ -79,8 +110,7 @@ function drawMixer(pixels: Uint8Array, project: Project, focus: string | null): 
     const x0 = i * MIX_COL_W;
     const x1 = x0 + MIX_COL_W - 1;
     const mid = x0 + Math.floor(MIX_COL_W / 2);
-    const label = id === "master" ? "MASTER" : LANE_CODE[id];
-    const lit = focus === label;
+    const lit = focus === mixFocusLabel(id);
     const fill = Math.max(0, Math.round(level * trackH));
     for (let y = top; y <= bottom; y++) {
       if (y % 2 === 0) set(pixels, mid, y, 1);
@@ -102,16 +132,28 @@ function drawMixer(pixels: Uint8Array, project: Project, focus: string | null): 
   }
 }
 
-function mixerIndicators(project: Project): Label[] {
+function mixerChannelLabels(project: Project, focus: string | null): Label[] {
   const labels: Label[] = [];
-  const y = HEIGHT - 7;
+  const codeY = HEADER_H + 1;
+  const markY = HEIGHT - FONT_H - 1;
   for (let i = 0; i < MIX_CHANNELS.length; i++) {
     const id = MIX_CHANNELS[i];
+    const x0 = i * MIX_COL_W;
+    const code = mixCode(id);
+    labels.push({
+      x: x0 + Math.max(0, Math.floor((MIX_COL_W - code.length * CHAR_W) / 2)),
+      y: codeY,
+      text: code,
+      invert: focus === mixFocusLabel(id),
+    });
     if (id === "master") continue;
     const marks = `${project.mute[id] ? "M" : ""}${project.lock[id] ? "L" : ""}`;
     if (!marks) continue;
-    const x0 = i * MIX_COL_W;
-    labels.push({ x: x0 + Math.max(0, Math.floor((MIX_COL_W - marks.length * 6) / 2)), y, text: marks });
+    labels.push({
+      x: x0 + Math.max(0, Math.floor((MIX_COL_W - marks.length * CHAR_W) / 2)),
+      y: markY,
+      text: marks,
+    });
   }
   return labels;
 }
@@ -124,7 +166,7 @@ function noticeLabels(title: string, value: string): Label[] {
 }
 
 function centered(text: string): number {
-  return Math.max(0, Math.floor((WIDTH - text.length * 6) / 2));
+  return Math.max(0, Math.floor((WIDTH - text.length * CHAR_W) / 2));
 }
 
 function laneHeader(project: Project, context: ContextId, title: string): string {
@@ -289,95 +331,89 @@ function fullName(label: string): string {
   return `${parts.slice(0, -1).join(" ")} ${word}`.trim();
 }
 
+/** Last token, max 3 letters — fits a PARAM_COL_W cell at CHAR_W. */
+function shortName(label: string): string {
+  const parts = label.trim().split(/\s+/);
+  return (parts[parts.length - 1] ?? "").slice(0, 3);
+}
+
+/** Fallback center using CHAR_W; host paint re-centers with text_width. */
+export function cellTextX(cell: number, text: string, textWidth = text.length * CHAR_W): number {
+  const left = cell * PARAM_COL_W;
+  return left + Math.max(0, Math.floor((PARAM_COL_W - textWidth) / 2));
+}
+
 function drawLabels(
   project: Project,
   context: ContextId,
-  page: { title: string; bindings: ({ label: string; path: string; integer: boolean } | null)[] } | undefined,
+  page: Page | undefined,
   focus: string | null,
 ): Label[] {
   const code = LANE_CODE[context];
   const title = focus ? fullName(focus) : `${code} ${page?.title ?? ""}`.replace(/\s+/g, " ").trim();
   const labels: Label[] = [{ x: 1, y: 1, text: title.slice(0, LINE_LIMIT) }];
-  const lines = pairedLines(project, context, page?.bindings ?? [], focus);
-  if (lines) {
-    lines.forEach((line, index) => pushLine(labels, line, 43 + index * 11));
-    return labels;
-  }
   page?.bindings.forEach((binding, index) => {
-    if (!binding) return;
+    if (!binding || index >= PARAM_COLS) return;
     const shown = formatValue(readControl(project, context, binding.path), binding.integer);
-    const col = index % 4;
-    const row = index < 4 ? 0 : 1;
-    labels.push({
-      x: col * 32 + 1,
-      y: row === 0 ? 43 : 54,
-      text: cellText(binding.label, shown),
-      invert: focus === binding.label,
-    });
+    const name = shortName(binding.label);
+    const lit = focus === binding.label;
+    labels.push({ x: cellTextX(index, shown), y: VALUE_Y, text: shown, invert: lit, cell: index });
+    labels.push({ x: cellTextX(index, name), y: NAME_Y, text: name, invert: lit, cell: index });
   });
   return labels;
 }
 
-function pushLine(labels: Label[], parts: { text: string; invert: boolean }[], y: number): void {
-  let x = 1;
-  for (const part of parts) {
-    if (!part.text) continue;
-    labels.push({ x, y, text: part.text, invert: part.invert });
-    x += part.text.length * 6;
-  }
-}
-
-function pairedLines(
-  project: Project,
-  context: ContextId,
-  bindings: ({ label: string; path: string; integer: boolean } | null)[],
-  focus: string | null,
-): { text: string; invert: boolean }[][] | null {
-  const grouped = new Map<string, { tag: string; shown: string }[]>();
-  const order: string[] = [];
-  for (const binding of bindings) {
-    if (!binding) continue;
-    const parts = binding.label.split(" ");
-    const tag = parts.slice(1).join(" ");
-    if (!tag) return null;
-    const name = parts[0];
-    if (!grouped.has(name)) {
-      grouped.set(name, []);
-      order.push(name);
-    }
-    grouped.get(name)?.push({ tag, shown: formatValue(readControl(project, context, binding.path), binding.integer) });
-  }
-  if (order.length !== 2) return null;
-  return order.map((name) => {
-    const fields = grouped.get(name) ?? [];
-    if (!fields.some((field) => focus === `${name} ${field.tag}`)) {
-      return [{ text: fitLine(name, fields.map((field) => `${field.tag} ${field.shown}`)), invert: false }];
-    }
-    const parts = [{ text: name, invert: false }];
-    for (const field of fields) {
-      parts.push({ text: ` ${field.tag} ${field.shown}`, invert: focus === `${name} ${field.tag}` });
-    }
-    return parts;
+function paramMeters(project: Project, context: ContextId, page: Page): ParamMeter[] {
+  const meters: ParamMeter[] = [];
+  page.bindings.forEach((binding, index) => {
+    if (!binding || index >= PARAM_COLS) return;
+    meters.push({
+      cell: index,
+      level: meterLevel(readControl(project, context, binding.path), binding),
+      bipolar: binding.min < 0 && binding.max > 0,
+    });
   });
+  return meters;
 }
 
-function fitLine(name: string, fields: string[]): string {
-  const spaced = `${name} ${fields.join(" ")}`;
-  if (spaced.length <= LINE_LIMIT) return spaced;
-  const tight = `${name} ${fields.map((field) => field.replace(" ", "")).join(" ")}`;
-  if (tight.length <= LINE_LIMIT) return tight;
-  const body = fields.map((field) => field.replace(" ", "")).join(" ");
-  const room = LINE_LIMIT - body.length - 1;
-  const short = room > 0 ? name.slice(0, room) : name.slice(0, 1);
-  return `${short} ${body}`.slice(0, LINE_LIMIT);
+function meterLevel(value: number, binding: Binding): number {
+  if (binding.min < 0 && binding.max > 0) {
+    const peak = Math.max(Math.abs(binding.min), Math.abs(binding.max));
+    return peak <= 0 ? 0 : Math.max(-1, Math.min(1, value / peak));
+  }
+  const span = binding.max - binding.min;
+  if (span <= 0) return 0;
+  return Math.max(0, Math.min(1, (value - binding.min) / span));
 }
 
-function cellText(label: string, shown: string): string {
-  const full = `${label} ${shown}`;
-  if (full.length <= 5) return full;
-  const room = 5 - shown.length - 1;
-  if (room < 1) return shown.slice(0, 5);
-  return `${label.slice(0, room)} ${shown}`;
+export function drawParamMeters(
+  pixels: Uint8Array,
+  meters: ParamMeter[],
+  color: number,
+): void {
+  for (const meter of meters) plotParamMeter(meter, (x, y) => set(pixels, x, y, color));
+}
+
+/** Lit x positions for a 1 px value bar inside a param cell. */
+export function plotParamMeter(meter: ParamMeter, plot: (x: number, y: number) => void): void {
+  const x0 = meter.cell * PARAM_COL_W + 1;
+  const inner = PARAM_COL_W - 2;
+  if (inner <= 0) return;
+  if (meter.bipolar) {
+    const mid = x0 + Math.floor(inner / 2);
+    plot(mid, BAR_Y);
+    const span = Math.floor(inner / 2);
+    if (meter.level >= 0) {
+      const n = Math.round(meter.level * span);
+      for (let i = 1; i <= n; i++) plot(mid + i, BAR_Y);
+    } else {
+      const n = Math.round(-meter.level * span);
+      for (let i = 1; i <= n; i++) plot(mid - i, BAR_Y);
+    }
+    return;
+  }
+  const n = Math.round(meter.level * inner);
+  for (let i = 0; i < n; i++) plot(x0 + i, BAR_Y);
 }
 
 function formatValue(value: number, integer: boolean): string {

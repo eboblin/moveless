@@ -55,11 +55,18 @@ New-Item -ItemType Directory -Path $Stage | Out-Null
 Copy-Item (Join-Path $Root "module.json") $Stage
 Copy-Item (Join-Path $Root "ui.js") $Stage
 Copy-Item $Dsp $Stage
+$fontPng = Join-Path $Root "assets\font.png"
+$fontDat = Join-Path $Root "assets\font.png.dat"
+if (-not (Test-Path $fontPng) -or -not (Test-Path $fontDat)) {
+    throw "нет assets/font.png — собери: python scripts/build_font4x5.py --out assets/font.png"
+}
+Copy-Item $fontPng $Stage
+Copy-Item $fontDat $Stage
 if (Test-Path $Tarball) { Remove-Item -Force $Tarball }
 Invoke-Checked { tar -czf $Tarball -C (Join-Path $Root "dist") ptnmove }
 
 $listing = tar -tf $Tarball
-foreach ($name in @("ptnmove/module.json", "ptnmove/ui.js", "ptnmove/dsp.so")) {
+foreach ($name in @("ptnmove/module.json", "ptnmove/ui.js", "ptnmove/dsp.so", "ptnmove/font.png", "ptnmove/font.png.dat")) {
     if ($listing -notcontains $name) {
         throw "в архиве нет $name"
     }

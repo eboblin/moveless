@@ -335,7 +335,9 @@ static float drum_sample(Engine *engine, Drum *drum) {
     float mixed = body * drum->env + noisy * drum->noise_env + click;
     float coef = 0.025f + drum->tone * drum->tone * 0.95f;
     drum->low += (mixed - drum->low) * coef;
-    float gain = 1.0f + drum->drive * 8.0f;
+    /* Squared drive: useful throw stays audible; top of knob is the smash. */
+    float drive = drum->drive * drum->drive;
+    float gain = 1.0f + drive * 8.0f;
     float driven = drum->low * gain;
     driven = driven / (1.0f + fabsf(driven));
     float dcy = drum->decay < 0.015f ? 0.015f : drum->decay;
@@ -349,7 +351,9 @@ static float drum_sample(Engine *engine, Drum *drum) {
 
 static void note_sample(Engine *engine, Note *note, float *left, float *right) {
     float inc = (TWO_PI * note->freq) / SR;
-    note->phase += inc + sinf(note->phase) * note->fm * inc * 8.0f;
+    /* Square FM/reso so the musical range is most of the knob, not unit≈0.16. */
+    float fm = note->fm * note->fm * 5.0f;
+    note->phase += inc + sinf(note->phase) * fm * inc;
     float ratio = 1.0f + (note->detune - 0.5f) * 0.35f;
     note->phase2 += inc * ratio;
     float primary = wave(note->phase, note->shape);
@@ -359,8 +363,9 @@ static void note_sample(Engine *engine, Note *note, float *left, float *right) {
     float coef = 0.015f + note->cutoff * note->cutoff * 0.92f;
     note->low += (noisy - note->low) * coef;
     float diff = noisy - note->low;
-    note->band += (diff - note->band) * (0.08f + note->resonance * 0.45f);
-    float resonated = note->low + note->band * note->resonance * 5.0f;
+    float reso = note->resonance * note->resonance;
+    note->band += (diff - note->band) * (0.08f + reso * 0.45f);
+    float resonated = note->low + note->band * reso * 4.0f;
     float attack_samples = 1.0f + note->attack * 0.2f * SR;
     if ((float)note->age < attack_samples) note->env = ((float)note->age + 1.0f) / attack_samples;
     else note->env *= expf(-1.0f / ((0.04f + note->release * 1.6f) * SR));

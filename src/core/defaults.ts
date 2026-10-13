@@ -8,6 +8,7 @@ import {
   type DrumId,
   type DrumLane,
   type EuclidGen,
+  type LaneId,
   type Lanes,
   type PitchedLane,
   type Project,
@@ -24,9 +25,88 @@ function euclid(length: number, hits: number, rotate = 0, velocity = 0.85): Eucl
   };
 }
 
-function sound(ids: readonly string[], centre = 0.5): Record<string, ReturnType<typeof modulated>> {
+/**
+ * Musical resting points per lane. Chords stay near mid — that set already
+ * reads well; drums/bass/lead used to park every knob at 0.5 and sounded wrong.
+ */
+const SOUND_VALUE: Record<LaneId, Record<string, number>> = {
+  kick: {
+    pitch: 0.4,
+    boom: 0.62,
+    snap: 0.28,
+    click: 0.2,
+    decay: 0.36,
+    punch: 0.7,
+    drive: 0.1,
+    tone: 0.3,
+  },
+  snare: {
+    pitch: 0.48,
+    body: 0.72,
+    noise: 0.48,
+    snap: 0.42,
+    decay: 0.3,
+    ring: 0.25,
+    crisp: 0.38,
+    drive: 0.08,
+  },
+  hat: {
+    pitch: 0.55,
+    metal: 0.52,
+    attack: 0.16,
+    decay: 0.2,
+    bright: 0.58,
+    grit: 0.06,
+    pan: 0.5,
+    spread: 0.28,
+  },
+  perc: {
+    pitch: 0.44,
+    tone: 0.46,
+    ping: 0.32,
+    noise: 0.18,
+    decay: 0.28,
+    ring: 0.2,
+    pan: 0.5,
+    spread: 0.12,
+  },
+  bass: {
+    shape: 0.16,
+    detune: 0.5,
+    fm: 0.05,
+    noise: 0.02,
+    cutoff: 0.48,
+    resonance: 0.1,
+    attack: 0.015,
+    decay: 0.4,
+  },
+  lead: {
+    shape: 0.38,
+    detune: 0.5,
+    fm: 0.08,
+    noise: 0.03,
+    cutoff: 0.7,
+    resonance: 0.08,
+    attack: 0.01,
+    release: 0.3,
+  },
+  chords: {
+    shape: 0.5,
+    detune: 0.5,
+    fm: 0.5,
+    width: 0.5,
+    cutoff: 0.5,
+    resonance: 0.5,
+    attack: 0.5,
+    release: 0.5,
+  },
+};
+
+function sound(lane: LaneId): Record<string, ReturnType<typeof modulated>> {
+  const ids = SOUND[lane];
+  const values = SOUND_VALUE[lane];
   const out: Record<string, ReturnType<typeof modulated>> = {};
-  for (const id of ids) out[id] = modulated(centre);
+  for (const id of ids) out[id] = modulated(values[id] ?? 0.5);
   return out;
 }
 
@@ -42,21 +122,21 @@ function drum(id: DrumId): DrumLane {
     gen1: { ...DRUM_PRIMARY[id], velocity: { ...DRUM_PRIMARY[id].velocity } },
     gen2: euclid(16, 0, 0, 0.55),
     ratchet: { count: modulated(0), rate: modulated(1 / 6) },
-    sound: sound(SOUND[id]),
+    sound: sound(id),
   };
 }
 
-function pitched(follow: number, hits: number, octaveBias: number): PitchedLane {
+function pitched(lane: "bass" | "lead", follow: number, hits: number, octaveBias: number): PitchedLane {
   return {
     gen1: euclid(16, hits, 0, 0.8),
     gen2: euclid(16, 0, 0, 0.55),
     follow,
     degree: modulated(0.5),
     range: modulated(octaveBias),
-    length: modulated(0.45),
+    length: modulated(lane === "bass" ? 0.55 : 0.35),
     repeat: modulated(0),
     step: modulated(0.5),
-    sound: sound(SOUND.bass),
+    sound: sound(lane),
   };
 }
 
@@ -78,7 +158,7 @@ function chords(): ChordLane {
       strum: 0,
       direction: 0,
     },
-    sound: sound(SOUND.chords),
+    sound: sound("chords"),
   };
 }
 
@@ -96,10 +176,8 @@ export function defaultGlobal(): GlobalSettings {
 }
 
 export function defaultLanes(): Lanes {
-  const bass = pitched(1, 2, 0.45);
-  bass.sound = sound(SOUND.bass);
-  const lead = pitched(0.65, 1, 0.55);
-  lead.sound = sound(SOUND.lead);
+  const bass = pitched("bass", 1, 2, 0.45);
+  const lead = pitched("lead", 0.65, 1, 0.55);
   return {
     kick: drum("kick"),
     snare: drum("snare"),
