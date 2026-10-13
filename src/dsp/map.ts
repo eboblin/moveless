@@ -1,0 +1,122 @@
+import type { DrumId, LaneId } from "../core/types.ts";
+
+/** Values are 0..1 semantic units. Engine ids stay inside this file. */
+export interface EngineParam {
+  id: string;
+  value: number;
+}
+
+/**
+ * libpo32 chain keys. GM note 36 is pad 1.
+ * Kick pad 1, snare pad 3, closed hat pad 7, perc pad 12 (low-mid tom).
+ * Pan and spread are keys of our drum voice.
+ */
+const VOICE: Record<DrumId, string> = {
+  kick: "v01",
+  snare: "v03",
+  hat: "v07",
+  perc: "v12",
+};
+
+const DRUM_SUFFIX: Record<DrumId, Record<string, string>> = {
+  kick: {
+    pitch: "freq",
+    boom: "mamt",
+    snap: "atk",
+    click: "nffrq",
+    decay: "dcy",
+    punch: "mix",
+    drive: "dist",
+    tone: "nfq",
+  },
+  snare: {
+    pitch: "freq",
+    body: "lvl",
+    noise: "mix",
+    snap: "atk",
+    decay: "dcy",
+    ring: "nedcy",
+    crisp: "nffrq",
+    drive: "dist",
+  },
+  hat: {
+    pitch: "freq",
+    metal: "nffrq",
+    attack: "atk",
+    decay: "dcy",
+    bright: "nfq",
+    grit: "dist",
+    pan: "pan",
+    spread: "mrate",
+  },
+  perc: {
+    pitch: "freq",
+    tone: "nfq",
+    ping: "mamt",
+    noise: "mix",
+    decay: "dcy",
+    ring: "nedcy",
+    pan: "pan",
+    spread: "mrate",
+  },
+};
+
+/**
+ * Cutoff, resonance, attack, decay and release use the stock chain names.
+ * Shape, detune, FM, noise and width are osc_shape, osc_detune, osc_fm, noise, osc_width on our voice.
+ */
+const SURGE: Record<"bass" | "lead" | "chords", Record<string, string>> = {
+  bass: {
+    shape: "osc_shape",
+    detune: "osc_detune",
+    fm: "osc_fm",
+    noise: "noise",
+    cutoff: "cutoff",
+    resonance: "resonance",
+    attack: "attack",
+    decay: "decay",
+  },
+  lead: {
+    shape: "osc_shape",
+    detune: "osc_detune",
+    fm: "osc_fm",
+    noise: "noise",
+    cutoff: "cutoff",
+    resonance: "resonance",
+    attack: "attack",
+    release: "release",
+  },
+  chords: {
+    shape: "osc_shape",
+    detune: "osc_detune",
+    fm: "osc_fm",
+    width: "osc_width",
+    cutoff: "cutoff",
+    resonance: "resonance",
+    attack: "attack",
+    release: "release",
+  },
+};
+
+export function mapSound(lane: LaneId, sound: Record<string, number>): EngineParam[] {
+  if (lane === "bass" || lane === "lead" || lane === "chords") {
+    const table = SURGE[lane];
+    return Object.keys(sound).sort().map((id) => ({ id: table[id] ?? id, value: clamp(sound[id] ?? 0) }));
+  }
+  const voice = VOICE[lane];
+  const table = DRUM_SUFFIX[lane];
+  return Object.keys(sound).sort().map((id) => ({
+    id: `${voice}_${table[id] ?? id}`,
+    value: clamp(sound[id] ?? 0),
+  }));
+}
+
+export function mapKick(sound: Record<string, number>): EngineParam[] {
+  return mapSound("kick", sound);
+}
+
+function clamp(value: number): number {
+  if (value < 0) return 0;
+  if (value > 1) return 1;
+  return value;
+}

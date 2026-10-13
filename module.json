@@ -1,0 +1,15 @@
+{
+  "id": "ptnmove",
+  "name": "ptnmove",
+  "version": "0.1.0",
+  "author": "ptnmove",
+  "description": "Generative performance sequencer for Ableton Move",
+  "component_type": "overtake",
+  "ui": "ui.js",
+  "dsp": "dsp.so",
+  "api_version": 2,
+  "capabilities": {
+    "raw_ui": true,
+    "audio_out": true
+  }
+}
