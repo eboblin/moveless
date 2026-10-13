@@ -207,7 +207,7 @@ static void follow_sound(Engine *engine) {
             Motion *motion = &engine->motions[m];
             if (motion->lane != d) continue;
             float unit = eval_motion(motion, step);
-            if (suffix_is(motion->id, "freq")) drum->freq = drum->base * (0.5f + unit);
+            if (suffix_is(motion->id, "freq")) continue;
             else if (suffix_is(motion->id, "dcy")) drum->decay = 0.04f + unit * 0.8f;
             else if (suffix_is(motion->id, "mix")) drum->noise = unit;
             else if (suffix_is(motion->id, "dist")) drum->drive = unit;
@@ -621,6 +621,13 @@ int main(void) {
     set_param(engine, "block", "P|120|1|0:44104:4:40:100:768:cutoff=0.0000,release=0.8000#4:cutoff:0.0000:0:8:1.0000:44104");
     for (int n = 0; n < 86; n++) render(engine, out, 128);
     if (engine->notes[0].cutoff < 0.9f) return fail("cutoff did not follow the generator");
+
+    engine = create_instance(NULL, NULL);
+    set_param(engine, "block", "P|120|1|0:44104:0:36:120:48:v01_freq=0.2000,v01_dcy=0.7000#0:v01_freq:0.2000:0:8:1.0000:44104");
+    render(engine, out, 128);
+    float held_freq = engine->drums[0].freq;
+    for (int n = 0; n < 86; n++) render(engine, out, 128);
+    if (engine->drums[0].freq != held_freq) return fail("pitch followed the generator");
 
     printf("ok peak=%d panL=%ld width=%ld\n", peak, left, diff_wide);
     return 0;

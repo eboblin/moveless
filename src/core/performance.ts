@@ -192,13 +192,19 @@ export function sharedParamIds(): string[] {
   return [...counts.entries()].filter(([, count]) => count >= 2).map(([id]) => id).sort();
 }
 
-export function captureLane(project: Project, lane: LaneId): Project {
+export type CaptureScope = "pattern" | "notes" | "sound";
+
+/** Reroll the generators of one page group. Pattern, notes and sound stay apart. */
+export function captureLane(project: Project, lane: LaneId, scope: CaptureScope = "pattern"): Project {
   if (project.lock[lane]) return project;
+  if (scope === "notes" && lane !== "bass" && lane !== "lead" && lane !== "chords") return project;
+  if (scope === "pattern" && lane === "chords") return project;
   const nonce = project.captureNonce + 1;
   const working = clone(project.working);
-  const roll = (...parts: (string | number)[]) => hash01(project.global.seed, "capture", nonce, lane, ...parts);
-  if (lane === "chords") randomizeChords(working, roll);
-  else randomizeRhythmic(working, lane, roll);
+  const roll = (...parts: (string | number)[]) => hash01(project.global.seed, "capture", nonce, lane, scope, ...parts);
+  if (scope === "sound") randomizeSound(working[lane].sound, roll);
+  else if (scope === "notes") randomizeNotes(working, lane, roll);
+  else randomizePattern(working, lane, roll);
   return { ...project, working, captureNonce: nonce };
 }
 
@@ -243,7 +249,17 @@ function isModulated(value: unknown): value is { value: number; pattern: number;
   return !!value && typeof value === "object" && "amount" in value && "pattern" in value;
 }
 
-function randomizeRhythmic(lanes: Lanes, lane: Exclude<LaneId, "chords">, roll: (...parts: (string | number)[]) => number): void {
+function touch(roll: (...parts: (string | number)[]) => number, prefix: string) {
+  return modulated(
+    roll(prefix, "v"),
+    Math.floor(roll(prefix, "p") * 64),
+    1 + Math.floor(roll(prefix, "c") * 8),
+    (roll(prefix, "a") * 2 - 1) * 0.75,
+  );
+}
+
+function randomizePattern(lanes: Lanes, lane: LaneId, roll: (...parts: (string | number)[]) => number): void {
+  if (lane === "chords") return;
   const target = lanes[lane];
   for (const part of ["a", "b"] as const) {
     for (const which of ["g1", "g2"] as const) {
@@ -266,40 +282,46 @@ function randomizeRhythmic(lanes: Lanes, lane: Exclude<LaneId, "chords">, roll: 
     varAmount: roll("amount") * 0.6,
     follow: lane === "bass" || lane === "lead" ? roll("follow") : target.form.follow,
   };
-  const touch = (prefix: string) => modulated(
-    roll(prefix, "v"),
-    Math.floor(roll(prefix, "p") * 64),
-    1 + Math.floor(roll(prefix, "c") * 8),
-    (roll(prefix, "a") * 2 - 1) * 0.75,
-  );
-  if (lane === "bass" || lane === "lead") {
-    const pitched = lanes[lane];
-    pitched.degree = touch("degree");
-    pitched.range = touch("range");
-    pitched.length = touch("length");
-    pitched.velocity = touch("velocity");
-    pitched.repeat = touch("repeat");
-    pitched.step = touch("step");
-  } else {
+  if (lane !== "bass" && lane !== "lead") {
     const drum = lanes[lane];
-    drum.ratchet.count = touch("ratchet.count");
-    drum.ratchet.rate = touch("ratchet.rate");
+    drum.ratchet.count = touch(roll, "ratchet.count");
+    drum.ratchet.rate = touch(roll, "ratchet.rate");
   }
 }
 
-function randomizeChords(lanes: Lanes, roll: (...parts: (string | number)[]) => number): void {
-  const touch = (prefix: string) => modulated(
-    roll(prefix, "v"),
-    Math.floor(roll(prefix, "p") * 64),
-    1 + Math.floor(roll(prefix, "c") * 8),
-    (roll(prefix, "a") * 2 - 1) * 0.75,
-  );
-  lanes.chords.change = touch("change");
-  lanes.chords.length = touch("length");
-  lanes.chords.motion = touch("motion");
-  lanes.chords.variation = touch("variation");
-  lanes.chords.mood = touch("mood");
-  lanes.chords.tension = touch("tension");
+function randomizeNotes(lanes: Lanes, lane: LaneId, roll: (...parts: (string | number)[]) => number): void {
+  if (lane === "bass" || lane === "lead") {
+    const pitched = lanes[lane];
+    pitched.degree = touch(roll, "degree");
+    pitched.range = touch(roll, "range");
+    pitched.length = touch(roll, "length");
+    pitched.velocity = touch(roll, "velocity");
+    pitched.repeat = touch(roll, "repeat");
+    pitched.step = touch(roll, "step");
+    return;
+  }
+  if (lane !== "chords") return;
+  const chords = lanes.chords;
+  chords.change = touch(roll, "change");
+  chords.length = touch(roll, "length");
+  chords.motion = touch(roll, "motion");
+  chords.variation = touch(roll, "variation");
+  chords.mood = touch(roll, "mood");
+  chords.tension = touch(roll, "tension");
+  chords.play = {
+    mode: Math.floor(roll("mode") * 4),
+    rate: Math.floor(roll("rate") * 6),
+    gate: roll("gate"),
+    octaves: 1 + Math.floor(roll("oct") * 4),
+    spread: roll("spread"),
+    flow: roll("flow"),
+    strum: roll("strum"),
+    direction: Math.floor(roll("dir") * 3),
+  };
+}
+
+function randomizeSound(sound: Record<string, ReturnType<typeof modulated>>, roll: (...parts: (string | number)[]) => number): void {
+  for (const id of Object.keys(sound)) sound[id] = touch(roll, id);
 }
 
 export function audibleEvents(project: Project, phraseLanes: Record<LaneId, { velocity: number; lane: LaneId }[]>): { lane: LaneId; velocity: number }[] {

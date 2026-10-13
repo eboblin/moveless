@@ -16,8 +16,8 @@ import {
 } from "../core/performance.ts";
 import type { LaneId, Project, TransitionId, WanderId } from "../core/types.ts";
 import { writeControl } from "./controls.ts";
-import { pageCount, pagesFor } from "./pages.ts";
-import { applyBookmark, focusHoldTicks, HOLD_TICKS, type Notice, type UiState } from "./state.ts";
+import { pageCount, pageGroup, pagesFor } from "./pages.ts";
+import { applyBookmark, focusHoldTicks, HOLD_MS, HOLD_TICKS, type Notice, type UiState } from "./state.ts";
 
 export interface MidiMsg {
   kind: "note" | "cc";
@@ -246,11 +246,14 @@ function currentBinding(session: Session, index: number) {
 
 function onCapture(session: Session, press: boolean): Session {
   if (press) return { ...session, ui: { ...session.ui, captureHeld: true, captureGenerator: null } };
-  const lane = session.ui.context;
+  const lane = session.ui.heldLane ?? session.ui.context;
+  const rawPage = session.ui.heldLane ? session.ui.heldPage ?? session.ui.page : session.ui.page;
+  const page = Math.min(rawPage, Math.max(0, pageCount(lane) - 1));
   const target = session.ui.captureGenerator;
   let project = session.project;
   if (lane !== "mix" && lane !== "global") {
-    project = target ? captureGenerator(project, lane, target) : captureLane(project, lane);
+    const scope = pageGroup(lane, page);
+    project = target ? captureGenerator(project, lane, target) : captureLane(project, lane, scope === "sound" || scope === "notes" ? scope : "pattern");
   }
   return { ...session, project, ui: { ...session.ui, captureHeld: false, captureGenerator: null } };
 }
@@ -264,22 +267,28 @@ function onCopy(session: Session, press: boolean): Session {
 
 function onTrack(session: Session, index: number, press: boolean): Session {
   const downs = session.ui.trackDownTick.slice();
+  const times = session.ui.trackDownMs.slice();
   if (press) {
     downs[index] = session.tick;
-    return { ...session, ui: { ...session.ui, trackDownTick: downs } };
+    times[index] = Date.now();
+    return { ...session, ui: { ...session.ui, trackDownTick: downs, trackDownMs: times } };
   }
   const started = downs[index];
+  const startedMs = times[index];
   downs[index] = null;
-  if (started === null) return { ...session, ui: { ...session.ui, trackDownTick: downs } };
-  const held = session.tick - started;
-  if (held >= HOLD_TICKS) {
+  times[index] = null;
+  const ui = { ...session.ui, trackDownTick: downs, trackDownMs: times };
+  if (started === null && startedMs === null) return { ...session, ui };
+  const heldTicks = started === null ? 0 : session.tick - started;
+  const heldMs = startedMs === null ? 0 : Date.now() - startedMs;
+  if (heldTicks >= HOLD_TICKS || heldMs >= HOLD_MS) {
     const bookmarks = session.project.bookmarks.slice();
     bookmarks[index] = { context: session.ui.context, page: session.ui.page };
-    return { ...session, project: { ...session.project, bookmarks }, ui: { ...session.ui, trackDownTick: downs } };
+    return { ...session, project: { ...session.project, bookmarks }, ui };
   }
   const ref = session.project.bookmarks[index];
-  if (!ref) return { ...session, ui: { ...session.ui, trackDownTick: downs } };
-  return { ...session, ui: { ...applyBookmark(session.ui, ref), trackDownTick: downs } };
+  if (!ref) return { ...session, ui };
+  return { ...session, ui: { ...applyBookmark(ui, ref), trackDownTick: downs, trackDownMs: times } };
 }
 
 export function relDelta(value: number): number {

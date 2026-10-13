@@ -32,10 +32,13 @@ export interface UiState {
   focus: Focus | null;
   notice: Notice | null;
   trackDownTick: (number | null)[];
+  trackDownMs: (number | null)[];
   laneDownTick: number | null;
 }
 
 export const HOLD_TICKS = 80;
+/** Wall-clock hold, so a bookmark can be stored while the transport is stopped. */
+export const HOLD_MS = 400;
 
 /** 300 ms of musical time at the current tempo. */
 export function focusHoldTicks(tempo: number): number {
@@ -59,6 +62,7 @@ export function defaultUi(): UiState {
     focus: null,
     notice: null,
     trackDownTick: [null, null, null, null],
+    trackDownMs: [null, null, null, null],
     laneDownTick: null,
   };
 }

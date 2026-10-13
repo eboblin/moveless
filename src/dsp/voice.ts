@@ -296,7 +296,7 @@ function follow(engine: Engine): void {
 function applyDrum(drum: DrumVoice, motion: Motion, step: number, clickLocked: boolean): boolean {
   const unit = live(motion, step);
   const id = motion.id;
-  if (ends(id, "freq")) drum.freq = drum.base * (0.5 + unit);
+  if (ends(id, "freq")) return clickLocked;
   else if (ends(id, "dcy")) drum.decay = 0.04 + unit * 0.8;
   else if (ends(id, "mix")) drum.noise = unit;
   else if (ends(id, "dist")) drum.drive = unit;

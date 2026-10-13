@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { defaultProject } from "../src/core/defaults.ts";
 import { createSet, record } from "../src/core/performance.ts";
-import { lanePages, pageCount } from "../src/ui/pages.ts";
-import { menuLed, padLeds, stepLed, stepLeds } from "../src/ui/leds.ts";
+import { lanePages, pageCount, pageGroupColor } from "../src/ui/pages.ts";
+import { menuLed, padLeds, stepLed, stepLeds, trackLeds } from "../src/ui/leds.ts";
 import { HEADER_H, PARAM_H, pixel, renderScreen, VIZ_H, type Screen } from "../src/ui/screen.ts";
 import { defaultUi, openSetMode } from "../src/ui/state.ts";
 import { reduce, relDelta, type Session } from "../src/ui/input.ts";
@@ -255,10 +255,24 @@ describe("surface", () => {
     state = reduce(state, { kind: "cc", data1: 40, data2: 127 });
     state = reduce({ ...state, tick: 100 }, { kind: "cc", data1: 40, data2: 0 });
     assert.deepEqual(state.project.bookmarks[0], { context: "kick", page: 0 });
-    state = reduce(state, { kind: "cc", data1: 14, data2: 1 });
+    assert.equal(trackLeds(state.project, state.ui.context, state.ui.page)[0].color, pageGroupColor("kick", 0));
+    assert.equal(trackLeds(state.project, state.ui.context, state.ui.page)[0].blink, true);
+    assert.equal(trackLeds(state.project, state.ui.context, state.ui.page)[1].color, 0);
+    state = reduce(state, { kind: "cc", data1: 88, data2: 0 });
+    state = reduce(state, { kind: "note", data1: 20, data2: 127 });
+    state = reduce({ ...state, tick: state.tick + 10 }, { kind: "note", data1: 20, data2: 0 });
+    for (let n = 0; n < 6; n++) state = reduce(state, { kind: "cc", data1: 14, data2: 1 });
+    state = reduce(state, { kind: "cc", data1: 41, data2: 127 });
+    state = reduce({ ...state, tick: state.tick + 100 }, { kind: "cc", data1: 41, data2: 0 });
+    assert.deepEqual(state.project.bookmarks[1], { context: "bass", page: 6 });
+    assert.equal(trackLeds(state.project, state.ui.context, state.ui.page)[1].color, pageGroupColor("bass", 6));
+    assert.notEqual(pageGroupColor("bass", 6), pageGroupColor("kick", 0));
     state = reduce(state, { kind: "cc", data1: 40, data2: 127 });
     state = reduce({ ...state, tick: state.tick + 10 }, { kind: "cc", data1: 40, data2: 0 });
+    assert.equal(state.ui.context, "kick");
     assert.equal(state.ui.page, 0);
+    assert.equal(trackLeds(state.project, state.ui.context, state.ui.page)[0].blink, true);
+    assert.equal(trackLeds(state.project, state.ui.context, state.ui.page)[1].blink, false);
   });
 
   it("rerolls only the generator whose encoder was held with capture", () => {
@@ -286,6 +300,36 @@ describe("surface", () => {
     assert.notDeepEqual(count.project.working.kick.ratchet.count, before.ratchet.count);
     assert.deepEqual(count.project.working.kick.ratchet.rate, rate);
     assert.deepEqual(count.project.working.kick.events, before.events);
+  });
+
+  it("captures the page group: pattern, notes, or sound", () => {
+    let pattern = session();
+    const kick = pattern.project.working.kick;
+    pattern = reduce(pattern, { kind: "cc", data1: 52, data2: 127 });
+    pattern = reduce(pattern, { kind: "cc", data1: 52, data2: 0 });
+    assert.notDeepEqual(pattern.project.working.kick.events, kick.events);
+    assert.deepEqual(pattern.project.working.kick.sound, kick.sound);
+
+    let notes = session();
+    notes = reduce(notes, { kind: "note", data1: 20, data2: 127 });
+    notes = reduce({ ...notes, tick: notes.tick + 10 }, { kind: "note", data1: 20, data2: 0 });
+    for (let n = 0; n < 3; n++) notes = reduce(notes, { kind: "cc", data1: 14, data2: 1 });
+    const bass = notes.project.working.bass;
+    notes = reduce(notes, { kind: "cc", data1: 52, data2: 127 });
+    notes = reduce(notes, { kind: "cc", data1: 52, data2: 0 });
+    assert.equal(notes.ui.page, 3);
+    assert.notDeepEqual(notes.project.working.bass.degree, bass.degree);
+    assert.deepEqual(notes.project.working.bass.events, bass.events);
+    assert.deepEqual(notes.project.working.bass.sound, bass.sound);
+
+    let sound = session();
+    for (let n = 0; n < 4; n++) sound = reduce(sound, { kind: "cc", data1: 14, data2: 1 });
+    const heard = sound.project.working.kick;
+    sound = reduce(sound, { kind: "cc", data1: 52, data2: 127 });
+    sound = reduce(sound, { kind: "cc", data1: 52, data2: 0 });
+    assert.equal(sound.ui.page, 4);
+    assert.notDeepEqual(sound.project.working.kick.sound, heard.sound);
+    assert.deepEqual(sound.project.working.kick.events, heard.events);
   });
 
   it("pastes a journal reference into the active set", () => {

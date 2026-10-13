@@ -62,7 +62,7 @@ export function phraseLoop(project: Project): LoopEvent[] {
   return out;
 }
 
-/** Sound parameters follow their generator for the whole note. Note choice stays at note on. */
+/** Sound parameters follow their generator for the whole note. Pitch and note choice stay at note on. */
 export function soundMotions(project: Project): Motion[] {
   const tempo = project.global.tempo;
   const out: Motion[] = [];
@@ -73,6 +73,7 @@ export function soundMotions(project: Project): Motion[] {
     const sound = project.working[lane].sound;
     const macros = project.lock[lane] ? {} : project.macros;
     for (const id of Object.keys(sound)) {
+      if (id === "pitch") continue;
       const heard = withMacro(sound[id], macros[id] ?? 0);
       const mapped = mapSound(lane, { [id]: 0 })[0];
       if (!mapped) continue;

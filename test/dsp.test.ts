@@ -120,6 +120,34 @@ describe("dsp adapter", () => {
     }
     assert.ok(engine.notes[0].cutoff > 0.9);
   });
+
+  it("holds drum pitch at the value from the hit", () => {
+    const project = defaultProject();
+    assert.equal(soundMotions(project).some((motion) => motion.id.endsWith("freq")), false);
+    const tempo = 120;
+    const sixteenth = tickToSample(SIXTEENTH_TICKS, tempo);
+    const loop = sixteenth * 8;
+    const engine = createEngine();
+    loadPhrase(engine, [{
+      sample: 0,
+      loop,
+      lane: "kick",
+      note: 36,
+      velocity: 120,
+      lengthTicks: 48,
+      params: mapSound("kick", { pitch: 0.2, boom: 0, snap: 0, click: 0, decay: 0.7, punch: 0, drive: 0, tone: 0.5 }),
+    }], tempo, true, [{
+      lane: "kick", id: "v01_freq", value: 0.2, pattern: 0, cycle: 8, amount: 1, loop,
+    }]);
+    renderClock(engine);
+    const freq = engine.drums[0].freq;
+    let heard = 128;
+    while (heard < sixteenth * 2) {
+      renderClock(engine);
+      heard += 128;
+    }
+    assert.equal(engine.drums[0].freq, freq);
+  });
 });
 
 function sideDifference(width: number): number {

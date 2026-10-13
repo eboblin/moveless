@@ -12,7 +12,7 @@
 
 Ударные сохраняют имена libpo32, чтобы адаптер не разъехался с картой: Kick `v01`, Snare `v03`, Hat `v07`, Perc `v12`. Pitch → `freq`, decay → `dcy`, drive → `dist`. Pan → `pan`, spread → `mrate`: эти ключи читает наш голос.
 
-Мелодия читает `cutoff`, `resonance`, `attack`, `decay`, `release`, `osc_shape`, `osc_detune`, `osc_fm`, `noise`, `osc_width`. Эти звуковые параметры, и такие же у ударных, голос перечитывает на каждом сэмпле по генератору lane. Высота ноты, velocity и длина остаются теми, что были в момент note on.
+Мелодия читает `cutoff`, `resonance`, `attack`, `decay`, `release`, `osc_shape`, `osc_detune`, `osc_fm`, `noise`, `osc_width`. Эти звуковые параметры, и такие же у ударных, кроме pitch, голос перечитывает на каждом сэмпле по генератору lane. Pitch ударных фиксируется в момент удара. Высота ноты, velocity и длина остаются теми, что были в момент note on.
 
 Mute и mixer применяются в `phraseLoop`, до голоса. Смещение события — сэмпл от начала петли lane.
 

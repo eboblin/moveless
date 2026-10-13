@@ -59,6 +59,18 @@ export function menuLed(mode: "journal" | "set"): Led {
   return led(mode === "set" ? "purple" : "yellow", false);
 }
 
+/** A stored bookmark lights its track button in that page's group colour. The one matching the screen blinks. */
+export function trackLeds(project: Project, context: ContextId, page: number): Led[] {
+  return project.bookmarks.map((ref) => {
+    if (!ref) return led("off", false);
+    return {
+      family: "yellow",
+      color: pageGroupColor(ref.context, ref.page),
+      blink: ref.context === context && ref.page === page,
+    };
+  });
+}
+
 const TRANSITIONS: TransitionId[] = ["now", "fast", "medium", "slow"];
 const WANDERS: WanderId[] = ["fast", "medium", "slow", "glacial"];
 export interface PadSurface {

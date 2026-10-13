@@ -4,7 +4,7 @@ import { advance } from "../core/performance.ts";
 import { phraseLoop, soundMotions } from "../dsp/schedule.ts";
 import { packPhraseBody } from "../dsp/voice.ts";
 import { reduce, type MidiMsg, type Session } from "../ui/input.ts";
-import { MENU_CC, menuLed, padLeds, stepLeds } from "../ui/leds.ts";
+import { MENU_CC, menuLed, padLeds, stepLeds, trackLeds } from "../ui/leds.ts";
 import { renderScreen } from "../ui/screen.ts";
 import { defaultUi } from "../ui/state.ts";
 import type { Project } from "../core/types.ts";
@@ -79,7 +79,9 @@ function blit(pixels: Uint8Array): void {
 
 let sentSteps: number[] = [];
 let sentPads: number[] = [];
+let sentTracks: number[] = [];
 let sentMenu = -1;
+const TRACK_CC = 40;
 
 function paint(): void {
   const screen = renderScreen(session.project, session.ui, session.tick, session.playing);
@@ -107,6 +109,12 @@ function paint(): void {
     sentMenu = menu;
     host.move_midi_internal_send([0x0B, 0xB0, MENU_CC, menu]);
   }
+  trackLeds(session.project, session.ui.context, session.ui.page).forEach((led, index) => {
+    const color = led.blink && !blinkOn ? 0 : led.color;
+    if (sentTracks[index] === color) return;
+    sentTracks[index] = color;
+    host.move_midi_internal_send?.([0x0B, 0xB0, TRACK_CC + index, color]);
+  });
   padLeds(session.project, session.ui.mode, session.ui).forEach((led, index) => {
     const color = led.blink && !blinkOn ? 0 : led.color;
     if (sentPads[index] === color) return;
@@ -142,6 +150,7 @@ export function init(): void {
   sentMs = 0;
   sentSteps = [];
   sentPads = [];
+  sentTracks = [];
   sentMenu = -1;
   syncVoice(true);
   paint();

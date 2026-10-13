@@ -337,6 +337,19 @@ describe("capture, wander, sets", () => {
     const again = captureLane(captured, "kick");
     assert.equal(again.captureNonce, captured.captureNonce);
     assert.deepEqual(again.working.kick.events, captured.working.kick.events);
+
+    const bass = defaultProject();
+    const notes = captureLane(bass, "bass", "notes");
+    assert.notDeepEqual(notes.working.bass.degree, bass.working.bass.degree);
+    assert.deepEqual(notes.working.bass.events, bass.working.bass.events);
+    assert.deepEqual(notes.working.bass.sound, bass.working.bass.sound);
+    const sound = captureLane(bass, "kick", "sound");
+    assert.notDeepEqual(sound.working.kick.sound, bass.working.kick.sound);
+    assert.deepEqual(sound.working.kick.events, bass.working.kick.events);
+    const pattern = captureLane(bass, "bass", "pattern");
+    assert.notDeepEqual(pattern.working.bass.events, bass.working.bass.events);
+    assert.deepEqual(pattern.working.bass.degree, bass.working.bass.degree);
+    assert.deepEqual(pattern.working.bass.sound, bass.working.bass.sound);
   });
 
   it("rerolls one generator and leaves the rest of the lane", () => {
