@@ -148,6 +148,17 @@ describe("surface", () => {
     assert.equal(pixel(screen, 20, HEADER_H + 8), 0);
   });
 
+  it("leaves a one-pixel gap between adjacent same-pitch hits", () => {
+    const project = defaultProject();
+    project.working.kick.gen1 = { ...project.working.kick.gen1, length: 16, hits: 16, rotate: 0 };
+    project.working.kick.gen2.hits = 0;
+    const screen = renderScreen(project, defaultUi(), 0, false);
+    assert.ok(columnSpan(screen, 0) > 0);
+    assert.ok(columnSpan(screen, 6) > 0);
+    assert.equal(columnSpan(screen, 7), 0);
+    assert.ok(columnSpan(screen, 8) > 0);
+  });
+
   it("wraps ratchet tails into the phrase so the playhead still reaches the end", () => {
     const project = defaultProject();
     project.working.kick.ratchet.count = modulated(1);

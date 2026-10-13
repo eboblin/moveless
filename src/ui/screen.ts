@@ -157,7 +157,8 @@ function drawPhrase(pixels: Uint8Array, project: Project, lane: LaneId, playhead
     }
     y0 = Math.max(yTop, y0);
     y1 = Math.min(yBottom, y1);
-    for (let x = x0; x < x1; x++) {
+    const xEnd = x1 - x0 > 1 ? x1 - 1 : x1;
+    for (let x = x0; x < xEnd; x++) {
       for (let y = y0; y <= y1; y++) set(pixels, x, y, 1);
     }
   }
