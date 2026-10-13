@@ -118,32 +118,44 @@ export function renderBlock(engine: Engine, events: BlockEvent[], tempo: number,
   });
 }
 
+const FOLLOW_STRIDE = 8;
+
 /** Advance the voice clock by real audio frames and retrigger the stored phrase. */
 export function renderClock(engine: Engine, frames = 128): Float32Array {
   const tempo = engine.tempo;
-  const out = renderFrames(engine, frames, () => {
-    for (const event of engine.phrase) {
-      const loop = Math.max(1, event.loop);
-      if (engine.clock % loop === event.sample) trigger(engine, event, tempo);
+  const fires: { offset: number; event: (typeof engine.phrase)[number] }[] = [];
+  const C = engine.clock;
+  for (const event of engine.phrase) {
+    const loop = Math.max(1, event.loop);
+    const mod = ((C % loop) + loop) % loop;
+    let t0 = event.sample - mod;
+    if (t0 < 0) t0 += loop;
+    for (let t = t0; t < frames; t += loop) fires.push({ offset: t, event });
+  }
+  fires.sort((a, b) => a.offset - b.offset);
+  let fi = 0;
+  return renderFrames(engine, frames, (frame) => {
+    while (fi < fires.length && fires[fi].offset === frame) {
+      trigger(engine, fires[fi].event, tempo);
+      fi += 1;
     }
     engine.clock += 1;
   });
-  return out;
 }
 
 function renderFrames(engine: Engine, frames: number, at: (frame: number) => void): Float32Array {
   const out = new Float32Array(frames * 2);
   for (let i = 0; i < frames; i++) {
     at(i);
-    follow(engine);
+    if ((i & (FOLLOW_STRIDE - 1)) === 0) follow(engine);
     let left = 0;
     let right = 0;
     for (const drum of engine.drums) {
       if (!drum.on) continue;
       const sample = drumSample(engine, drum);
-      const angle = drum.pan * Math.PI * 0.5;
-      left += sample * Math.cos(angle);
-      right += sample * Math.sin(angle);
+      const pan = Math.max(0, Math.min(1, drum.pan));
+      left += sample * (1 - pan);
+      right += sample * pan;
     }
     for (const note of engine.notes) {
       if (!note.on) continue;
@@ -266,18 +278,31 @@ function noteSample(engine: Engine, note: NoteVoice): [number, number] {
   // FM/reso use a square curve: the old linear*8 died around unit 0.16; this
   // keeps the musical throw across most of the knob and leaves 1.0 as chaos.
   const fm = note.fm * note.fm * 5;
-  note.phase += inc + Math.sin(note.phase) * fm * inc;
-  const ratio = 1 + (note.detune - 0.5) * 0.35;
-  note.phase2 += inc * ratio;
+  if (fm > 1e-4) note.phase += inc + Math.sin(note.phase) * fm * inc;
+  else note.phase += inc;
+  const detOff = note.detune - 0.5;
+  const ratio = 1 + detOff * 0.35;
   const primary = wave(note.phase, note.shape);
-  const second = wave(note.phase2, note.shape);
-  const noisy = primary + second * 0.35 * Math.abs(note.detune - 0.5) * 2 + rng(engine) * note.noise * 0.85;
+  const needSecond = Math.abs(detOff) > 1e-3 || note.width > 1e-3;
+  let second = 0;
+  if (needSecond) {
+    note.phase2 += inc * ratio;
+    second = wave(note.phase2, note.shape);
+  }
+  let noisy = primary;
+  if (needSecond) noisy += second * 0.35 * Math.abs(detOff) * 2;
+  if (note.noise > 1e-3) noisy += rng(engine) * note.noise * 0.85;
   const coef = 0.015 + note.cutoff * note.cutoff * 0.92;
   note.low += (noisy - note.low) * coef;
   const diff = noisy - note.low;
   const reso = note.resonance * note.resonance;
-  note.band += (diff - note.band) * (0.08 + reso * 0.45);
-  const resonated = note.low + note.band * reso * 4;
+  let resonated = note.low;
+  if (reso > 1e-4) {
+    note.band += (diff - note.band) * (0.08 + reso * 0.45);
+    resonated += note.band * reso * 4;
+  } else {
+    note.band = 0;
+  }
   const attackSamples = 1 + note.attack * 0.2 * SAMPLE_RATE;
   if (note.age < attackSamples) note.env = (note.age + 1) / attackSamples;
   else note.env *= Math.exp(-1 / ((0.04 + note.release * 1.6) * SAMPLE_RATE));
@@ -286,21 +311,21 @@ function noteSample(engine: Engine, note: NoteVoice): [number, number] {
   // Do not silence during attack: a slow attack starts below 0.0008 and would mute the note.
   if (note.left <= 0 || (note.age >= attackSamples && note.env < 0.0008)) note.on = false;
   const gain = resonated * note.env * note.gain * 0.38;
-  const wide = second * note.width * gain * 1.35;
+  const wide = needSecond ? second * note.width * gain * 1.35 : 0;
   return [gain + wide, gain - wide];
 }
 
 function wave(phase: number, shape: number): number {
   const wrapped = ((phase % TWO_PI) + TWO_PI) % TWO_PI;
-  const sine = Math.sin(wrapped);
   const saw = wrapped / Math.PI - 1;
   const square = wrapped < Math.PI ? 1 : -1;
-  if (shape < 0.5) {
-    const t = shape * 2;
-    return sine * (1 - t) + saw * t;
+  if (shape >= 0.5) {
+    const t = (shape - 0.5) * 2;
+    return saw * (1 - t) + square * t;
   }
-  const t = (shape - 0.5) * 2;
-  return saw * (1 - t) + square * t;
+  const sine = Math.sin(wrapped);
+  const t = shape * 2;
+  return sine * (1 - t) + saw * t;
 }
 
 function shapeDrive(sample: number, drive: number): number {
@@ -319,7 +344,7 @@ function follow(engine: Engine): void {
     if (!drum.on || drum.loop < 1) continue;
     const step = (pos % drum.loop) / span;
     for (const motion of engine.motions) {
-      if (LANES.indexOf(motion.lane) !== index) continue;
+      if (LANES.indexOf(motion.lane) !== index || motion.amount === 0) continue;
       applyDrum(drum, motion, step);
     }
   }
@@ -327,7 +352,7 @@ function follow(engine: Engine): void {
     if (!note.on || note.loop < 1) continue;
     const step = (pos % note.loop) / span;
     for (const motion of engine.motions) {
-      if (LANES.indexOf(motion.lane) !== note.lane) continue;
+      if (LANES.indexOf(motion.lane) !== note.lane || motion.amount === 0) continue;
       applyNote(note, motion, step);
     }
   }

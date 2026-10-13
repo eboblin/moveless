@@ -32,9 +32,19 @@ export function degreeToMidi(degree: number, scale: readonly number[], rootPc: n
   return baseOctave * 12 + mod(rootPc, 12) + scale[idx] + oct * 12;
 }
 
+/** Pitch classes the chord lane actually plays (chromatic quality from the scale-degree root). */
+export function chordTonePitchClasses(event: HarmonicEvent, scale: readonly number[], rootPc: number): number[] {
+  const rootPcOfChord = pitchClassOfDegree(event.root, scale, rootPc);
+  const semis = QUALITY_SEMITONES[event.quality] ?? QUALITY_SEMITONES[0];
+  return semis.map((semi) => mod(rootPcOfChord + semi, 12));
+}
+
+/**
+ * Scale degrees whose pitch class matches a chord tone. Off-scale chord tones
+ * (e.g. maj 3rd in a minor key) are absent — prefer {@link applyFollowMidi}.
+ */
 export function chordToneDegrees(event: HarmonicEvent, scale: readonly number[], rootPc: number): number[] {
-  const rootPitch = pitchClassOfDegree(event.root, scale, rootPc);
-  const tones = new Set(QUALITY_SEMITONES[event.quality].map((semi) => mod(rootPitch + semi, 12)));
+  const tones = new Set(chordTonePitchClasses(event, scale, rootPc));
   const out: number[] = [];
   for (let degree = -21; degree <= 21; degree++) {
     if (tones.has(pitchClassOfDegree(degree, scale, rootPc))) out.push(degree);
@@ -49,12 +59,34 @@ export function applyFollow(desired: number, follow: number, targets: readonly n
   let bestDist = Math.abs(targets[0] - desired);
   for (const target of targets) {
     const dist = Math.abs(target - desired);
-    if (dist < bestDist) {
+    if (dist < bestDist || (dist === bestDist && target < best)) {
       best = target;
       bestDist = dist;
     }
   }
   return desired + (best - desired) * clamp01(follow);
+}
+
+/**
+ * Snap a MIDI note toward the nearest pitch that matches the sounding chord.
+ * Same tone set as chord audio — including chromatic chord tones off the scale.
+ * Ties prefer the lower MIDI note.
+ */
+export function applyFollowMidi(desiredMidi: number, follow: number, chordPcs: readonly number[]): number {
+  if (follow <= 0 || chordPcs.length === 0) return desiredMidi;
+  let best = desiredMidi;
+  let bestDist = Number.POSITIVE_INFINITY;
+  const base = desiredMidi - mod(desiredMidi, 12);
+  for (const pc of chordPcs) {
+    for (const candidate of [base + pc - 12, base + pc, base + pc + 12]) {
+      const dist = Math.abs(candidate - desiredMidi);
+      if (dist < bestDist || (dist === bestDist && candidate < best)) {
+        best = candidate;
+        bestDist = dist;
+      }
+    }
+  }
+  return desiredMidi + (best - desiredMidi) * clamp01(follow);
 }
 
 export function harmonyAt(events: readonly HarmonicEvent[], tick: number): HarmonicEvent | null {

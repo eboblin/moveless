@@ -43,9 +43,11 @@ export function generateHits(
   lane: LaneId,
   velocityMacro = 0,
 ): Hit[] {
-  const phrase = Math.min(steps, phraseStepsOf(gen1, gen2));
+  // Span may exceed a single Euclidean ring — rings tile via step % length so
+  // pitched lanes can cover the full chord phrase.
+  const span = Math.max(1, Math.round(steps));
   const hits: Hit[] = [];
-  for (let step = 0; step < phrase; step++) {
+  for (let step = 0; step < span; step++) {
     const fired: (1 | 2)[] = [];
     let velocity = 0;
     for (const which of [1, 2] as const) {

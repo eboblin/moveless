@@ -110,15 +110,15 @@ static float soft(float sample) {
 static float wave(float phase, float shape) {
     float wrapped = fmodf(phase, TWO_PI);
     if (wrapped < 0) wrapped += TWO_PI;
-    float sine = sinf(wrapped);
     float saw = wrapped / 3.14159265f - 1.0f;
     float square = wrapped < 3.14159265f ? 1.0f : -1.0f;
-    if (shape < 0.5f) {
-        float t = shape * 2.0f;
-        return sine * (1.0f - t) + saw * t;
+    if (shape >= 0.5f) {
+        float t = (shape - 0.5f) * 2.0f;
+        return saw * (1.0f - t) + square * t;
     }
-    float t = (shape - 0.5f) * 2.0f;
-    return saw * (1.0f - t) + square * t;
+    float sine = sinf(wrapped);
+    float t = shape * 2.0f;
+    return sine * (1.0f - t) + saw * t;
 }
 
 static int suffix_is(const char *id, const char *suffix) {
@@ -212,7 +212,8 @@ static void follow_sound(Engine *engine) {
         float step = (float)(pos % drum->loop) / span;
         for (int m = 0; m < engine->motion_count; m++) {
             Motion *motion = &engine->motions[m];
-            if (motion->lane != d) continue;
+            /* Amount 0 is constant — already baked into the note-on params. */
+            if (motion->lane != d || motion->amount == 0.0f) continue;
             float unit = eval_motion(motion, step);
             if (suffix_is(motion->id, "freq")) continue;
             else if (suffix_is(motion->id, "dcy")) drum->decay = 0.04f + unit * 0.9f;
@@ -234,7 +235,7 @@ static void follow_sound(Engine *engine) {
         float step = (float)(pos % note->loop) / span;
         for (int m = 0; m < engine->motion_count; m++) {
             Motion *motion = &engine->motions[m];
-            if (motion->lane != note->lane) continue;
+            if (motion->lane != note->lane || motion->amount == 0.0f) continue;
             float unit = eval_motion(motion, step);
             if (strcmp(motion->id, "osc_shape") == 0) note->shape = unit;
             else if (strcmp(motion->id, "osc_detune") == 0) note->detune = unit;
@@ -351,21 +352,33 @@ static float drum_sample(Engine *engine, Drum *drum) {
 
 static void note_sample(Engine *engine, Note *note, float *left, float *right) {
     float inc = (TWO_PI * note->freq) / SR;
-    /* Square FM/reso so the musical range is most of the knob, not unit≈0.16. */
+    /* Square FM/reso so the musical range is most of the knobs, not unit≈0.16. */
     float fm = note->fm * note->fm * 5.0f;
-    note->phase += inc + sinf(note->phase) * fm * inc;
-    float ratio = 1.0f + (note->detune - 0.5f) * 0.35f;
-    note->phase2 += inc * ratio;
+    if (fm > 1e-4f) note->phase += inc + sinf(note->phase) * fm * inc;
+    else note->phase += inc;
+    float det_off = note->detune - 0.5f;
+    float ratio = 1.0f + det_off * 0.35f;
     float primary = wave(note->phase, note->shape);
-    float second = wave(note->phase2, note->shape);
-    float det = fabsf(note->detune - 0.5f) * 2.0f;
-    float noisy = primary + second * 0.35f * det + rng(engine) * note->noise * 0.85f;
+    float second = 0.0f;
+    int need_second = fabsf(det_off) > 1e-3f || note->width > 1e-3f;
+    if (need_second) {
+        note->phase2 += inc * ratio;
+        second = wave(note->phase2, note->shape);
+    }
+    float noisy = primary;
+    if (need_second) noisy += second * 0.35f * fabsf(det_off) * 2.0f;
+    if (note->noise > 1e-3f) noisy += rng(engine) * note->noise * 0.85f;
     float coef = 0.015f + note->cutoff * note->cutoff * 0.92f;
     note->low += (noisy - note->low) * coef;
     float diff = noisy - note->low;
     float reso = note->resonance * note->resonance;
-    note->band += (diff - note->band) * (0.08f + reso * 0.45f);
-    float resonated = note->low + note->band * reso * 4.0f;
+    float resonated = note->low;
+    if (reso > 1e-4f) {
+        note->band += (diff - note->band) * (0.08f + reso * 0.45f);
+        resonated += note->band * reso * 4.0f;
+    } else {
+        note->band = 0;
+    }
     float attack_samples = 1.0f + note->attack * 0.2f * SR;
     if ((float)note->age < attack_samples) note->env = ((float)note->age + 1.0f) / attack_samples;
     else note->env *= expf(-1.0f / ((0.04f + note->release * 1.6f) * SR));
@@ -374,7 +387,7 @@ static void note_sample(Engine *engine, Note *note, float *left, float *right) {
     /* Slow attacks start below 0.0008; only silence after the ramp finishes. */
     if (note->left <= 0 || ((float)note->age >= attack_samples && note->env < 0.0008f)) note->on = 0;
     float gain = resonated * note->env * note->gain * 0.38f;
-    float wide = second * note->width * gain * 1.35f;
+    float wide = need_second ? second * note->width * gain * 1.35f : 0.0f;
     *left += gain + wide;
     *right += gain - wide;
 }
@@ -433,6 +446,20 @@ static void ingest_phrase(Engine *engine) {
     }
 }
 
+#define FIRE_CAP 256
+#define FOLLOW_STRIDE 8
+
+typedef struct {
+    int offset;
+    int index;
+} Fire;
+
+static int fire_cmp(const void *a, const void *b) {
+    const Fire *fa = (const Fire *)a;
+    const Fire *fb = (const Fire *)b;
+    return fa->offset - fb->offset;
+}
+
 static void render(Engine *engine, int16_t *out, int frames) {
     /* Events in this message belong at the start of the block. Sample offsets
      * are applied by triggering before the frame loop only when offset is 0,
@@ -473,13 +500,36 @@ static void render(Engine *engine, int16_t *out, int frames) {
             cursor = semi ? semi + 1 : NULL;
         }
     }
+
+    /* Schedule phrase hits for this block once — scanning the whole phrase
+     * on every sample was the main underrun source with all lanes live. */
+    Fire fires[FIRE_CAP];
+    int fire_count = 0;
+    if (engine->phrase_on && frames > 0) {
+        int C = engine->clock;
+        for (int e = 0; e < engine->phrase_count; e++) {
+            PhraseEv *hit = &engine->phrase[e];
+            int loop = hit->loop > 0 ? hit->loop : 1;
+            int mod = C % loop;
+            int t0 = hit->sample - mod;
+            if (t0 < 0) t0 += loop;
+            for (int t = t0; t < frames && fire_count < FIRE_CAP; t += loop) {
+                fires[fire_count].offset = t;
+                fires[fire_count].index = e;
+                fire_count++;
+            }
+        }
+        if (fire_count > 1) qsort(fires, (size_t)fire_count, sizeof(Fire), fire_cmp);
+    }
+
+    int fi = 0;
     for (int i = 0; i < frames; i++) {
         if (engine->phrase_on) {
-            for (int e = 0; e < engine->phrase_count; e++) {
-                PhraseEv *hit = &engine->phrase[e];
-                if (engine->clock % hit->loop != hit->sample) continue;
+            while (fi < fire_count && fires[fi].offset == i) {
+                PhraseEv *hit = &engine->phrase[fires[fi].index];
                 if (hit->lane >= 0 && hit->lane < DRUMS) arm_drum(engine, hit->lane, hit->note, hit->velocity, hit->params, hit->loop);
                 else arm_note(engine, hit->note, hit->velocity, hit->ticks, hit->params, hit->lane, hit->loop);
+                fi++;
             }
             engine->clock++;
         }
@@ -488,14 +538,16 @@ static void render(Engine *engine, int16_t *out, int frames) {
             if (ev[e].lane >= 0 && ev[e].lane < DRUMS) arm_drum(engine, ev[e].lane, ev[e].note, ev[e].velocity, ev[e].params, 0);
             else arm_note(engine, ev[e].note, ev[e].velocity, ev[e].ticks, ev[e].params, ev[e].lane, 0);
         }
-        follow_sound(engine);
+        if ((i & (FOLLOW_STRIDE - 1)) == 0) follow_sound(engine);
         float left = 0, right = 0;
         for (int d = 0; d < DRUMS; d++) {
             if (!engine->drums[d].on) continue;
             float sample = drum_sample(engine, &engine->drums[d]);
-            float angle = engine->drums[d].pan * 1.5707963f;
-            left += sample * cosf(angle);
-            right += sample * sinf(angle);
+            float pan = engine->drums[d].pan;
+            if (pan < 0) pan = 0;
+            if (pan > 1) pan = 1;
+            left += sample * (1.0f - pan);
+            right += sample * pan;
         }
         for (int n = 0; n < NOTES; n++) {
             if (!engine->notes[n].on) continue;

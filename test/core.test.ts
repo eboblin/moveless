@@ -315,6 +315,42 @@ describe("harmony", () => {
     assert.equal(heard.some((event) => event.lane === "bass"), true);
   });
 
+  it("lets bass follow later chords by spanning the global phrase, not only the euclid ring", () => {
+    const project = defaultProject();
+    const phrase = generatePhrase(project);
+    assert.ok(phrase.harmony.length >= 2, "defaults build more than one chord");
+    assert.equal(phrase.steps.bass, phrase.steps.chords);
+    const notesByChord = phrase.harmony.map((harm) =>
+      [...new Set(
+        phrase.lanes.bass
+          .filter((event) => event.tick >= harm.startTick && event.tick < harm.startTick + harm.lengthTicks)
+          .map((event) => event.note),
+      )],
+    );
+    assert.ok(notesByChord[0].length > 0);
+    assert.ok(notesByChord[1].length > 0);
+    assert.notDeepEqual(notesByChord[0], notesByChord[1]);
+  });
+
+  it("follows the sounding chord tones, including chromatic ones off the scale", () => {
+    const project = bar(defaultProject());
+    project.global.scale = "minor";
+    project.working.chords.mood = modulated(0);
+    project.working.chords.tension = modulated(0);
+    project.working.chords.change = modulated(0);
+    project.working.bass.follow = 1;
+    project.working.bass.degree = modulated(0.5 + 2 / 14);
+    project.working.bass.range = modulated(1);
+    project.working.bass.gen1 = { ...project.working.bass.gen1, length: 16, hits: 4, rotate: 0 };
+    project.working.bass.gen2.hits = 0;
+    const phrase = generatePhrase(project);
+    const chordPcs = new Set(phrase.lanes.chords.map((event) => ((event.note % 12) + 12) % 12));
+    assert.ok(chordPcs.has(4), "maj chord in minor still sounds E");
+    for (const event of phrase.lanes.bass) {
+      assert.ok(chordPcs.has(((event.note % 12) + 12) % 12), `bass ${event.note} should match chord pcs`);
+    }
+  });
+
   it("keeps bass notes stable when the arp direction changes", () => {
     const project = bar(defaultProject());
     project.working.chords.play.mode = 1;

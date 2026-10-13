@@ -9,7 +9,7 @@ import {
   tickToSample,
 } from "./clock.ts";
 import { generateHits, phraseStepsOf, type Hit } from "./events.ts";
-import { applyFollow, chordToneDegrees, degreeToMidi, generateHarmony, harmonyAt, scaleOf } from "./harmony.ts";
+import { applyFollowMidi, chordTonePitchClasses, degreeToMidi, generateHarmony, harmonyAt, scaleOf } from "./harmony.ts";
 import { bipolarFromUnit, evalModulated, withMacro } from "./modulate.ts";
 import { mod } from "./motif.ts";
 import {
@@ -53,6 +53,11 @@ export const previewPhrase = generatePhrase;
 
 export function laneSteps(lanes: Lanes, lane: LaneId, global: GlobalSettings): number {
   if (lane === "chords") return sixteenthSteps(global.phrase, global.bar);
+  // Bass/lead must loop over the chord phrase, or follow only ever sees the
+  // first harmony block while chords keep changing underneath.
+  if (lane === "bass" || lane === "lead") {
+    return Math.max(phraseStepsOf(lanes[lane].gen1, lanes[lane].gen2), sixteenthSteps(global.phrase, global.bar));
+  }
   return phraseStepsOf(lanes[lane].gen1, lanes[lane].gen2);
 }
 
@@ -134,12 +139,12 @@ function pitchedEvents(
       const step = hit.step + r;
       const degreeU = evalModulated(withMacro(lane.degree, macro(macros, "degree")), step);
       const rangeU = evalModulated(withMacro(lane.range, macro(macros, "range")), step);
-      const desired = (degreeU - 0.5) * 2 * rangeU * 7;
+      const desired = (degreeU - 0.5) * 2 * rangeU * 7 + r * shift;
       const tick = swungStepTick(step, global.swing);
       const harm = harmonyAt(harmony, tick);
-      const targets = harm ? chordToneDegrees(harm, scale, rootPc) : [];
-      const followed = applyFollow(desired, lane.follow, targets);
-      const note = degreeToMidi(Math.round(followed) + r * shift, scale, rootPc, octave);
+      const chordPcs = harm ? chordTonePitchClasses(harm, scale, rootPc) : [];
+      const desiredMidi = degreeToMidi(Math.round(desired), scale, rootPc, octave);
+      const note = Math.round(applyFollowMidi(desiredMidi, lane.follow, chordPcs));
       const lengthTicks = Math.max(1, Math.round(evalModulated(withMacro(lane.length, macro(macros, "length")), step) * global.bar * SIXTEENTH_TICKS));
       const sound = soundValues(lane.sound, step, macros);
       out.push(place(hit.step, r * SIXTEENTH_TICKS, global, id, note, hit.velocity, lengthTicks, sound));
