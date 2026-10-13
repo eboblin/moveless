@@ -1,0 +1,2 @@
+# Host font sidecar must stay LF-only; a trailing CR breaks atlas cell width.
+assets/*.dat text eol=lf
