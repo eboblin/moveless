@@ -197,9 +197,9 @@ function touchEncoder(session: Session, index: number, press: boolean): Session 
   }
   const binding = currentBinding(session, index);
   if (!binding) return session;
-  const target = session.ui.captureHeld ? generatorTarget(binding.path) : null;
-  if (target) {
-    return { ...session, ui: { ...session.ui, captureGenerator: target, focus: focusFor(session, binding, true) } };
+  if (session.ui.captureHeld) {
+    const captured = captureFromEncoder(session, binding.path, true);
+    if (captured) return captured;
   }
   return { ...session, ui: { ...session.ui, focus: focusFor(session, binding, true) } };
 }
@@ -209,14 +209,34 @@ function turnEncoder(session: Session, index: number, value: number): Session {
   const binding = currentBinding(session, index);
   if (!binding || !delta) return session;
   const held = session.ui.focus?.held ?? false;
-  const target = session.ui.captureHeld ? generatorTarget(binding.path) : null;
-  if (target) {
-    return { ...session, ui: { ...session.ui, captureGenerator: target, focus: focusFor(session, binding, held) } };
+  if (session.ui.captureHeld) {
+    const captured = captureFromEncoder(session, binding.path, held);
+    if (captured) return captured;
   }
   return {
     ...session,
     project: writeControl(session.project, session.ui.context, binding, delta),
     ui: { ...session.ui, focus: focusFor(session, binding, held) },
+  };
+}
+
+/** Reroll one generator as soon as its encoder is touched or turned while Capture is held. */
+function captureFromEncoder(session: Session, path: string, held: boolean): Session | null {
+  const target = generatorTarget(path);
+  if (!target) return null;
+  const lane = session.ui.heldLane ?? session.ui.context;
+  if (lane === "mix" || lane === "global") return null;
+  const focusBinding = pagesFor(session.ui.context)
+    .flatMap((page) => page.bindings)
+    .find((item) => item?.path === path) ?? { path, label: target };
+  return {
+    ...session,
+    project: captureGenerator(session.project, lane, target),
+    ui: {
+      ...session.ui,
+      captureGenerator: target,
+      focus: focusFor(session, focusBinding, held),
+    },
   };
 }
 
@@ -256,9 +276,9 @@ function onCapture(session: Session, press: boolean): Session {
   const page = Math.min(rawPage, Math.max(0, pageCount(lane) - 1));
   const target = session.ui.captureGenerator;
   let project = session.project;
-  if (lane !== "mix" && lane !== "global") {
-    if (target) project = captureGenerator(project, lane, target);
-    else if (session.ui.shiftHeld) project = captureLane(project, lane, "all");
+  // Generator already rerolled on encoder touch/turn; release only does page/shift when none was chosen.
+  if (lane !== "mix" && lane !== "global" && !target) {
+    if (session.ui.shiftHeld) project = captureLane(project, lane, "all");
     else {
       const scope = pageGroup(lane, page);
       project = captureLane(project, lane, scope === "sound" || scope === "notes" ? scope : "pattern");

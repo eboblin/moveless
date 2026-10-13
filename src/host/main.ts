@@ -163,8 +163,12 @@ export function tick(): void {
 
 export function onMidiMessageInternal(data: number[]): void {
   const status = data[0] ?? 0;
-  const kind: MidiMsg["kind"] = (status & 0xf0) === 0x90 ? "note" : "cc";
-  session = reduce(session, { kind, data1: data[1] ?? 0, data2: data[2] ?? 0 });
+  const hi = status & 0xf0;
+  const kind: MidiMsg["kind"] = hi === 0x90 || hi === 0x80 ? "note" : "cc";
+  const data2 = hi === 0x80 ? 0 : (data[2] ?? 0);
+  const before = session.project;
+  session = reduce(session, { kind, data1: data[1] ?? 0, data2 });
+  if (session.project !== before) syncVoice(false);
   paint();
 }
 

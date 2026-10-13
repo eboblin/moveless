@@ -39,15 +39,21 @@ export function renderScreen(project: Project, ui: UiState, tick: number, playin
   const header = focus ? fullName(focus) : laneHeader(project, context, page?.title ?? "");
   const vizLane: LaneId | null = context === "mix" || context === "global" ? null : context;
   const generator = vizLane && focusState?.generator ? focusState.generator : null;
-  const viz = notice ? "notice" : generator ? "generator" : vizLane ? "phrase" : "none";
+  const mixer = !notice && context === "mix";
+  const viz = notice ? "notice" : mixer ? "mixer" : generator ? "generator" : vizLane ? "phrase" : "none";
   const params = page ? page.bindings.map((binding) => binding?.label ?? "").filter(Boolean).join(" ") : "";
   const pixels = new Uint8Array(WIDTH * HEIGHT);
   drawPager(pixels, Math.min(pageIndex, Math.max(0, pages.length - 1)), pages.length);
-  for (let x = 0; x < WIDTH; x++) set(pixels, x, HEADER_H + VIZ_H - 1, 1);
+  if (!mixer) {
+    for (let x = 0; x < WIDTH; x++) set(pixels, x, HEADER_H + VIZ_H - 1, 1);
+  }
   if (notice) fillViz(pixels);
+  else if (mixer) drawMixer(pixels, project, focus);
   else if (generator) drawGenerator(pixels, project, context, generator, focusState?.showPattern ?? false, playing ? stepAt(project, tick) : -1);
   else if (vizLane) drawPhrase(pixels, project, vizLane, playing ? stepAt(project, tick) : -1);
-  const labels = drawLabels(project, context, page, focus);
+  const labels = mixer
+    ? [{ x: 1, y: 1, text: header.slice(0, LINE_LIMIT) }, ...mixerIndicators(project)]
+    : drawLabels(project, context, page, focus);
   if (notice) labels.push(...noticeLabels(notice.title, notice.value));
   return { header, viz, params, pixels, labels };
 }
@@ -56,6 +62,58 @@ function fillViz(pixels: Uint8Array): void {
   for (let y = HEADER_H; y < HEADER_H + VIZ_H - 1; y++) {
     for (let x = 0; x < WIDTH; x++) set(pixels, x, y, 1);
   }
+}
+
+const MIX_CHANNELS = ["kick", "snare", "hat", "perc", "bass", "lead", "chords", "master"] as const;
+const MIX_COL_W = 16;
+const MIX_IND_H = 8;
+
+/** Eight vertical level faders under the header; mute/lock sit in the bottom strip. */
+function drawMixer(pixels: Uint8Array, project: Project, focus: string | null): void {
+  const top = HEADER_H;
+  const bottom = HEIGHT - MIX_IND_H - 1;
+  const trackH = Math.max(1, bottom - top);
+  for (let i = 0; i < MIX_CHANNELS.length; i++) {
+    const id = MIX_CHANNELS[i];
+    const level = Math.max(0, Math.min(1, project.mixer[id]));
+    const x0 = i * MIX_COL_W;
+    const x1 = x0 + MIX_COL_W - 1;
+    const mid = x0 + Math.floor(MIX_COL_W / 2);
+    const label = id === "master" ? "MASTER" : LANE_CODE[id];
+    const lit = focus === label;
+    const fill = Math.max(0, Math.round(level * trackH));
+    for (let y = top; y <= bottom; y++) {
+      if (y % 2 === 0) set(pixels, mid, y, 1);
+    }
+    for (let y = 0; y < fill; y++) {
+      const row = bottom - y;
+      for (let dx = -1; dx <= 1; dx++) set(pixels, mid + dx, row, 1);
+    }
+    if (lit) {
+      for (let y = top; y <= bottom; y++) {
+        set(pixels, x0, y, 1);
+        set(pixels, x1, y, 1);
+      }
+      for (let x = x0; x <= x1; x++) {
+        set(pixels, x, top, 1);
+        set(pixels, x, bottom, 1);
+      }
+    }
+  }
+}
+
+function mixerIndicators(project: Project): Label[] {
+  const labels: Label[] = [];
+  const y = HEIGHT - 7;
+  for (let i = 0; i < MIX_CHANNELS.length; i++) {
+    const id = MIX_CHANNELS[i];
+    if (id === "master") continue;
+    const marks = `${project.mute[id] ? "M" : ""}${project.lock[id] ? "L" : ""}`;
+    if (!marks) continue;
+    const x0 = i * MIX_COL_W;
+    labels.push({ x: x0 + Math.max(0, Math.floor((MIX_COL_W - marks.length * 6) / 2)), y, text: marks });
+  }
+  return labels;
 }
 
 function noticeLabels(title: string, value: string): Label[] {

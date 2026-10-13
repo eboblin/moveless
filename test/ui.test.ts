@@ -8,7 +8,7 @@ import { createSet, record } from "../src/core/performance.ts";
 import { generatePhrase } from "../src/core/phrase.ts";
 import { lanePages, pageCount, pageGroupColor } from "../src/ui/pages.ts";
 import { menuLed, padLeds, stepLed, stepLeds, trackLeds } from "../src/ui/leds.ts";
-import { HEADER_H, PARAM_H, pixel, renderScreen, VIZ_H, type Screen } from "../src/ui/screen.ts";
+import { HEADER_H, HEIGHT, PARAM_H, pixel, renderScreen, VIZ_H, type Screen } from "../src/ui/screen.ts";
 import { defaultUi, openSetMode } from "../src/ui/state.ts";
 import { reduce, relDelta, type Session } from "../src/ui/input.ts";
 
@@ -149,6 +149,26 @@ describe("surface", () => {
     assert.equal(pixel(screen, 20, HEADER_H + 8), 0);
   });
 
+  it("draws eight mixer faders with mute and lock under each lane", () => {
+    const project = defaultProject();
+    project.mute.snare = true;
+    project.lock.bass = true;
+    project.mute.bass = true;
+    project.mixer.kick = 1;
+    project.mixer.master = 0;
+    const screen = renderScreen(project, { ...defaultUi(), context: "mix" }, 0);
+    assert.equal(screen.viz, "mixer");
+    assert.equal(pixel(screen, 0, HEADER_H + VIZ_H - 1), 0);
+    const kickMid = 8;
+    const masterMid = 7 * 16 + 8;
+    assert.equal(pixel(screen, kickMid, HEIGHT - 9), 1);
+    assert.equal(pixel(screen, masterMid, HEADER_H + 1), 0);
+    assert.equal(pixel(screen, masterMid + 1, HEIGHT - 9), 0);
+    assert.ok(screen.labels.some((label) => label.text === "M" && label.x >= 16 && label.x < 32));
+    assert.ok(screen.labels.some((label) => label.text === "ML" && label.x >= 64 && label.x < 80));
+    assert.equal(screen.labels.filter((label) => label.y > 1).length, 2);
+  });
+
   it("leaves a one-pixel gap between adjacent same-pitch hits", () => {
     const project = defaultProject();
     project.working.kick.gen1 = { ...project.working.kick.gen1, length: 16, hits: 16, rotate: 0 };
@@ -225,6 +245,8 @@ describe("surface", () => {
     assert.equal(pixel(turned, 37, HEADER_H - 1), 1);
     const mix = renderScreen(defaultProject(), { ...defaultUi(), context: "mix" }, 0);
     assert.equal(pixel(mix, 15, HEADER_H - 1), 1);
+    assert.equal(mix.viz, "mixer");
+    assert.ok(mix.labels.every((label) => label.y === 1 || label.text === "M" || label.text === "L" || label.text === "ML"));
     const bassProject = defaultProject();
     bassProject.working.bass.degree = modulated(0.5, 0, 8, 1);
     bassProject.working.bass.follow = 0;
@@ -348,17 +370,27 @@ describe("surface", () => {
     state = reduce(state, { kind: "cc", data1: 52, data2: 127 });
     state = reduce(state, { kind: "note", data1: 0, data2: 127 });
     assert.equal(state.ui.captureGenerator, "gen1");
-    state = reduce(state, { kind: "cc", data1: 52, data2: 0 });
     assert.notDeepEqual(state.project.working.kick.gen1, before.gen1);
     assert.deepEqual(state.project.working.kick.gen2, before.gen2);
+    assert.equal(state.ui.notice, null);
+    const afterTouch = state.project.working.kick.gen1;
+    state = reduce(state, { kind: "cc", data1: 52, data2: 0 });
+    assert.deepEqual(state.project.working.kick.gen1, afterTouch);
     assert.equal(state.ui.captureHeld, false);
+
+    let turn = session();
+    const beforeTurn = turn.project.working.kick;
+    turn = reduce(turn, { kind: "cc", data1: 52, data2: 127 });
+    turn = reduce(turn, { kind: "cc", data1: 71, data2: 1 });
+    assert.equal(turn.ui.captureGenerator, "gen1");
+    assert.notDeepEqual(turn.project.working.kick.gen1, beforeTurn.gen1);
+    assert.deepEqual(turn.project.working.kick.gen2, beforeTurn.gen2);
 
     let prob = session();
     const beforeProb = prob.project.working.kick;
     prob = reduce(prob, { kind: "cc", data1: 52, data2: 127 });
     prob = reduce(prob, { kind: "note", data1: 3, data2: 127 });
     assert.equal(prob.ui.captureGenerator, "gen1");
-    prob = reduce(prob, { kind: "cc", data1: 52, data2: 0 });
     assert.notDeepEqual(prob.project.working.kick.gen1, beforeProb.gen1);
     assert.deepEqual(prob.project.working.kick.gen2, beforeProb.gen2);
 
@@ -368,7 +400,6 @@ describe("surface", () => {
     count = reduce(count, { kind: "cc", data1: 14, data2: 1 });
     count = reduce(count, { kind: "cc", data1: 52, data2: 127 });
     count = reduce(count, { kind: "note", data1: 0, data2: 127 });
-    count = reduce(count, { kind: "cc", data1: 52, data2: 0 });
     assert.notDeepEqual(count.project.working.kick.ratchet.count, before.ratchet.count);
     assert.deepEqual(count.project.working.kick.ratchet.rate, rate);
     assert.deepEqual(count.project.working.kick.gen1, before.gen1);
