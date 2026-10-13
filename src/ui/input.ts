@@ -34,6 +34,7 @@ export interface Session {
 
 const LOOP = 58;
 const MENU = 50;
+const SHIFT = 49;
 const LANES: LaneId[] = ["kick", "snare", "hat", "perc", "bass", "lead", "chords"];
 const TRANSITIONS: TransitionId[] = ["now", "fast", "medium", "slow"];
 const WANDERS: WanderId[] = ["fast", "medium", "slow", "glacial"];
@@ -55,9 +56,13 @@ function onNote(session: Session, note: number, press: boolean): Session {
 function onCc(session: Session, cc: number, value: number, press: boolean): Session {
   if (cc === 88) return { ...session, ui: { ...session.ui, muteHeld: press } };
   if (cc === LOOP) return { ...session, ui: { ...session.ui, loopHeld: press } };
+  if (cc === SHIFT) return { ...session, ui: { ...session.ui, shiftHeld: press } };
   if (cc === MENU && press) {
     const mode = session.ui.mode === "set" ? "journal" : "set";
-    return { ...session, ui: { ...session.ui, mode } };
+    return {
+      ...session,
+      ui: { ...session.ui, mode, notice: modeNotice("MODE", mode === "set" ? "SET" : "JOURNAL") },
+    };
   }
   if (cc === 60) return onCopy(session, press);
   if (cc === 119) return { ...session, ui: { ...session.ui, deleteHeld: press } };
@@ -252,8 +257,12 @@ function onCapture(session: Session, press: boolean): Session {
   const target = session.ui.captureGenerator;
   let project = session.project;
   if (lane !== "mix" && lane !== "global") {
-    const scope = pageGroup(lane, page);
-    project = target ? captureGenerator(project, lane, target) : captureLane(project, lane, scope === "sound" || scope === "notes" ? scope : "pattern");
+    if (target) project = captureGenerator(project, lane, target);
+    else if (session.ui.shiftHeld) project = captureLane(project, lane, "all");
+    else {
+      const scope = pageGroup(lane, page);
+      project = captureLane(project, lane, scope === "sound" || scope === "notes" ? scope : "pattern");
+    }
   }
   return { ...session, project, ui: { ...session.ui, captureHeld: false, captureGenerator: null } };
 }

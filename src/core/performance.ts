@@ -193,9 +193,9 @@ export function sharedParamIds(): string[] {
   return [...counts.entries()].filter(([, count]) => count >= 2).map(([id]) => id).sort();
 }
 
-export type CaptureScope = "pattern" | "notes" | "sound";
+export type CaptureScope = "pattern" | "notes" | "sound" | "all";
 
-/** Reroll the generators of one page group. Pattern, notes and sound stay apart. */
+/** Reroll one page group, or the whole lane when scope is `all`. */
 export function captureLane(project: Project, lane: LaneId, scope: CaptureScope = "pattern"): Project {
   if (project.lock[lane]) return project;
   if (scope === "notes" && lane !== "bass" && lane !== "lead" && lane !== "chords") return project;
@@ -203,7 +203,11 @@ export function captureLane(project: Project, lane: LaneId, scope: CaptureScope 
   const nonce = project.captureNonce + 1;
   const working = clone(project.working);
   const roll = (...parts: (string | number)[]) => hash01(project.global.seed, "capture", nonce, lane, scope, ...parts);
-  if (scope === "sound") randomizeSound(working[lane].sound, roll);
+  if (scope === "all") {
+    if (lane !== "chords") randomizePattern(working, lane, roll);
+    if (lane === "bass" || lane === "lead" || lane === "chords") randomizeNotes(working, lane, roll);
+    randomizeSound(working[lane].sound, roll);
+  } else if (scope === "sound") randomizeSound(working[lane].sound, roll);
   else if (scope === "notes") randomizeNotes(working, lane, roll);
   else randomizePattern(working, lane, roll);
   return { ...project, working, captureNonce: nonce };

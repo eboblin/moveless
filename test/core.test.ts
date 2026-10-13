@@ -350,6 +350,21 @@ describe("capture, wander, sets", () => {
     assert.deepEqual(pattern.working.bass.sound, bass.working.bass.sound);
   });
 
+  it("rerolls pattern, notes and sound together when scope is all", () => {
+    const kick = defaultProject();
+    const beforeKick = clone(kick.working.kick);
+    const allKick = captureLane(kick, "kick", "all");
+    assert.notDeepEqual(allKick.working.kick.gen1, beforeKick.gen1);
+    assert.notDeepEqual(allKick.working.kick.sound, beforeKick.sound);
+
+    const bass = defaultProject();
+    const beforeBass = clone(bass.working.bass);
+    const allBass = captureLane(bass, "bass", "all");
+    assert.notDeepEqual(allBass.working.bass.gen1, beforeBass.gen1);
+    assert.notDeepEqual(allBass.working.bass.degree, beforeBass.degree);
+    assert.notDeepEqual(allBass.working.bass.sound, beforeBass.sound);
+  });
+
   it("rerolls one generator and leaves the rest of the lane", () => {
     const project = defaultProject();
     const one = captureGenerator(project, "kick", "gen1");

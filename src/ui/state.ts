@@ -23,6 +23,7 @@ export interface UiState {
   wheelTouch: boolean;
   muteHeld: boolean;
   loopHeld: boolean;
+  shiftHeld: boolean;
   copyHeld: boolean;
   deleteHeld: boolean;
   captureHeld: boolean;
@@ -53,6 +54,7 @@ export function defaultUi(): UiState {
     wheelTouch: false,
     muteHeld: false,
     loopHeld: false,
+    shiftHeld: false,
     copyHeld: false,
     deleteHeld: false,
     captureHeld: false,

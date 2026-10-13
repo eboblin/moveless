@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
+import { clone } from "../src/core/clone.ts";
 import { unitForIndex } from "../src/core/clock.ts";
 import { defaultProject } from "../src/core/defaults.ts";
 import { modulated } from "../src/core/modulate.ts";
@@ -308,14 +309,21 @@ describe("surface", () => {
     let state = session();
     const before = state.project.working.kick;
     state = reduce(state, { kind: "cc", data1: 52, data2: 127 });
-    state = reduce(state, { kind: "note", data1: 1, data2: 127 });
-    state = reduce(state, { kind: "cc", data1: 72, data2: 1 });
-    assert.equal(state.project.working.kick.gen1.hits, before.gen1.hits);
+    state = reduce(state, { kind: "note", data1: 0, data2: 127 });
     assert.equal(state.ui.captureGenerator, "gen1");
     state = reduce(state, { kind: "cc", data1: 52, data2: 0 });
     assert.notDeepEqual(state.project.working.kick.gen1, before.gen1);
     assert.deepEqual(state.project.working.kick.gen2, before.gen2);
     assert.equal(state.ui.captureHeld, false);
+
+    let prob = session();
+    const beforeProb = prob.project.working.kick;
+    prob = reduce(prob, { kind: "cc", data1: 52, data2: 127 });
+    prob = reduce(prob, { kind: "note", data1: 3, data2: 127 });
+    assert.equal(prob.ui.captureGenerator, "gen1");
+    prob = reduce(prob, { kind: "cc", data1: 52, data2: 0 });
+    assert.notDeepEqual(prob.project.working.kick.gen1, beforeProb.gen1);
+    assert.deepEqual(prob.project.working.kick.gen2, beforeProb.gen2);
 
     let count = session();
     const rate = count.project.working.kick.ratchet.rate;
@@ -327,6 +335,17 @@ describe("surface", () => {
     assert.notDeepEqual(count.project.working.kick.ratchet.count, before.ratchet.count);
     assert.deepEqual(count.project.working.kick.ratchet.rate, rate);
     assert.deepEqual(count.project.working.kick.gen1, before.gen1);
+  });
+
+  it("rerolls the whole lane when Capture is released with Shift held", () => {
+    let state = session();
+    const before = clone(state.project.working.kick);
+    state = reduce(state, { kind: "cc", data1: 49, data2: 127 });
+    state = reduce(state, { kind: "cc", data1: 52, data2: 127 });
+    state = reduce(state, { kind: "cc", data1: 52, data2: 0 });
+    assert.notDeepEqual(state.project.working.kick.gen1, before.gen1);
+    assert.notDeepEqual(state.project.working.kick.sound, before.sound);
+    assert.equal(state.ui.shiftHeld, true);
   });
 
   it("captures the page group: pattern, notes, or sound", () => {
@@ -357,6 +376,15 @@ describe("surface", () => {
     assert.equal(sound.ui.page, 4);
     assert.notDeepEqual(sound.project.working.kick.sound, heard.sound);
     assert.deepEqual(sound.project.working.kick.gen1, heard.gen1);
+  });
+
+  it("keeps page-group capture when Shift is not held", () => {
+    let state = session();
+    const before = clone(state.project.working.kick);
+    state = reduce(state, { kind: "cc", data1: 52, data2: 127 });
+    state = reduce(state, { kind: "cc", data1: 52, data2: 0 });
+    assert.notDeepEqual(state.project.working.kick.gen1, before.gen1);
+    assert.deepEqual(state.project.working.kick.sound, before.sound);
   });
 
   it("pastes a journal reference into the active set", () => {
@@ -391,10 +419,17 @@ describe("surface", () => {
     assert.equal(state.ui.mode, "set");
     assert.equal(menuLed(state.ui.mode).family, "purple");
     assert.equal(renderScreen(state.project, state.ui, 0).header.includes("SET"), false);
+    const setNotice = renderScreen(state.project, state.ui, 0, false, (state.ui.notice?.untilMs ?? 0) - 1);
+    assert.equal(setNotice.viz, "notice");
+    assert.equal(setNotice.labels.some((label) => label.text === "MODE" && label.invert), true);
+    assert.equal(setNotice.labels.some((label) => label.text === "SET" && label.invert), true);
     state = reduce(state, { kind: "note", data1: 68, data2: 127 });
     assert.equal(state.project.morph?.targetId, "002");
     state = reduce(state, { kind: "cc", data1: 50, data2: 127 });
     assert.equal(state.ui.mode, "journal");
+    const journalNotice = renderScreen(state.project, state.ui, 0, false, (state.ui.notice?.untilMs ?? 0) - 1);
+    assert.equal(journalNotice.viz, "notice");
+    assert.equal(journalNotice.labels.some((label) => label.text === "JOURNAL" && label.invert), true);
   });
 
   it("deletes the current set with Delete and Down", () => {
