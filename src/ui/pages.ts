@@ -43,34 +43,42 @@ function pair(aPath: string, aLabel: string, bPath: string, bLabel: string): Pag
   return { id: aPath, title: `${aLabel} ${bLabel}`, bindings: slots([...vpca(aPath, aLabel), ...vpca(bPath, bLabel)]) };
 }
 
-function eventPage(part: "a" | "b", title: string): Page {
-  const prefix = `events.${part}`;
-  const names = ["G1 LV", "G1 CY", "G1 OF", "G2 LV", "G2 CY", "G2 OF"];
-  const keys = ["g1.level", "g1.cycle", "g1.offset", "g2.level", "g2.cycle", "g2.offset"];
+function genPage(which: 1 | 2): Page {
+  const prefix = `gen${which}`;
+  const tag = `G${which}`;
   return {
-    id: title,
-    title,
-    bindings: slots(keys.map((key, index) => {
-      const integer = !key.endsWith("level");
-      const min = key.endsWith("level") ? 0 : key.endsWith("offset") ? 0 : 1;
-      const max = key.endsWith("level") ? 1 : 64;
-      return num(`${prefix}.${key}`, names[index], min, max, integer ? 1 : 0.01, integer);
-    })),
+    id: prefix,
+    title: `GEN ${which}`,
+    bindings: slots([
+      num(`${prefix}.length`, `${tag} LEN`, 0, 64, 1, true),
+      num(`${prefix}.hits`, `${tag} HIT`, 0, 64, 1, true),
+      num(`${prefix}.rotate`, `${tag} ROT`, 0, 64, 1, true),
+      num(`${prefix}.probability`, `${tag} PRB`, 0, 1, 0.01),
+      ...vpca(`${prefix}.velocity`, `${tag} VEL`),
+    ]),
   };
 }
 
-function formPage(withFollow: boolean): Page {
-  const bindings: Binding[] = [
-    num("form.length", "LENGTH", 1, 32, 1, true),
-    num("form.abSplit", "A/B", 0, 1, 0.01),
-    num("form.repeats", "REPEATS", 1, 16, 1, true),
-    num("form.varEvery", "VAR EV", 1, 32, 1, true),
-    num("form.varDiv", "VAR DIV", 1, 64, 1, true),
-    num("form.varCount", "VAR N", 1, 8, 1, true),
-    num("form.varAmount", "VAR AMT", 0, 1, 0.01),
-  ];
-  if (withFollow) bindings.push(num("form.follow", "FOLLOW", 0, 1, 0.01));
-  return { id: "form", title: "FORM", bindings: slots(bindings) };
+function pitchPage(): Page {
+  return {
+    id: "pitch",
+    title: "PITCH",
+    bindings: slots([
+      ...vpca("degree", "DEGREE"),
+      num("range.value", "RANGE V", 0, 1, 0.01),
+      num("range.amount", "RANGE A", -1, 1, 0.01),
+      num("follow", "FOLLOW", 0, 1, 0.01),
+      null,
+    ]),
+  };
+}
+
+function lengthPage(): Page {
+  return {
+    id: "length",
+    title: "LENGTH",
+    bindings: slots(vpca("length", "LENGTH")),
+  };
 }
 
 function soundPages(ids: readonly string[]): Page[] {
@@ -112,11 +120,11 @@ export function lanePages(lane: LaneId): Page[] {
   }
   const pitched = lane === "bass" || lane === "lead";
   return [
-    eventPage("a", "EVENT A"),
-    eventPage("b", "EVENT B"),
-    formPage(pitched),
-    pitched ? pair("degree", "DEGREE", "range", "RANGE") : pair("ratchet.count", "COUNT", "ratchet.rate", "RATE"),
-    ...(pitched ? [pair("length", "LENGTH", "velocity", "VELOCITY"), pair("repeat", "REPEAT", "step", "STEP")] : []),
+    genPage(1),
+    genPage(2),
+    ...(pitched
+      ? [pitchPage(), lengthPage(), pair("repeat", "REPEAT", "step", "STEP")]
+      : [pair("ratchet.count", "COUNT", "ratchet.rate", "RATE")]),
     ...soundPages(SOUND[lane]),
   ];
 }
@@ -188,11 +196,11 @@ export function pageGroup(context: ContextId, index: number): PageGroup {
   if (context === "global") return index === 0 ? "global" : "macro";
   if (context === "chords") return index < 4 ? "notes" : "sound";
   if (context === "bass" || context === "lead") {
-    if (index < 3) return "pattern";
-    if (index < 6) return "notes";
+    if (index < 2) return "pattern";
+    if (index < 5) return "notes";
     return "sound";
   }
-  return index < 4 ? "pattern" : "sound";
+  return index < 3 ? "pattern" : "sound";
 }
 
 export function pageGroupColor(context: ContextId, index: number): number {

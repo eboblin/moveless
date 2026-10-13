@@ -1,3 +1,4 @@
+import { SIXTEENTH_TICKS } from "../core/clock.ts";
 import { generatePhrase, laneSteps } from "../core/phrase.ts";
 import { evalModulated } from "../core/modulate.ts";
 import { LANE_CODE, type ContextId, type LaneId, type Project } from "../core/types.ts";
@@ -130,7 +131,7 @@ function drawGenerator(pixels: Uint8Array, project: Project, context: ContextId,
 function drawPhrase(pixels: Uint8Array, project: Project, lane: LaneId, playhead: number): void {
   const phrase = generatePhrase(project);
   const events = phrase.lanes[lane];
-  const steps = Math.max(1, phrase.steps[lane], ...events.map((event) => event.step + 1));
+  const steps = Math.max(1, phrase.steps[lane]);
   const yTop = HEADER_H;
   const yBottom = HEADER_H + VIZ_H - 2;
   const maxEvent = Math.floor(VIZ_H / 2);
@@ -141,7 +142,7 @@ function drawPhrase(pixels: Uint8Array, project: Project, lane: LaneId, playhead
     maxNote = Math.max(maxNote, event.note);
   }
   for (const event of events) {
-    const [x0, x1] = bucket(event.step, steps, WIDTH);
+    const [x0, x1] = bucket(wrapStep(event.tick / SIXTEENTH_TICKS, steps), steps, WIDTH);
     const height = lineHeight(event.velocity, maxEvent);
     const center = pitchCenter(event.note, minNote, maxNote, yTop, yBottom, maxEvent);
     let y0 = Math.round(center - (height - 1) / 2);
@@ -160,11 +161,17 @@ function drawPhrase(pixels: Uint8Array, project: Project, lane: LaneId, playhead
       for (let y = y0; y <= y1; y++) set(pixels, x, y, 1);
     }
   }
-  if (playhead >= 0) {
-    const pos = ((playhead % steps) + steps) % steps;
-    const x = Math.min(WIDTH - 1, Math.floor((pos * WIDTH) / steps));
-    for (let y = yTop; y <= yBottom; y++) toggle(pixels, x, y);
-  }
+  if (playhead >= 0) paintPlayhead(pixels, wrapStep(playhead, steps), steps, yTop, yBottom);
+}
+
+function paintPlayhead(pixels: Uint8Array, pos: number, steps: number, yTop: number, yBottom: number): void {
+  const x = Math.min(WIDTH - 1, Math.floor((pos * WIDTH) / steps));
+  for (let y = yTop; y <= yBottom; y++) toggle(pixels, x, y);
+}
+
+/** Keep a time inside one lane loop. A ratchet or repeat past the end returns to the start. */
+function wrapStep(step: number, steps: number): number {
+  return ((step % steps) + steps) % steps;
 }
 
 function pitchCenter(note: number, minNote: number, maxNote: number, yTop: number, yBottom: number, maxEvent: number): number {
@@ -187,10 +194,8 @@ function bucket(index: number, count: number, size: number): [number, number] {
   return [Math.min(size - 1, start), Math.min(size, Math.max(start + 1, end))];
 }
 
-function stepAt(project: Project, tick: number): number {
-  const sixteenths = Math.floor(tick / 48);
-  const span = Math.max(1, project.global.bar * project.global.phrase * 4);
-  return ((sixteenths % span) + span) % span;
+function stepAt(_project: Project, tick: number): number {
+  return Math.floor(Math.max(0, tick) / 48);
 }
 
 const LINE_LIMIT = 24;

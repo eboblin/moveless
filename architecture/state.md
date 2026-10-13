@@ -16,15 +16,28 @@ Mute убирает lane из слышимого выхода. Harmonic events C
 
 ## Lane
 
-Ударные: `events.a/b` по два генератора `level/cycle/offset`, `form`, `ratchet.count/rate`, восемь sound-модуляторов.
+Ударные и Bass/Lead: два параллельных евклида `gen1` / `gen2` (`length`, `hits`, `rotate`, `probability`, `velocity` V/P/C/A), без Form и без A/B.
 
-Bass и Lead: те же events и form, плюс `degree`, `range`, `length`, `velocity`, `repeat`, `step`.
+Ударные дополнительно: `ratchet.count/rate`, восемь sound-модуляторов.
+
+Bass и Lead дополнительно: `follow`, `degree`, `range`, `length` (длительность ноты), `repeat`, `step`, восемь sound-модуляторов. Отдельного lane.velocity нет — громкость из `gen*.velocity`.
 
 Chords: `change`, `length`, `motion`, `variation`, `mood`, `tension`, прямая страница `play`, восемь sound-модуляторов.
 
-`Form.bar` нет. Метр — `global.bar`. `follow` есть у всех lane; на ритм ударных не влияет.
+Метр — `global.bar`. `follow` только у bass/lead.
 
-Модулятор:
+Евклид:
+
+```text
+phraseSteps = max(length1, length2)   // length 0 = off
+local = step mod length
+pattern = rotate(euclid(hits, length))
+if hash(seed, lane, gen, step) >= probability → skip hit
+```
+
+`probability` 1 оставляет все удары кольца, 0 глушит генератор. Короткое кольцо повторяется внутри более длинной петли. На одном шаге оба попали → одно событие, velocity = max.
+
+Модулятор (полный V/P/C/A), в том числе у gen.velocity:
 
 ```text
 cycle = max(1, round(cycle))
@@ -38,9 +51,7 @@ out = clamp(value + motif(pattern, phase) * amount)
 
 192 PPQN. Темп и swing в Global. Swing 0 прямой; swing 1 задерживает нечётные шестнадцатые на половину шестнадцатой уже после сетки генератора. Фраза каждого lane играется по кругу на своей длине. Ход ведёт `dsp.so` по аудиоблокам, поэтому темп не зависит от того, как часто интерфейс успевает перерисоваться.
 
-Хеш вероятности: `seed + lane + part + generator + variationIndex + step`. Идентификатора сцены в хеше нет.
-
-Два генератора части A или B дают объединение сеток: один шаг — не больше одного исходного события. Шаг сетки — шестнадцатая. Cycle 1 ставит событие на каждую 1/16, cycle 4 — на каждую четверть. Variation сдвигает level и offset, звук не трогает. Индекс 0 — база.
+Хеш вероятности: `seed + lane + generator + "prob" + step`. Идентификатора сцены в хеше нет.
 
 Ratchet и Repeat считают исходное событие за единицу: count 1 — одно событие. Повторы Repeat сдвигаются на `step` ступеней лада.
 

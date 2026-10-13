@@ -7,7 +7,7 @@ import { eventsInBlock, phraseLoop, soundMotions } from "../src/dsp/schedule.ts"
 import { createEngine, loadPhrase, packBlock, packPhrase, renderBlock, renderClock } from "../src/dsp/voice.ts";
 
 describe("dsp adapter", () => {
-  it("maps kick semantics onto libpo32 voice 1", () => {
+  it("maps kick semantics onto v01 chain keys", () => {
     const params = mapKick({
       pitch: 0.2,
       boom: 0.3,
@@ -148,7 +148,87 @@ describe("dsp adapter", () => {
     }
     assert.equal(engine.drums[0].freq, freq);
   });
+
+  it("maps every snare suffix onto a distinct live field", () => {
+    const engine = createEngine();
+    loadPhrase(engine, [{
+      sample: 0, loop: 100000, lane: "snare", note: 38, velocity: 100, lengthTicks: 48,
+      params: mapSound("snare", {
+        pitch: 0.2, body: 0.31, noise: 0.42, snap: 0.53, decay: 0.64, ring: 0.75, crisp: 0.86, drive: 0.97,
+      }),
+    }], 120, true);
+    renderClock(engine);
+    const drum = engine.drums[1];
+    assert.ok(Math.abs(drum.freq - drum.base * 0.7) < 1e-6);
+    assert.equal(drum.body, 0.31);
+    assert.equal(drum.noise, 0.42);
+    assert.equal(drum.snap, 0.53);
+    assert.ok(Math.abs(drum.decay - (0.04 + 0.64 * 0.9)) < 1e-6);
+    assert.ok(Math.abs(drum.noiseDecay - (0.02 + 0.75 * 0.85)) < 1e-6);
+    assert.equal(drum.bright, 0.86);
+    assert.equal(drum.drive, 0.97);
+  });
+
+  it("keeps kick snap and click as separate controls", () => {
+    const engine = createEngine();
+    loadPhrase(engine, [{
+      sample: 0, loop: 100000, lane: "kick", note: 36, velocity: 120, lengthTicks: 48,
+      params: mapSound("kick", {
+        pitch: 0.5, boom: 0.2, snap: 0.9, click: 0.1, decay: 0.5, punch: 0.2, drive: 0.1, tone: 0.5,
+      }),
+    }], 120, true);
+    renderClock(engine);
+    assert.equal(engine.drums[0].snap, 0.9);
+    assert.equal(engine.drums[0].bright, 0.1);
+    assert.equal(engine.drums[0].bend, 0.2);
+  });
+
+  it("changes early energy when snap or body moves", () => {
+    const quietSnap = peak(renderBlock(createEngine(), [{
+      sampleOffset: 0, lane: "snare", note: 38, velocity: 120, lengthTicks: 48,
+      params: mapSound("snare", { pitch: 0.5, body: 0.8, noise: 0.2, snap: 0, decay: 0.5, ring: 0.4, crisp: 0.5, drive: 0 }),
+    }], 120));
+    const loudSnap = peak(renderBlock(createEngine(), [{
+      sampleOffset: 0, lane: "snare", note: 38, velocity: 120, lengthTicks: 48,
+      params: mapSound("snare", { pitch: 0.5, body: 0.8, noise: 0.2, snap: 1, decay: 0.5, ring: 0.4, crisp: 0.5, drive: 0 }),
+    }], 120));
+    assert.ok(loudSnap > quietSnap);
+
+    const thin = peak(renderBlock(createEngine(), [{
+      sampleOffset: 0, lane: "snare", note: 38, velocity: 120, lengthTicks: 48,
+      params: mapSound("snare", { pitch: 0.5, body: 0, noise: 0.1, snap: 0, decay: 0.6, ring: 0.3, crisp: 0.2, drive: 0 }),
+    }], 120));
+    const fat = peak(renderBlock(createEngine(), [{
+      sampleOffset: 0, lane: "snare", note: 38, velocity: 120, lengthTicks: 48,
+      params: mapSound("snare", { pitch: 0.5, body: 1, noise: 0.1, snap: 0, decay: 0.6, ring: 0.3, crisp: 0.2, drive: 0 }),
+    }], 120));
+    assert.ok(fat > thin);
+  });
+
+  it("spreads pitched detune, fm and resonance into the note voice", () => {
+    const engine = createEngine();
+    loadPhrase(engine, [{
+      sample: 0, loop: 100000, lane: "bass", note: 40, velocity: 100, lengthTicks: 192,
+      params: mapSound("bass", { shape: 0.8, detune: 0.9, fm: 0.7, noise: 0.4, cutoff: 0.6, resonance: 0.85, attack: 0.1, decay: 0.5 }),
+    }], 120, true);
+    renderClock(engine);
+    const note = engine.notes[0];
+    assert.equal(note.shape, 0.8);
+    assert.equal(note.detune, 0.9);
+    assert.equal(note.fm, 0.7);
+    assert.equal(note.noise, 0.4);
+    assert.equal(note.resonance, 0.85);
+  });
 });
+
+function peak(buf: Float32Array): number {
+  let best = 0;
+  for (let i = 0; i < Math.min(buf.length, 256); i++) {
+    const a = Math.abs(buf[i]);
+    if (a > best) best = a;
+  }
+  return best;
+}
 
 function sideDifference(width: number): number {
   const audio = renderBlock(createEngine(), [{

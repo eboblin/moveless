@@ -13,7 +13,7 @@ export function textPreview(project: Project): string {
 function lineFor(project: Project, lane: LaneId, steps: number): string {
   const chars = Array.from({ length: steps }, () => "-");
   if (lane === "kick" || lane === "snare" || lane === "hat" || lane === "perc") {
-    const hits = generateHits(project.working[lane].events, project.working[lane].form, steps, project.global.seed, lane, project.global.bar);
+    const hits = generateHits(project.working[lane].gen1, project.working[lane].gen2, steps, project.global.seed, lane);
     hits.forEach((hit) => {
       const count = countFromUnit(evalModulated(project.working[lane].ratchet.count, hit.step));
       chars[hit.step] = count > 1 ? String(Math.min(9, count)) : "x";

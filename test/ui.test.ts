@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
+import { unitForIndex } from "../src/core/clock.ts";
 import { defaultProject } from "../src/core/defaults.ts";
+import { modulated } from "../src/core/modulate.ts";
 import { createSet, record } from "../src/core/performance.ts";
 import { lanePages, pageCount, pageGroupColor } from "../src/ui/pages.ts";
 import { menuLed, padLeds, stepLed, stepLeds, trackLeds } from "../src/ui/leds.ts";
@@ -13,15 +15,18 @@ function session(): Session {
 }
 
 describe("pages and leds", () => {
-  it("gives drums eight pages and bass ten", () => {
-    assert.equal(pageCount("kick"), 8);
-    assert.equal(pageCount("bass"), 10);
-    assert.equal(pageCount("lead"), 10);
+  it("gives drums seven pages and bass nine", () => {
+    assert.equal(pageCount("kick"), 7);
+    assert.equal(pageCount("bass"), 9);
+    assert.equal(pageCount("lead"), 9);
     assert.equal(pageCount("chords"), 8);
-    assert.equal(lanePages("kick")[3].title.includes("COUNT"), true);
-    assert.equal(lanePages("bass")[3].bindings[0]?.label, "DEGREE V");
-    assert.equal(lanePages("kick")[2].bindings[7], null);
-    assert.equal(lanePages("bass")[2].bindings[7]?.label, "FOLLOW");
+    assert.equal(lanePages("kick")[0].title, "GEN 1");
+    assert.equal(lanePages("kick")[1].title, "GEN 2");
+    assert.equal(lanePages("kick")[0].bindings[3]?.label, "G1 PRB");
+    assert.equal(lanePages("kick")[2].title.includes("COUNT"), true);
+    assert.equal(lanePages("bass")[2].bindings[0]?.label, "DEGREE V");
+    assert.equal(lanePages("bass")[2].bindings[6]?.label, "FOLLOW");
+    assert.equal(lanePages("kick")[0].bindings[4]?.label, "G1 VEL V");
   });
 
   it("follows the lane lamp rules", () => {
@@ -75,7 +80,7 @@ describe("pages and leds", () => {
     assert.equal(wheel[1].blink, true);
     assert.equal(wheel[4].color, 22);
     assert.equal(wheel[4].blink, false);
-    assert.equal(wheel[27].color, 3);
+    assert.equal(wheel[27].color, 20);
     assert.equal(wheel[28].color, 20);
     const bass = padLeds(project, "journal", { ...defaultUi(), wheelTouch: true, context: "bass" });
     assert.equal(bass[24].color, 3);
@@ -122,23 +127,42 @@ describe("surface", () => {
   it("edits the focused parameter and draws the phrase under a fixed header", () => {
     let state = session();
     state = reduce(state, { kind: "cc", data1: 71, data2: 127 });
-    assert.ok(state.project.working.kick.events.a.g1.level < 1);
-    assert.equal(state.ui.focus?.label, "G1 LV");
+    assert.ok(state.project.working.kick.gen1.length < 16);
+    assert.equal(state.ui.focus?.label, "G1 LEN");
     const screen = renderScreen(state.project, state.ui, 0);
-    assert.equal(screen.header, "G1 LEVEL");
-    assert.equal(screen.labels[0].text, "G1 LEVEL");
+    assert.equal(screen.header, "G1 LEN");
+    assert.equal(screen.labels[0].text, "G1 LEN");
     const marked = screen.labels.find((label) => label.invert);
-    assert.equal(marked?.text.trim().startsWith("LV "), true);
+    assert.ok(marked?.invert);
+    assert.ok((marked?.text ?? "").includes("15"));
     assert.equal(HEADER_H + VIZ_H + PARAM_H, 64);
     assert.equal(pixel(screen, 0, HEADER_H - 1), 1);
     assert.equal(pixel(screen, 14, HEADER_H - 1), 1);
-    assert.equal(pixel(screen, 15, HEADER_H - 1), 0);
+    assert.equal(pixel(screen, 16, HEADER_H - 1), 1);
     assert.equal(pixel(screen, 17, HEADER_H - 1), 0);
     assert.equal(pixel(screen, 0, HEADER_H), 0);
     assert.equal(pixel(screen, 0, HEADER_H + VIZ_H - 2), 0);
     assert.ok(columnSpan(screen, 0) > 0);
     assert.ok(columnSpan(screen, 0) <= VIZ_H / 2);
-    assert.equal(pixel(screen, 4, HEADER_H + 8), 0);
+    assert.equal(pixel(screen, 20, HEADER_H + 8), 0);
+  });
+
+  it("wraps ratchet tails into the phrase so the playhead still reaches the end", () => {
+    const project = defaultProject();
+    project.working.kick.ratchet.count = modulated(1);
+    project.working.kick.ratchet.rate = modulated(unitForIndex(0, 6));
+    const screen = renderScreen(project, defaultUi(), 0, false);
+    const plain = renderScreen(defaultProject(), defaultUi(), 0, false);
+    assert.ok(columnSpan(screen, 112) > 0);
+    assert.equal(columnSpan(plain, 112), 0);
+    assert.ok(columnSpan(screen, 0) > 0);
+    const end = renderScreen(project, defaultUi(), 63 * 48, true);
+    const still = renderScreen(project, defaultUi(), 63 * 48, false);
+    let head = -1;
+    for (let x = 0; x < 128; x++) {
+      if (pixel(end, x, HEADER_H + 8) !== pixel(still, x, HEADER_H + 8)) head = x;
+    }
+    assert.ok(head >= 120);
   });
 
   it("draws one generator per line and leaves transport out of the header", () => {
@@ -149,9 +173,8 @@ describe("surface", () => {
     assert.equal(screen.labels[0].text.includes("JRN"), false);
     assert.equal(screen.labels[0].text.includes("SET"), false);
     const rows = screen.labels.filter((label) => label.y > HEADER_H);
-    assert.deepEqual(rows.map((label) => label.text), ["G1 LV 100 CY 4 OF 0", "G2 LV 0 CY 7 OF 5"]);
-    assert.deepEqual(rows.map((label) => label.x), [1, 1]);
-    assert.ok(rows[0].y < rows[1].y);
+    assert.equal(rows.length, 8);
+    assert.ok(rows.every((label) => label.text.startsWith("G")));
     assert.equal(pixel(screen, 0, HEADER_H), 1);
     assert.equal(pixel(screen, 1, HEADER_H), 0);
     assert.equal(pixel(screen, 1, HEADER_H + VIZ_H - 2), 0);
@@ -160,11 +183,15 @@ describe("surface", () => {
     assert.equal(pixel(screen, 60, HEADER_H), 0);
     const turned = renderScreen(defaultProject(), { ...defaultUi(), page: 2 }, 0);
     assert.equal(pixel(turned, 1, HEADER_H - 1), 0);
-    assert.equal(pixel(turned, 32, HEADER_H - 1), 1);
-    assert.equal(pixel(turned, 33, HEADER_H - 1), 1);
+    assert.equal(pixel(turned, 36, HEADER_H - 1), 1);
+    assert.equal(pixel(turned, 37, HEADER_H - 1), 1);
     const mix = renderScreen(defaultProject(), { ...defaultUi(), context: "mix" }, 0);
     assert.equal(pixel(mix, 15, HEADER_H - 1), 1);
-    const bass = renderScreen(defaultProject(), { ...defaultUi(), context: "bass" }, 0);
+    const bassProject = defaultProject();
+    bassProject.working.bass.degree = modulated(0.5, 0, 8, 1);
+    bassProject.working.bass.follow = 0;
+    bassProject.working.bass.gen1.hits = 8;
+    const bass = renderScreen(bassProject, { ...defaultUi(), context: "bass" }, 0);
     assert.ok(columnSpan(bass, 0) <= VIZ_H / 2);
     assert.ok(pitchSpread(bass) > columnSpan(bass, 0));
     const chords = renderScreen(defaultProject(), { ...defaultUi(), context: "chords" }, 0);
@@ -178,8 +205,7 @@ describe("surface", () => {
     let state = session();
     state = reduce(state, { kind: "cc", data1: 14, data2: 1 });
     state = reduce(state, { kind: "cc", data1: 14, data2: 1 });
-    state = reduce(state, { kind: "cc", data1: 14, data2: 1 });
-    assert.equal(state.ui.page, 3);
+    assert.equal(state.ui.page, 2);
     state = reduce(state, { kind: "note", data1: 0, data2: 127 });
     assert.equal(state.ui.focus?.generator, "ratchet.count");
     const held = renderScreen(state.project, state.ui, 1000);
@@ -196,7 +222,7 @@ describe("surface", () => {
     pattern = reduce(pattern, { kind: "note", data1: 1, data2: 127 });
     const phrase = renderScreen(pattern.project, pattern.ui, 0);
     assert.equal(phrase.viz, "phrase");
-    assert.equal(phrase.header, "G1 CYCLE");
+    assert.equal(phrase.header, "G1 HIT");
   });
 
   it("draws a generator cycle on the phrase scale", () => {
@@ -211,10 +237,13 @@ describe("surface", () => {
     };
     const quarter = screenFor(4);
     const phrase = screenFor(16);
-    assert.equal(pixel(quarter, 2, HEADER_H), 1);
-    assert.equal(pixel(quarter, 10, HEADER_H), 1);
-    assert.equal(pixel(phrase, 2, HEADER_H), 0);
-    assert.equal(pixel(phrase, 8, HEADER_H), 1);
+    assert.equal(pixel(quarter, 0, HEADER_H), 1);
+    assert.equal(pixel(quarter, 0, HEADER_H + 1), 1);
+    assert.equal(pixel(quarter, 32, HEADER_H), 1);
+    assert.equal(pixel(quarter, 32, HEADER_H + 1), 1);
+    assert.equal(pixel(phrase, 0, HEADER_H), 1);
+    assert.equal(pixel(phrase, 0, HEADER_H + 1), 1);
+    assert.equal(pixel(phrase, 32, HEADER_H + 1), 0);
   });
 
   it("sets transition and toggles wander from the wheel-touch row", () => {
@@ -247,11 +276,11 @@ describe("surface", () => {
     state = reduce(state, { kind: "cc", data1: 88, data2: 127 });
     state = reduce(state, { kind: "note", data1: 19, data2: 127 });
     assert.equal(state.project.mute.perc, true);
-    const events = state.project.working.kick.events.a.g1.cycle;
+    const hits = state.project.working.kick.gen1.hits;
     state = reduce(state, { kind: "cc", data1: 52, data2: 127 });
-    assert.equal(state.project.working.kick.events.a.g1.cycle, events);
+    assert.equal(state.project.working.kick.gen1.hits, hits);
     state = reduce(state, { kind: "cc", data1: 52, data2: 0 });
-    assert.notEqual(state.project.working.kick.events.a.g1.cycle, events);
+    assert.notEqual(state.project.working.kick.gen1.hits, hits);
     state = reduce(state, { kind: "cc", data1: 40, data2: 127 });
     state = reduce({ ...state, tick: 100 }, { kind: "cc", data1: 40, data2: 0 });
     assert.deepEqual(state.project.bookmarks[0], { context: "kick", page: 0 });
@@ -281,17 +310,15 @@ describe("surface", () => {
     state = reduce(state, { kind: "cc", data1: 52, data2: 127 });
     state = reduce(state, { kind: "note", data1: 1, data2: 127 });
     state = reduce(state, { kind: "cc", data1: 72, data2: 1 });
-    assert.equal(state.project.working.kick.events.a.g1.cycle, before.events.a.g1.cycle);
-    assert.equal(state.ui.captureGenerator, "events.a.g1");
+    assert.equal(state.project.working.kick.gen1.hits, before.gen1.hits);
+    assert.equal(state.ui.captureGenerator, "gen1");
     state = reduce(state, { kind: "cc", data1: 52, data2: 0 });
-    assert.notDeepEqual(state.project.working.kick.events.a.g1, before.events.a.g1);
-    assert.deepEqual(state.project.working.kick.events.a.g2, before.events.a.g2);
-    assert.deepEqual(state.project.working.kick.form, before.form);
+    assert.notDeepEqual(state.project.working.kick.gen1, before.gen1);
+    assert.deepEqual(state.project.working.kick.gen2, before.gen2);
     assert.equal(state.ui.captureHeld, false);
 
     let count = session();
     const rate = count.project.working.kick.ratchet.rate;
-    count = reduce(count, { kind: "cc", data1: 14, data2: 1 });
     count = reduce(count, { kind: "cc", data1: 14, data2: 1 });
     count = reduce(count, { kind: "cc", data1: 14, data2: 1 });
     count = reduce(count, { kind: "cc", data1: 52, data2: 127 });
@@ -299,7 +326,7 @@ describe("surface", () => {
     count = reduce(count, { kind: "cc", data1: 52, data2: 0 });
     assert.notDeepEqual(count.project.working.kick.ratchet.count, before.ratchet.count);
     assert.deepEqual(count.project.working.kick.ratchet.rate, rate);
-    assert.deepEqual(count.project.working.kick.events, before.events);
+    assert.deepEqual(count.project.working.kick.gen1, before.gen1);
   });
 
   it("captures the page group: pattern, notes, or sound", () => {
@@ -307,7 +334,7 @@ describe("surface", () => {
     const kick = pattern.project.working.kick;
     pattern = reduce(pattern, { kind: "cc", data1: 52, data2: 127 });
     pattern = reduce(pattern, { kind: "cc", data1: 52, data2: 0 });
-    assert.notDeepEqual(pattern.project.working.kick.events, kick.events);
+    assert.notDeepEqual(pattern.project.working.kick.gen1, kick.gen1);
     assert.deepEqual(pattern.project.working.kick.sound, kick.sound);
 
     let notes = session();
@@ -319,7 +346,7 @@ describe("surface", () => {
     notes = reduce(notes, { kind: "cc", data1: 52, data2: 0 });
     assert.equal(notes.ui.page, 3);
     assert.notDeepEqual(notes.project.working.bass.degree, bass.degree);
-    assert.deepEqual(notes.project.working.bass.events, bass.events);
+    assert.deepEqual(notes.project.working.bass.gen1, bass.gen1);
     assert.deepEqual(notes.project.working.bass.sound, bass.sound);
 
     let sound = session();
@@ -329,7 +356,7 @@ describe("surface", () => {
     sound = reduce(sound, { kind: "cc", data1: 52, data2: 0 });
     assert.equal(sound.ui.page, 4);
     assert.notDeepEqual(sound.project.working.kick.sound, heard.sound);
-    assert.deepEqual(sound.project.working.kick.events, heard.events);
+    assert.deepEqual(sound.project.working.kick.gen1, heard.gen1);
   });
 
   it("pastes a journal reference into the active set", () => {

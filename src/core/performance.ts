@@ -8,6 +8,7 @@ import {
   SET_CAPACITY,
   SOUND,
   WANDER_BARS,
+  type EuclidGen,
   type LaneId,
   type Lanes,
   type Project,
@@ -208,18 +209,15 @@ export function captureLane(project: Project, lane: LaneId, scope: CaptureScope 
   return { ...project, working, captureNonce: nonce };
 }
 
-/** Reroll one event generator (`events.a.g1`) or one 4-param generator (`ratchet.count`, `sound.cutoff`). */
+/** Reroll one euclid (`gen1`), its velocity, or another 4-param modulator. */
 export function captureGenerator(project: Project, lane: LaneId, target: string): Project {
   if (project.lock[lane]) return project;
   const working = clone(project.working);
   const node = readNode(working[lane], target);
   const nonce = project.captureNonce + 1;
   const roll = (...parts: (string | number)[]) => hash01(project.global.seed, "capture", nonce, lane, target, ...parts);
-  if (isEventGen(node)) {
-    const cycle = 1 + Math.floor(roll("cycle") * 16);
-    node.level = 0.35 + roll("level") * 0.65;
-    node.cycle = cycle;
-    node.offset = Math.floor(roll("offset") * cycle);
+  if (isEuclidGen(node)) {
+    Object.assign(node, randomEuclid(roll));
     return { ...project, working, captureNonce: nonce };
   }
   if (isModulated(node)) {
@@ -241,12 +239,29 @@ function readNode(root: unknown, path: string): unknown {
   return current;
 }
 
-function isEventGen(value: unknown): value is { level: number; cycle: number; offset: number } {
-  return !!value && typeof value === "object" && "level" in value && "offset" in value && !("amount" in value);
+function isEuclidGen(value: unknown): value is EuclidGen {
+  return !!value && typeof value === "object" && "hits" in value && "length" in value && "rotate" in value && "probability" in value && "velocity" in value;
 }
 
 function isModulated(value: unknown): value is { value: number; pattern: number; cycle: number; amount: number } {
-  return !!value && typeof value === "object" && "amount" in value && "pattern" in value;
+  return !!value && typeof value === "object" && "amount" in value && "pattern" in value && "cycle" in value;
+}
+
+function randomEuclid(roll: (...parts: (string | number)[]) => number): EuclidGen {
+  const length = 4 + Math.floor(roll("len") * 13);
+  const hits = Math.floor(roll("hits") * (length + 1));
+  return {
+    length,
+    hits,
+    rotate: Math.floor(roll("rot") * length),
+    probability: 0.35 + roll("prob") * 0.65,
+    velocity: modulated(
+      0.35 + roll("vel") * 0.65,
+      Math.floor(roll("vp") * 64),
+      1 + Math.floor(roll("vc") * 8),
+      (roll("va") * 2 - 1) * 0.75,
+    ),
+  };
 }
 
 function touch(roll: (...parts: (string | number)[]) => number, prefix: string) {
@@ -261,28 +276,11 @@ function touch(roll: (...parts: (string | number)[]) => number, prefix: string) 
 function randomizePattern(lanes: Lanes, lane: LaneId, roll: (...parts: (string | number)[]) => number): void {
   if (lane === "chords") return;
   const target = lanes[lane];
-  for (const part of ["a", "b"] as const) {
-    for (const which of ["g1", "g2"] as const) {
-      const cycle = 1 + Math.floor(roll(part, which, "cycle") * 16);
-      target.events[part][which] = {
-        level: 0.35 + roll(part, which, "level") * 0.65,
-        cycle,
-        offset: Math.floor(roll(part, which, "offset") * cycle),
-      };
-    }
-  }
-  target.form = {
-    ...target.form,
-    length: 1 + Math.floor(roll("len") * 8),
-    abSplit: 0.25 + roll("split") * 0.75,
-    repeats: 1 + Math.floor(roll("rep") * 4),
-    varEvery: 1 + Math.floor(roll("every") * 8),
-    varDiv: [4, 8, 16, 32][Math.floor(roll("div") * 4)],
-    varCount: 1 + Math.floor(roll("count") * 4),
-    varAmount: roll("amount") * 0.6,
-    follow: lane === "bass" || lane === "lead" ? roll("follow") : target.form.follow,
-  };
-  if (lane !== "bass" && lane !== "lead") {
+  target.gen1 = randomEuclid((...parts) => roll("gen1", ...parts));
+  target.gen2 = randomEuclid((...parts) => roll("gen2", ...parts));
+  if (lane === "bass" || lane === "lead") {
+    target.follow = roll("follow");
+  } else {
     const drum = lanes[lane];
     drum.ratchet.count = touch(roll, "ratchet.count");
     drum.ratchet.rate = touch(roll, "ratchet.rate");
@@ -295,9 +293,9 @@ function randomizeNotes(lanes: Lanes, lane: LaneId, roll: (...parts: (string | n
     pitched.degree = touch(roll, "degree");
     pitched.range = touch(roll, "range");
     pitched.length = touch(roll, "length");
-    pitched.velocity = touch(roll, "velocity");
     pitched.repeat = touch(roll, "repeat");
     pitched.step = touch(roll, "step");
+    pitched.follow = roll("follow");
     return;
   }
   if (lane !== "chords") return;

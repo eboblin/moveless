@@ -7,33 +7,20 @@ import {
   type ChordLane,
   type DrumId,
   type DrumLane,
-  type EventGen,
-  type EventPart,
-  type Form,
-  type GlobalSettings,
+  type EuclidGen,
   type Lanes,
   type PitchedLane,
   type Project,
+  type GlobalSettings,
 } from "./types.ts";
 
-function gen(level: number, cycle: number, offset: number): EventGen {
-  return { level, cycle, offset };
-}
-
-function part(g1: EventGen, g2: EventGen): EventPart {
-  return { g1, g2 };
-}
-
-function form(follow: number): Form {
+function euclid(length: number, hits: number, rotate = 0, velocity = 0.85): EuclidGen {
   return {
-    length: 4,
-    abSplit: 0.75,
-    repeats: 1,
-    varEvery: 4,
-    varDiv: 16,
-    varCount: 1,
-    varAmount: 0,
-    follow,
+    length,
+    hits,
+    rotate,
+    probability: 1,
+    velocity: modulated(velocity),
   };
 }
 
@@ -43,40 +30,30 @@ function sound(ids: readonly string[], centre = 0.5): Record<string, ReturnType<
   return out;
 }
 
-const DRUM_GEN: Record<DrumId, EventGen> = {
-  kick: gen(1, 4, 0),
-  snare: gen(1, 8, 4),
-  hat: gen(1, 2, 0),
-  perc: gen(0.55, 6, 1),
+const DRUM_PRIMARY: Record<DrumId, EuclidGen> = {
+  kick: euclid(16, 4, 0, 1),
+  snare: euclid(16, 2, 4, 1),
+  hat: euclid(16, 8, 0, 0.75),
+  perc: euclid(16, 3, 1, 0.7),
 };
 
-function drum(id: DrumId, follow = 0): DrumLane {
-  const primary = DRUM_GEN[id];
-  const second = gen(0, 7, 5);
+function drum(id: DrumId): DrumLane {
   return {
-    events: {
-      a: part(primary, second),
-      b: part({ ...primary }, { ...second }),
-    },
-    form: form(follow),
+    gen1: { ...DRUM_PRIMARY[id], velocity: { ...DRUM_PRIMARY[id].velocity } },
+    gen2: euclid(16, 0, 0, 0.55),
     ratchet: { count: modulated(0), rate: modulated(1 / 6) },
     sound: sound(SOUND[id]),
   };
 }
 
-function pitched(follow: number, level: number, cycle: number, octaveBias: number): PitchedLane {
-  const primary = gen(level, cycle, 0);
-  const second = gen(0, 5, 2);
+function pitched(follow: number, hits: number, octaveBias: number): PitchedLane {
   return {
-    events: {
-      a: part(primary, second),
-      b: part({ ...primary }, { ...second }),
-    },
-    form: form(follow),
+    gen1: euclid(16, hits, 0, 0.8),
+    gen2: euclid(16, 0, 0, 0.55),
+    follow,
     degree: modulated(0.5),
     range: modulated(octaveBias),
     length: modulated(0.45),
-    velocity: modulated(0.8),
     repeat: modulated(0),
     step: modulated(0.5),
     sound: sound(SOUND.bass),
@@ -119,9 +96,9 @@ export function defaultGlobal(): GlobalSettings {
 }
 
 export function defaultLanes(): Lanes {
-  const bass = pitched(1, 1, 8, 0.45);
+  const bass = pitched(1, 2, 0.45);
   bass.sound = sound(SOUND.bass);
-  const lead = pitched(0.65, 0.7, 16, 0.55);
+  const lead = pitched(0.65, 1, 0.55);
   lead.sound = sound(SOUND.lead);
   return {
     kick: drum("kick"),

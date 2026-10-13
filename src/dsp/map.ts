@@ -7,9 +7,9 @@ export interface EngineParam {
 }
 
 /**
- * libpo32 chain keys. GM note 36 is pad 1.
+ * Drum chain keys (GM pad ids kept for map stability).
  * Kick pad 1, snare pad 3, closed hat pad 7, perc pad 12 (low-mid tom).
- * Pan and spread are keys of our drum voice.
+ * Our voice reads every suffix below; pan/spread are stereo/spread only.
  */
 const VOICE: Record<DrumId, string> = {
   kick: "v01",

@@ -1,7 +1,7 @@
 /*
  * ptnmove voice. One drum voice per lane and one shared note pool for
  * bass, lead and chords. Parameter ids match src/dsp/map.ts.
- * GPL Surge and unlicensed libpo32 stay outside this tree.
+ * Own synth — libpo32 / Surge are not vendored; keys stay compatible with map.ts.
  */
 
 #include <math.h>
@@ -21,13 +21,15 @@
 
 typedef struct {
     int on;
-    float phase, phase2, env, freq, decay, noise, drive, tone, pan, spread, click, bend, low, base;
+    int lane;
+    float phase, phase2, env, noise_env, freq, decay, noise_decay;
+    float noise, drive, tone, pan, spread, snap, bright, bend, body, low, base;
     int age, loop;
 } Drum;
 
 typedef struct {
     int on;
-    float phase, phase2, env, freq, shape, detune, fm, noise, cutoff, resonance, attack, release, width, gain, low;
+    float phase, phase2, env, freq, shape, detune, fm, noise, cutoff, resonance, attack, release, width, gain, low, band;
     int age, left, lane, loop;
 } Note;
 
@@ -110,7 +112,13 @@ static float wave(float phase, float shape) {
     if (wrapped < 0) wrapped += TWO_PI;
     float sine = sinf(wrapped);
     float saw = wrapped / 3.14159265f - 1.0f;
-    return sine * (1.0f - shape) + saw * shape;
+    float square = wrapped < 3.14159265f ? 1.0f : -1.0f;
+    if (shape < 0.5f) {
+        float t = shape * 2.0f;
+        return sine * (1.0f - t) + saw * t;
+    }
+    float t = (shape - 0.5f) * 2.0f;
+    return saw * (1.0f - t) + square * t;
 }
 
 static int suffix_is(const char *id, const char *suffix) {
@@ -202,21 +210,22 @@ static void follow_sound(Engine *engine) {
         Drum *drum = &engine->drums[d];
         if (!drum->on || drum->loop < 1) continue;
         float step = (float)(pos % drum->loop) / span;
-        int click_locked = 0;
         for (int m = 0; m < engine->motion_count; m++) {
             Motion *motion = &engine->motions[m];
             if (motion->lane != d) continue;
             float unit = eval_motion(motion, step);
             if (suffix_is(motion->id, "freq")) continue;
-            else if (suffix_is(motion->id, "dcy")) drum->decay = 0.04f + unit * 0.8f;
+            else if (suffix_is(motion->id, "dcy")) drum->decay = 0.04f + unit * 0.9f;
+            else if (suffix_is(motion->id, "nedcy")) drum->noise_decay = 0.02f + unit * 0.85f;
             else if (suffix_is(motion->id, "mix")) drum->noise = unit;
             else if (suffix_is(motion->id, "dist")) drum->drive = unit;
             else if (suffix_is(motion->id, "nfq")) drum->tone = unit;
             else if (suffix_is(motion->id, "pan")) drum->pan = unit;
             else if (suffix_is(motion->id, "mrate")) drum->spread = unit;
-            else if (suffix_is(motion->id, "nffrq")) { drum->click = unit; click_locked = 1; }
-            else if (suffix_is(motion->id, "atk") && !click_locked) drum->click = unit;
+            else if (suffix_is(motion->id, "nffrq")) drum->bright = unit;
+            else if (suffix_is(motion->id, "atk")) drum->snap = unit;
             else if (suffix_is(motion->id, "mamt")) drum->bend = unit;
+            else if (suffix_is(motion->id, "lvl")) drum->body = unit;
         }
     }
     for (int n = 0; n < NOTES; n++) {
@@ -241,28 +250,37 @@ static void follow_sound(Engine *engine) {
 }
 
 static void arm_drum(Engine *engine, int lane, int note, int velocity, const char *params, int loop) {
-    Drum *drum = &engine->drums[lane < DRUMS ? lane : 0];
+    int idx = lane < DRUMS ? lane : 0;
+    Drum *drum = &engine->drums[idx];
+    int hat = idx == 2;
     float pitch = read_param(params, "freq", 0.5f);
     float base = 440.0f * powf(2.0f, ((float)note - 69.0f) / 12.0f);
-    float dropped = lane == 0 ? 0.5f : 1.0f;
+    float dropped = idx == 0 ? 0.5f : 1.0f;
+    float vel = velocity / 127.0f;
     drum->on = 1;
+    drum->lane = idx;
     drum->phase = 0;
     drum->phase2 = 0;
-    drum->env = velocity / 127.0f;
+    drum->env = vel;
+    drum->noise_env = vel;
     drum->age = 0;
     drum->base = base * dropped;
     drum->freq = drum->base * (0.5f + pitch);
     drum->loop = loop;
-    drum->decay = 0.04f + read_param(params, "dcy", 0.5f) * 0.8f;
-    drum->noise = read_param(params, "mix", lane == 2 ? 0.8f : 0.2f);
-    drum->drive = read_param(params, "dist", 0.2f);
-    drum->tone = read_param(params, "nfq", 0.5f);
+    drum->decay = 0.04f + read_param(params, "dcy", 0.5f) * 0.9f;
+    drum->noise_decay = 0.02f + read_param(params, "nedcy", hat ? 0.35f : 0.45f) * 0.85f;
+    drum->noise = read_param(params, "mix", hat ? 0.85f : (idx == 1 ? 0.55f : 0.15f));
+    drum->drive = read_param(params, "dist", 0.15f);
+    drum->tone = read_param(params, "nfq", hat ? 0.75f : 0.45f);
     drum->pan = read_param(params, "pan", 0.5f);
-    drum->spread = read_param(params, "mrate", 0.0f);
-    drum->click = read_param(params, "nffrq", read_param(params, "atk", 0.3f));
-    drum->bend = read_param(params, "mamt", 0.0f);
+    drum->spread = read_param(params, "mrate", hat ? 0.4f : 0.1f);
+    drum->snap = read_param(params, "atk", idx == 0 ? 0.35f : (hat ? 0.25f : 0.45f));
+    drum->bright = read_param(params, "nffrq", hat ? 0.7f : 0.4f);
+    drum->bend = read_param(params, "mamt", idx == 0 ? 0.55f : (idx == 3 ? 0.35f : 0.1f));
+    drum->body = read_param(params, "lvl", hat ? 0.12f : 1.0f);
     drum->low = 0;
     (void)engine;
+    (void)lane;
 }
 
 static Note *steal(Engine *engine) {
@@ -299,49 +317,60 @@ static void arm_note(Engine *engine, int note_num, int velocity, int ticks, cons
     note->width = read_param(params, "osc_width", 0.0f);
     note->gain = velocity / 127.0f;
     note->low = 0;
+    note->band = 0;
 }
 
 static float drum_sample(Engine *engine, Drum *drum) {
-    float bend = 1.0f + drum->bend * drum->env * 3.0f;
+    int kick = drum->lane == 0;
+    int hat = drum->lane == 2;
+    float bend = 1.0f + drum->bend * drum->env * (kick ? 4.5f : 2.2f);
     float inc = (TWO_PI * drum->freq * bend) / SR;
+    float spread_mul = hat ? 1.8f + drum->bright * 2.4f : 0.08f + drum->spread * 0.25f;
     drum->phase += inc;
-    drum->phase2 += inc * (1.0f + drum->spread * 0.08f);
-    float body = sinf(drum->phase) + sinf(drum->phase2) * drum->spread;
-    float noise = rng(engine) * drum->noise;
-    float click_den = 30.0f + drum->click * 400.0f;
-    float click = rng(engine) * expf(-(float)drum->age / click_den) * drum->click;
-    float mixed = body * (1.0f - drum->noise * 0.7f) + noise + click;
-    float coef = 0.05f + drum->tone * 0.9f;
+    drum->phase2 += inc * (1.0f + drum->spread * (hat ? 2.5f : 0.12f) + (hat ? drum->bright * 0.55f : 0.0f));
+    float body = (sinf(drum->phase) + sinf(drum->phase2) * spread_mul) * drum->body;
+    float click_tau = 10.0f + drum->snap * 160.0f + (1.0f - drum->bright) * 260.0f;
+    float click = rng(engine) * expf(-(float)drum->age / click_tau) * drum->snap * (0.35f + drum->bright * 1.4f);
+    float noisy = rng(engine) * drum->noise * (hat ? 0.45f + drum->bright * 0.7f : 1.0f);
+    float mixed = body * drum->env + noisy * drum->noise_env + click;
+    float coef = 0.025f + drum->tone * drum->tone * 0.95f;
     drum->low += (mixed - drum->low) * coef;
-    float gain = 1.0f + drum->drive * 6.0f;
+    float gain = 1.0f + drum->drive * 8.0f;
     float driven = drum->low * gain;
     driven = driven / (1.0f + fabsf(driven));
-    drum->env *= expf(-1.0f / (drum->decay * SR));
+    float dcy = drum->decay < 0.015f ? 0.015f : drum->decay;
+    float ndcy = drum->noise_decay < 0.012f ? 0.012f : drum->noise_decay;
+    drum->env *= expf(-1.0f / (dcy * SR));
+    drum->noise_env *= expf(-1.0f / (ndcy * SR));
     drum->age += 1;
-    if (drum->env < 0.0008f) drum->on = 0;
-    return driven * drum->env;
+    if (drum->env < 0.0008f && drum->noise_env < 0.0008f && (float)drum->age > click_tau * 4.0f) drum->on = 0;
+    return driven;
 }
 
 static void note_sample(Engine *engine, Note *note, float *left, float *right) {
     float inc = (TWO_PI * note->freq) / SR;
-    note->phase += inc + sinf(note->phase) * note->fm * inc * 3.0f;
-    float ratio = 1.0f + (note->detune - 0.5f) * 0.08f;
+    note->phase += inc + sinf(note->phase) * note->fm * inc * 8.0f;
+    float ratio = 1.0f + (note->detune - 0.5f) * 0.35f;
     note->phase2 += inc * ratio;
     float primary = wave(note->phase, note->shape);
     float second = wave(note->phase2, note->shape);
-    float noisy = primary + rng(engine) * note->noise;
-    float coef = 0.02f + note->cutoff * note->cutoff * 0.9f;
+    float det = fabsf(note->detune - 0.5f) * 2.0f;
+    float noisy = primary + second * 0.35f * det + rng(engine) * note->noise * 0.85f;
+    float coef = 0.015f + note->cutoff * note->cutoff * 0.92f;
     note->low += (noisy - note->low) * coef;
-    float resonated = note->low + (noisy - note->low) * note->resonance;
-    float attack_samples = 1.0f + note->attack * 0.15f * SR;
+    float diff = noisy - note->low;
+    note->band += (diff - note->band) * (0.08f + note->resonance * 0.45f);
+    float resonated = note->low + note->band * note->resonance * 5.0f;
+    float attack_samples = 1.0f + note->attack * 0.2f * SR;
     if ((float)note->age < attack_samples) note->env = ((float)note->age + 1.0f) / attack_samples;
-    else note->env *= expf(-1.0f / ((0.05f + note->release * 1.4f) * SR));
+    else note->env *= expf(-1.0f / ((0.04f + note->release * 1.6f) * SR));
     note->age += 1;
     note->left -= 1;
     if (note->left <= 0 || note->env < 0.0008f) note->on = 0;
-    float gain = resonated * note->env * note->gain * 0.4f;
-    *left += gain + second * note->width * gain;
-    *right += gain - second * note->width * gain;
+    float gain = resonated * note->env * note->gain * 0.38f;
+    float wide = second * note->width * gain * 1.35f;
+    *left += gain + wide;
+    *right += gain - wide;
 }
 
 static void ingest_phrase(Engine *engine) {

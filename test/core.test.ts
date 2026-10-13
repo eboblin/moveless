@@ -3,7 +3,7 @@ import { describe, it } from "node:test";
 import { clone } from "../src/core/clone.ts";
 import { sampleOffset, unitForIndex } from "../src/core/clock.ts";
 import { defaultProject } from "../src/core/defaults.ts";
-import { resolveForm } from "../src/core/events.ts";
+import { euclidPattern, phraseStepsOf } from "../src/core/events.ts";
 import { applyMorph } from "../src/core/morph.ts";
 import { motif, MOTIF_COUNT } from "../src/core/motif.ts";
 import { modulated } from "../src/core/modulate.ts";
@@ -26,14 +26,14 @@ import { chordLabels, textPreview } from "../src/core/text-preview.ts";
 import { punch } from "../src/core/morph.ts";
 import type { Project } from "../src/core/types.ts";
 
-function bar(project: Project, length = 1): Project {
+function bar(project: Project, bars = 1): Project {
   const next = clone(project);
+  const steps = Math.max(1, Math.round(bars)) * Math.max(1, Math.round(next.global.bar)) * 4;
   for (const lane of ["kick", "snare", "hat", "perc", "bass", "lead"] as const) {
-    next.working[lane].form.length = length;
-    next.working[lane].form.repeats = 1;
-    next.working[lane].form.abSplit = 1;
+    next.working[lane].gen1.length = steps;
+    next.working[lane].gen2.length = 0;
   }
-  next.global.phrase = length;
+  next.global.phrase = bars;
   return next;
 }
 
@@ -53,7 +53,7 @@ describe("motif and clock", () => {
   });
 });
 
-describe("event generator", () => {
+describe("euclid generator", () => {
   it("places a four-on-the-floor kick on every fourth sixteenth", () => {
     const project = bar(defaultProject());
     const line = textPreview(project).split("\n")[0];
@@ -62,16 +62,15 @@ describe("event generator", () => {
 
   it("unions a second generator without stacking two events on one step", () => {
     const project = bar(defaultProject());
-    project.working.kick.events.a.g2 = { level: 1, cycle: 8, offset: 2 };
-    project.working.kick.events.b.g2 = { level: 1, cycle: 8, offset: 2 };
+    project.working.kick.gen2 = { ...project.working.kick.gen2, length: 16, hits: 2, rotate: 2 };
     const steps = [...new Set(generatePhrase(project).lanes.kick.map((event) => event.step))];
     assert.deepEqual(steps, [0, 2, 4, 8, 10, 12]);
   });
 
-  it("stays silent at level 0 and ignores the scene id", () => {
+  it("stays silent at hits 0 and ignores the scene id", () => {
     const project = bar(defaultProject());
-    project.working.kick.events.a.g1.level = 0;
-    project.working.kick.events.b.g1.level = 0;
+    project.working.kick.gen1.hits = 0;
+    project.working.kick.gen2.hits = 0;
     assert.equal(generatePhrase(project).lanes.kick.length, 0);
     const other = clone(project);
     other.nextSceneId = 99;
@@ -85,48 +84,48 @@ describe("event generator", () => {
     assert.deepEqual(generatePhrase(project), generatePhrase(project));
   });
 
-  it("changes probabilistic hits when the seed changes and keeps level 1 stable", () => {
+  it("keeps hits deterministic across seeds when variation is 0", () => {
     const project = bar(defaultProject());
-    project.working.perc.events.a.g1 = { level: 0.45, cycle: 1, offset: 0 };
-    project.working.perc.events.b.g1 = { level: 0.45, cycle: 1, offset: 0 };
-    project.working.perc.events.a.g2.level = 0;
-    project.working.perc.events.b.g2.level = 0;
-    const a = generatePhrase(project).lanes.perc.length;
-    project.global.seed = 2;
-    const b = generatePhrase(project).lanes.perc.length;
-    assert.notEqual(a, b);
-    project.working.kick.events.a.g1.level = 1;
-    const first = generatePhrase(project).lanes.kick.length;
+    const first = generatePhrase(project).lanes.kick.map((event) => event.step);
     project.global.seed = 50;
-    assert.equal(generatePhrase(project).lanes.kick.length, first);
+    assert.deepEqual(generatePhrase(project).lanes.kick.map((event) => event.step), first);
   });
 
-  it("keeps variation 0 identical to the base and lets later states move hits", () => {
+  it("keeps probability 1 identical across seeds and thins hits when probability drops", () => {
     const base = bar(defaultProject());
-    const varied = clone(base);
-    varied.working.kick.form.varEvery = 1;
-    varied.working.kick.form.varDiv = 4;
-    varied.working.kick.form.varCount = 4;
-    varied.working.kick.form.varAmount = 0;
-    assert.deepEqual(generatePhrase(base).lanes.kick.map((e) => e.step), generatePhrase(varied).lanes.kick.map((e) => e.step));
-    let moved = false;
-    for (let seed = 1; seed <= 40 && !moved; seed++) {
-      varied.global.seed = seed;
-      varied.working.kick.form.varAmount = 1;
-      const steps = generatePhrase(varied).lanes.kick.map((event) => event.step);
-      moved = !steps.includes(4) || !steps.includes(12);
+    base.working.kick.gen1.probability = 1;
+    const full = generatePhrase(base).lanes.kick.map((event) => event.step);
+    base.global.seed = 50;
+    assert.deepEqual(generatePhrase(base).lanes.kick.map((event) => event.step), full);
+    let thinned = false;
+    for (let seed = 1; seed <= 40 && !thinned; seed++) {
+      base.global.seed = seed;
+      base.working.kick.gen1.probability = 0.35;
+      const steps = generatePhrase(base).lanes.kick.map((event) => event.step);
+      thinned = steps.length < full.length;
     }
-    assert.equal(moved, true);
+    assert.equal(thinned, true);
+    base.working.kick.gen1.probability = 0;
+    assert.equal(generatePhrase(base).lanes.kick.length, 0);
   });
 
-  it("switches A to B at the split", () => {
+  it("uses max length as the phrase and loops the shorter ring", () => {
     const project = bar(defaultProject());
-    project.working.kick.form.abSplit = 0.5;
-    project.working.kick.events.b.g1.level = 0;
-    project.working.kick.events.b.g2.level = 0;
+    project.working.kick.gen1.length = 8;
+    project.working.kick.gen1.hits = 1;
+    project.working.kick.gen1.rotate = 0;
+    project.working.kick.gen2.length = 12;
+    project.working.kick.gen2.hits = 0;
+    assert.equal(phraseStepsOf(project.working.kick.gen1, project.working.kick.gen2), 12);
     const steps = generatePhrase(project).lanes.kick.map((event) => event.step);
-    assert.deepEqual(steps, [0, 4]);
-    assert.equal(resolveForm(project.working.kick.form, 4).partAt(8), "b");
+    assert.deepEqual(steps, [0, 8]);
+  });
+
+  it("builds an onset-on-zero euclid ring", () => {
+    assert.deepEqual(
+      euclidPattern(4, 16).map((hit) => (hit ? "x" : "-")).join(""),
+      "x---x---x---x---",
+    );
   });
 
   it("expands ratchet counts inside one source event", () => {
@@ -148,8 +147,7 @@ describe("event generator", () => {
 
   it("delays odd sixteenths with swing and keeps block offsets in range", () => {
     const project = bar(defaultProject());
-    project.working.kick.events.a.g2 = { level: 1, cycle: 2, offset: 1 };
-    project.working.kick.events.b.g2 = { level: 1, cycle: 2, offset: 1 };
+    project.working.kick.gen2 = { ...project.working.kick.gen2, length: 16, hits: 8, rotate: 1 };
     project.global.swing = 1;
     const kick = generatePhrase(project).lanes.kick;
     const first = kick.find((event) => event.step === 0);
@@ -166,12 +164,12 @@ describe("event generator", () => {
 });
 
 describe("morph, journal, macros", () => {
-  it("lerps levels and switches pattern ids at one half", () => {
+  it("lerps velocity and switches pattern ids at one half", () => {
     let project = defaultProject();
-    project = punch(project, "kick.events.a.g1.level", 0);
+    project = punch(project, "kick.gen1.velocity.value", 0);
     project = punch(project, "kick.ratchet.count.pattern", 2);
     project = record(project);
-    project = punch(project, "kick.events.a.g1.level", 1);
+    project = punch(project, "kick.gen1.velocity.value", 1);
     project = punch(project, "kick.ratchet.count.pattern", 10);
     project = record(project);
     project.working = clone(project.journal[0].lanes);
@@ -180,74 +178,74 @@ describe("morph, journal, macros", () => {
     assert.equal(project.morph?.durationTicks, 4 * 192);
     const duration = 4 * 192;
     const mid = applyMorph(project, 376);
-    assert.ok(Math.abs(mid.working.kick.events.a.g1.level - 376 / duration) < 1e-9);
+    assert.ok(Math.abs(mid.working.kick.gen1.velocity.value - 376 / duration) < 1e-9);
     assert.equal(mid.working.kick.ratchet.count.pattern, 2);
     const half = applyMorph(project, duration / 2);
     assert.equal(half.working.kick.ratchet.count.pattern, 10);
     const done = applyMorph(project, 4 * 192);
     assert.equal(done.morph, null);
-    assert.equal(done.working.kick.events.a.g1.level, 1);
+    assert.equal(done.working.kick.gen1.velocity.value, 1);
   });
 
   it("advance lands a saved scene once the clock reaches it", () => {
     let project = defaultProject();
-    project = punch(project, "kick.events.a.g1.level", 0.25);
+    project = punch(project, "kick.gen1.velocity.value", 0.25);
     project = record(project);
     assert.equal(project.journal[0].color, sceneColor("001"));
-    project = punch(project, "kick.events.a.g1.level", 0.9);
+    project = punch(project, "kick.gen1.velocity.value", 0.9);
     project.transition = "now";
     project = launchScene(project, "001", 0);
     project = advance(project, 0);
     assert.equal(project.morph, null);
-    assert.equal(project.working.kick.events.a.g1.level, 0.25);
-    project = punch(project, "kick.events.a.g1.level", 0.2);
+    assert.equal(project.working.kick.gen1.velocity.value, 0.25);
+    project = punch(project, "kick.gen1.velocity.value", 0.2);
     project.transition = "fast";
     project = launchScene(project, "001", 10);
     const waiting = advance(project, 10);
     assert.ok(waiting.morph);
-    assert.equal(waiting.working.kick.events.a.g1.level, 0.2);
+    assert.equal(waiting.working.kick.gen1.velocity.value, 0.2);
     assert.ok((waiting.morph?.originTick ?? 0) > 10);
     const finished = advance(waiting, (waiting.morph?.originTick ?? 0) + (waiting.morph?.durationTicks ?? 0));
     assert.equal(finished.morph, null);
-    assert.equal(finished.working.kick.events.a.g1.level, 0.25);
+    assert.equal(finished.working.kick.gen1.velocity.value, 0.25);
   });
 
   it("retargets from the interpolated state and leaves locked lanes alone", () => {
     let project = defaultProject();
-    project = punch(project, "snare.events.a.g1.level", 0);
+    project = punch(project, "snare.gen1.velocity.value", 0);
     project = record(project);
-    project = punch(project, "snare.events.a.g1.level", 1);
-    project = punch(project, "kick.events.a.g1.level", 0);
+    project = punch(project, "snare.gen1.velocity.value", 1);
+    project = punch(project, "kick.gen1.velocity.value", 0);
     project = record(project);
-    project = punch(project, "kick.events.a.g1.level", 1);
-    project = punch(project, "snare.events.a.g1.level", 1);
+    project = punch(project, "kick.gen1.velocity.value", 1);
+    project = punch(project, "snare.gen1.velocity.value", 1);
     project = record(project);
     project.working = clone(project.journal[0].lanes);
-    project.working.kick.events.a.g1.level = 0;
+    project.working.kick.gen1.velocity.value = 0;
     project.transition = "slow";
     project = launchScene(project, "002", 0);
     project = applyMorph(project, 2 * 4 * 192);
-    assert.ok(Math.abs(project.working.snare.events.a.g1.level - 0.25) < 1e-9);
+    assert.ok(Math.abs(project.working.snare.gen1.velocity.value - 0.25) < 1e-9);
     project.lock.kick = true;
     project = launchScene(project, "003", 2 * 192);
-    assert.equal(project.morph?.start.snare.events.a.g1.level, project.working.snare.events.a.g1.level);
+    assert.equal(project.morph?.start.snare.gen1.velocity.value, project.working.snare.gen1.velocity.value);
     const finished = applyMorph(project, project.morph!.originTick + project.morph!.durationTicks);
-    assert.equal(finished.working.kick.events.a.g1.level, 0);
-    assert.equal(finished.working.snare.events.a.g1.level, 1);
+    assert.equal(finished.working.kick.gen1.velocity.value, 0);
+    assert.equal(finished.working.snare.gen1.velocity.value, 1);
   });
 
   it("keeps a punched value through the end of a morph", () => {
     let project = defaultProject();
-    project = punch(project, "hat.events.a.g1.level", 0);
+    project = punch(project, "hat.gen1.velocity.value", 0);
     project = record(project);
-    project = punch(project, "hat.events.a.g1.level", 1);
+    project = punch(project, "hat.gen1.velocity.value", 1);
     project = record(project);
     project.working = clone(project.journal[0].lanes);
     project = launchScene(project, "002", 0);
     project = applyMorph(project, 100);
-    project = punch(project, "hat.events.a.g1.level", 0.2);
+    project = punch(project, "hat.gen1.velocity.value", 0.2);
     const done = applyMorph(project, project.morph!.originTick + project.morph!.durationTicks);
-    assert.equal(done.working.hat.events.a.g1.level, 0.2);
+    assert.equal(done.working.hat.gen1.velocity.value, 0.2);
   });
 
   it("appends an immutable scene and leaves mixer and macros outside it", () => {
@@ -286,11 +284,11 @@ describe("harmony", () => {
     const project = bar(defaultProject());
     project.working.bass.degree = modulated(0.5 + 1 / 14);
     project.working.bass.range = modulated(1);
-    project.working.bass.form.follow = 1;
+    project.working.bass.follow = 1;
     project.working.chords.mood = modulated(0);
     project.working.chords.tension = modulated(0);
     const followed = generatePhrase(project).lanes.bass[0].note;
-    project.working.bass.form.follow = 0;
+    project.working.bass.follow = 0;
     const free = generatePhrase(project).lanes.bass[0].note;
     assert.equal(followed, 24);
     assert.equal(free, 26);
@@ -317,7 +315,7 @@ describe("harmony", () => {
     const project = bar(defaultProject());
     project.working.bass.repeat = modulated(0.4);
     project.working.bass.step = modulated(1);
-    project.working.bass.form.follow = 0;
+    project.working.bass.follow = 0;
     project.working.bass.degree = modulated(0.5);
     project.working.bass.range = modulated(1);
     const notes = generatePhrase(project).lanes.bass.filter((event) => event.step === 0).map((event) => event.note);
@@ -332,33 +330,31 @@ describe("capture, wander, sets", () => {
     const before = clone(project.working.kick.sound);
     const captured = captureLane(project, "kick");
     assert.deepEqual(captured.working.kick.sound, before);
-    assert.notDeepEqual(captured.working.kick.events, project.working.kick.events);
+    assert.notDeepEqual(captured.working.kick.gen1, project.working.kick.gen1);
     captured.lock.kick = true;
     const again = captureLane(captured, "kick");
     assert.equal(again.captureNonce, captured.captureNonce);
-    assert.deepEqual(again.working.kick.events, captured.working.kick.events);
+    assert.deepEqual(again.working.kick.gen1, captured.working.kick.gen1);
 
     const bass = defaultProject();
     const notes = captureLane(bass, "bass", "notes");
     assert.notDeepEqual(notes.working.bass.degree, bass.working.bass.degree);
-    assert.deepEqual(notes.working.bass.events, bass.working.bass.events);
+    assert.deepEqual(notes.working.bass.gen1, bass.working.bass.gen1);
     assert.deepEqual(notes.working.bass.sound, bass.working.bass.sound);
     const sound = captureLane(bass, "kick", "sound");
     assert.notDeepEqual(sound.working.kick.sound, bass.working.kick.sound);
-    assert.deepEqual(sound.working.kick.events, bass.working.kick.events);
+    assert.deepEqual(sound.working.kick.gen1, bass.working.kick.gen1);
     const pattern = captureLane(bass, "bass", "pattern");
-    assert.notDeepEqual(pattern.working.bass.events, bass.working.bass.events);
+    assert.notDeepEqual(pattern.working.bass.gen1, bass.working.bass.gen1);
     assert.deepEqual(pattern.working.bass.degree, bass.working.bass.degree);
     assert.deepEqual(pattern.working.bass.sound, bass.working.bass.sound);
   });
 
   it("rerolls one generator and leaves the rest of the lane", () => {
     const project = defaultProject();
-    const one = captureGenerator(project, "kick", "events.a.g1");
-    assert.notDeepEqual(one.working.kick.events.a.g1, project.working.kick.events.a.g1);
-    assert.deepEqual(one.working.kick.events.a.g2, project.working.kick.events.a.g2);
-    assert.deepEqual(one.working.kick.events.b, project.working.kick.events.b);
-    assert.deepEqual(one.working.kick.form, project.working.kick.form);
+    const one = captureGenerator(project, "kick", "gen1");
+    assert.notDeepEqual(one.working.kick.gen1, project.working.kick.gen1);
+    assert.deepEqual(one.working.kick.gen2, project.working.kick.gen2);
     assert.deepEqual(one.working.kick.ratchet, project.working.kick.ratchet);
     assert.deepEqual(one.working.kick.sound, project.working.kick.sound);
     const count = captureGenerator(project, "kick", "ratchet.count");
@@ -368,9 +364,9 @@ describe("capture, wander, sets", () => {
     assert.notDeepEqual(pitch.working.kick.sound.pitch, project.working.kick.sound.pitch);
     assert.deepEqual(pitch.working.kick.sound.tone, project.working.kick.sound.tone);
     pitch.lock.kick = true;
-    const locked = captureGenerator(pitch, "kick", "events.a.g1");
+    const locked = captureGenerator(pitch, "kick", "gen1");
     assert.equal(locked.captureNonce, pitch.captureNonce);
-    assert.deepEqual(locked.working.kick.events.a.g1, pitch.working.kick.events.a.g1);
+    assert.deepEqual(locked.working.kick.gen1, pitch.working.kick.gen1);
   });
 
   it("skips the previous wander target while another scene exists", () => {
@@ -384,7 +380,7 @@ describe("capture, wander, sets", () => {
   it("fills pads from the journal until a set has scenes, and stops at 32", () => {
     let project = defaultProject();
     project = record(project);
-    project = record(punch(project, "kick.events.a.g1.level", 0.4));
+    project = record(punch(project, "kick.gen1.velocity.value", 0.4));
     assert.deepEqual(sceneIdsForPads(project), ["001", "002", ...Array(30).fill(null)]);
     project = createSet(project, "A");
     for (let n = 0; n < 40; n++) {
@@ -399,7 +395,7 @@ describe("capture, wander, sets", () => {
   it("retargets when the wander interval elapses", () => {
     let project = defaultProject();
     project = record(project);
-    project = record(punch(project, "kick.events.a.g1.level", 0));
+    project = record(punch(project, "kick.gen1.velocity.value", 0));
     project.wander = "fast";
     project.wanderOriginTick = 0;
     project.transition = "now";

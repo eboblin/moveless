@@ -29,42 +29,30 @@ export interface Modulated {
   amount: number;
 }
 
-export interface EventGen {
-  level: number;
-  cycle: number;
-  offset: number;
-}
-
-export interface EventPart {
-  g1: EventGen;
-  g2: EventGen;
-}
-
-export interface Form {
+/** One Euclidean voice. `length` 0 turns it off. */
+export interface EuclidGen {
   length: number;
-  abSplit: number;
-  repeats: number;
-  varEvery: number;
-  varDiv: number;
-  varCount: number;
-  varAmount: number;
-  follow: number;
+  hits: number;
+  rotate: number;
+  /** 1 = keep every euclid hit, 0 = silence this generator. */
+  probability: number;
+  velocity: Modulated;
 }
 
 export interface DrumLane {
-  events: { a: EventPart; b: EventPart };
-  form: Form;
+  gen1: EuclidGen;
+  gen2: EuclidGen;
   ratchet: { count: Modulated; rate: Modulated };
   sound: Record<string, Modulated>;
 }
 
 export interface PitchedLane {
-  events: { a: EventPart; b: EventPart };
-  form: Form;
+  gen1: EuclidGen;
+  gen2: EuclidGen;
+  follow: number;
   degree: Modulated;
   range: Modulated;
   length: Modulated;
-  velocity: Modulated;
   repeat: Modulated;
   step: Modulated;
   sound: Record<string, Modulated>;

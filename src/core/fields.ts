@@ -1,4 +1,4 @@
-import type { ChordLane, DrumLane, Lanes, Modulated, PitchedLane } from "./types.ts";
+import type { ChordLane, DrumLane, EuclidGen, Lanes, Modulated, PitchedLane } from "./types.ts";
 
 export type MorphKind = "lerp" | "switch";
 
@@ -16,22 +16,11 @@ const MOD_KIND: Record<(typeof MOD_KEYS)[number], MorphKind> = {
   amount: "lerp",
 };
 
-const GEN_KEYS = ["level", "cycle", "offset"] as const;
-const GEN_KIND: Record<(typeof GEN_KEYS)[number], MorphKind> = {
-  level: "lerp",
-  cycle: "switch",
-  offset: "switch",
-};
-
-const FORM_KIND = {
+const EUCLID_KIND = {
   length: "switch",
-  abSplit: "lerp",
-  repeats: "switch",
-  varEvery: "switch",
-  varDiv: "switch",
-  varCount: "switch",
-  varAmount: "lerp",
-  follow: "lerp",
+  hits: "switch",
+  rotate: "switch",
+  probability: "lerp",
 } as const;
 
 const PLAY_KIND = {
@@ -59,24 +48,11 @@ function pushMod(out: Field[], prefix: string, value: Modulated): void {
   }
 }
 
-function pushEvents(out: Field[], prefix: string, events: DrumLane["events"]): void {
-  for (const part of ["a", "b"] as const) {
-    for (const gen of ["g1", "g2"] as const) {
-      for (const key of GEN_KEYS) {
-        out.push({
-          path: `${prefix}.events.${part}.${gen}.${key}`,
-          kind: GEN_KIND[key],
-          value: events[part][gen][key],
-        });
-      }
-    }
+function pushEuclid(out: Field[], prefix: string, gen: EuclidGen): void {
+  for (const key of Object.keys(EUCLID_KIND) as (keyof typeof EUCLID_KIND)[]) {
+    out.push({ path: `${prefix}.${key}`, kind: EUCLID_KIND[key], value: gen[key] });
   }
-}
-
-function pushForm(out: Field[], prefix: string, form: DrumLane["form"]): void {
-  for (const key of Object.keys(FORM_KIND) as (keyof typeof FORM_KIND)[]) {
-    out.push({ path: `${prefix}.form.${key}`, kind: FORM_KIND[key], value: form[key] });
-  }
+  pushMod(out, `${prefix}.velocity`, gen.velocity);
 }
 
 function pushSound(out: Field[], prefix: string, sound: Record<string, Modulated>): void {
@@ -84,17 +60,18 @@ function pushSound(out: Field[], prefix: string, sound: Record<string, Modulated
 }
 
 function pushDrum(out: Field[], id: string, lane: DrumLane): void {
-  pushEvents(out, id, lane.events);
-  pushForm(out, id, lane.form);
+  pushEuclid(out, `${id}.gen1`, lane.gen1);
+  pushEuclid(out, `${id}.gen2`, lane.gen2);
   pushMod(out, `${id}.ratchet.count`, lane.ratchet.count);
   pushMod(out, `${id}.ratchet.rate`, lane.ratchet.rate);
   pushSound(out, id, lane.sound);
 }
 
 function pushPitched(out: Field[], id: string, lane: PitchedLane): void {
-  pushEvents(out, id, lane.events);
-  pushForm(out, id, lane.form);
-  for (const key of ["degree", "range", "length", "velocity", "repeat", "step"] as const) {
+  pushEuclid(out, `${id}.gen1`, lane.gen1);
+  pushEuclid(out, `${id}.gen2`, lane.gen2);
+  out.push({ path: `${id}.follow`, kind: "lerp", value: lane.follow });
+  for (const key of ["degree", "range", "length", "repeat", "step"] as const) {
     pushMod(out, `${id}.${key}`, lane[key]);
   }
   pushSound(out, id, lane.sound);

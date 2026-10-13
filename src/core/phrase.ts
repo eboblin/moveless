@@ -8,7 +8,7 @@ import {
   swungStepTick,
   tickToSample,
 } from "./clock.ts";
-import { generateHits, resolveForm, type Hit } from "./events.ts";
+import { generateHits, phraseStepsOf, type Hit } from "./events.ts";
 import { applyFollow, chordToneDegrees, degreeToMidi, generateHarmony, harmonyAt, scaleOf } from "./harmony.ts";
 import { bipolarFromUnit, evalModulated, withMacro } from "./modulate.ts";
 import { mod } from "./motif.ts";
@@ -53,7 +53,7 @@ export const previewPhrase = generatePhrase;
 
 export function laneSteps(lanes: Lanes, lane: LaneId, global: GlobalSettings): number {
   if (lane === "chords") return sixteenthSteps(global.phrase, global.bar);
-  return resolveForm(lanes[lane].form, global.bar).phraseSteps;
+  return phraseStepsOf(lanes[lane].gen1, lanes[lane].gen2);
 }
 
 function eventsFor(
@@ -100,7 +100,7 @@ function place(step: number, extraTicks: number, global: GlobalSettings, lane: L
 }
 
 function drumEvents(lane: DrumLane, id: LaneId, global: GlobalSettings, macros: Record<string, number>, steps: number): TimedEvent[] {
-  const hits = generateHits(lane.events, lane.form, steps, global.seed, id, global.bar);
+  const hits = generateHits(lane.gen1, lane.gen2, steps, global.seed, id, macro(macros, "velocity"));
   const out: TimedEvent[] = [];
   hits.forEach((hit) => {
     const count = countFromUnit(evalModulated(withMacro(lane.ratchet.count, macro(macros, "count")), hit.step));
@@ -108,7 +108,7 @@ function drumEvents(lane: DrumLane, id: LaneId, global: GlobalSettings, macros: 
     for (let i = 0; i < count; i++) {
       const step = hit.step + (i * rate.ticks) / SIXTEENTH_TICKS;
       const sound = soundValues(lane.sound, step, macros);
-      out.push(place(hit.step, i * rate.ticks, global, id, DRUM_NOTE[id as keyof typeof DRUM_NOTE], hit.level, rate.ticks, sound));
+      out.push(place(hit.step, i * rate.ticks, global, id, DRUM_NOTE[id as keyof typeof DRUM_NOTE], hit.velocity, rate.ticks, sound));
     }
   });
   return out;
@@ -122,7 +122,7 @@ function pitchedEvents(
   harmony: HarmonicEvent[],
   steps: number,
 ): TimedEvent[] {
-  const hits = generateHits(lane.events, lane.form, steps, global.seed, id, global.bar);
+  const hits = generateHits(lane.gen1, lane.gen2, steps, global.seed, id, macro(macros, "velocity"));
   const scale = scaleOf(global.scale);
   const rootPc = mod(global.root + global.transpose, 12);
   const octave = id === "bass" ? BASS_OCTAVE : LEAD_OCTAVE;
@@ -138,12 +138,11 @@ function pitchedEvents(
       const tick = swungStepTick(step, global.swing);
       const harm = harmonyAt(harmony, tick);
       const targets = harm ? chordToneDegrees(harm, scale, rootPc) : [];
-      const followed = applyFollow(desired, lane.form.follow, targets);
+      const followed = applyFollow(desired, lane.follow, targets);
       const note = degreeToMidi(Math.round(followed) + r * shift, scale, rootPc, octave);
       const lengthTicks = Math.max(1, Math.round(evalModulated(withMacro(lane.length, macro(macros, "length")), step) * global.bar * SIXTEENTH_TICKS));
-      const velocity = evalModulated(withMacro(lane.velocity, macro(macros, "velocity")), step);
       const sound = soundValues(lane.sound, step, macros);
-      out.push(place(hit.step, r * SIXTEENTH_TICKS, global, id, note, velocity, lengthTicks, sound));
+      out.push(place(hit.step, r * SIXTEENTH_TICKS, global, id, note, hit.velocity, lengthTicks, sound));
     }
   });
   return out;

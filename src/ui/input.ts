@@ -233,8 +233,8 @@ export function modulatedBase(path: string): string | null {
 }
 
 export function generatorTarget(path: string): string | null {
-  const event = /^(events\.[ab]\.g[12])\.(level|cycle|offset)$/.exec(path);
-  if (event) return event[1];
+  const euclid = /^(gen[12])\.(length|hits|rotate|probability)$/.exec(path);
+  if (euclid) return euclid[1];
   return modulatedBase(path);
 }
 

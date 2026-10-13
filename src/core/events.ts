@@ -1,92 +1,69 @@
-import { clamp01, sixteenthSteps } from "./clock.ts";
+import { clamp01 } from "./clock.ts";
 import { hash01 } from "./hash.ts";
-import type { EventGen, EventPart, Form, LaneId } from "./types.ts";
-
-export interface ResolvedForm {
-  formSteps: number;
-  phraseSteps: number;
-  partAt(step: number): "a" | "b";
-  variationIndex(step: number): number;
-}
-
-export function resolveForm(form: Form, beatsPerBar: number): ResolvedForm {
-  const formSteps = sixteenthSteps(form.length, beatsPerBar);
-  const repeats = Math.max(1, Math.round(form.repeats));
-  const phraseSteps = formSteps * repeats;
-  const unit = Math.max(1, Math.round(form.varEvery)) * Math.max(1, Math.round(form.varDiv));
-  const varCount = Math.max(1, Math.round(form.varCount));
-  return {
-    formSteps,
-    phraseSteps,
-    partAt(step) {
-      const pos = ((step % formSteps) + formSteps) % formSteps;
-      return pos < clamp01(form.abSplit) * formSteps ? "a" : "b";
-    },
-    variationIndex(step) {
-      if (varCount <= 1 || form.varAmount === 0) return 0;
-      return Math.floor(Math.max(0, step) / unit) % varCount;
-    },
-  };
-}
+import { evalModulated, withMacro } from "./modulate.ts";
+import type { EuclidGen, LaneId } from "./types.ts";
 
 export interface Hit {
   step: number;
-  part: "a" | "b";
-  variation: number;
   generators: (1 | 2)[];
-  level: number;
+  velocity: number;
 }
 
-export function varyGen(
-  gen: EventGen,
-  amount: number,
-  seed: number,
-  lane: LaneId,
-  part: "a" | "b",
-  which: 1 | 2,
-  variation: number,
-): EventGen {
-  if (variation === 0 || amount === 0) return gen;
-  const cycle = Math.max(1, Math.round(gen.cycle));
-  const level = clamp01(gen.level + (hash01(seed, lane, part, which, "varL", variation) * 2 - 1) * amount);
-  const offset = Math.round(gen.offset + (hash01(seed, lane, part, which, "varO", variation) * 2 - 1) * amount * cycle);
-  return { level, cycle: gen.cycle, offset };
+export function phraseStepsOf(gen1: EuclidGen, gen2: EuclidGen): number {
+  const a = Math.max(0, Math.round(gen1.length));
+  const b = Math.max(0, Math.round(gen2.length));
+  return Math.max(1, a, b);
 }
 
-function onGrid(gen: EventGen, step: number, seed: number, lane: LaneId, part: "a" | "b", which: 1 | 2, variation: number): boolean {
-  const cycle = Math.max(1, Math.round(gen.cycle));
-  const offset = Math.round(gen.offset);
-  const phase = ((step - offset) % cycle + cycle) % cycle;
-  if (phase !== 0 || gen.level <= 0) return false;
-  if (gen.level >= 1) return true;
-  return hash01(seed, lane, part, which, variation, step) < gen.level;
+/** Euclidean distribution with an onset on step 0 when hits > 0. */
+export function euclidPattern(hits: number, steps: number): boolean[] {
+  const n = Math.max(0, Math.round(steps));
+  const k = Math.max(0, Math.min(n, Math.round(hits)));
+  const out = Array.from({ length: n }, () => false);
+  if (n === 0 || k === 0) return out;
+  for (let i = 0; i < n; i++) {
+    out[i] = Math.floor((i * k) / n) !== Math.floor(((i - 1) * k) / n);
+  }
+  return out;
 }
 
-/** Union of two independent grids. One step is at most one source event. */
+export function rotatePattern(pattern: readonly boolean[], rotate: number): boolean[] {
+  const n = pattern.length;
+  if (!n) return [];
+  const r = ((Math.round(rotate) % n) + n) % n;
+  return pattern.map((_, i) => pattern[(i - r + n) % n]);
+}
+
+/** Union of two Euclidean rings. Phrase length is max(length1, length2). */
 export function generateHits(
-  events: { a: EventPart; b: EventPart },
-  form: Form,
+  gen1: EuclidGen,
+  gen2: EuclidGen,
   steps: number,
   seed: number,
   lane: LaneId,
-  beatsPerBar: number,
+  velocityMacro = 0,
 ): Hit[] {
-  const resolved = resolveForm(form, beatsPerBar);
+  const phrase = Math.min(steps, phraseStepsOf(gen1, gen2));
   const hits: Hit[] = [];
-  const limit = Math.min(steps, resolved.phraseSteps);
-  for (let step = 0; step < limit; step++) {
-    const part = resolved.partAt(step);
-    const variation = resolved.variationIndex(step);
+  for (let step = 0; step < phrase; step++) {
     const fired: (1 | 2)[] = [];
-    let level = 0;
+    let velocity = 0;
     for (const which of [1, 2] as const) {
-      const raw = which === 1 ? events[part].g1 : events[part].g2;
-      const gen = varyGen(raw, form.varAmount, seed, lane, part, which, variation);
-      if (!onGrid(gen, step, seed, lane, part, which, variation)) continue;
+      const gen = which === 1 ? gen1 : gen2;
+      const length = Math.max(0, Math.round(gen.length));
+      if (length <= 0) continue;
+      const h = Math.max(0, Math.min(length, Math.round(gen.hits)));
+      if (h <= 0) continue;
+      const pattern = rotatePattern(euclidPattern(h, length), gen.rotate);
+      const local = ((step % length) + length) % length;
+      if (!pattern[local]) continue;
+      const probability = clamp01(gen.probability);
+      if (probability <= 0) continue;
+      if (probability < 1 && hash01(seed, lane, which, "prob", step) >= probability) continue;
       fired.push(which);
-      level = Math.max(level, gen.level);
+      velocity = Math.max(velocity, evalModulated(withMacro(gen.velocity, velocityMacro), step));
     }
-    if (fired.length) hits.push({ step, part, variation, generators: fired, level });
+    if (fired.length) hits.push({ step, generators: fired, velocity });
   }
   return hits;
 }
