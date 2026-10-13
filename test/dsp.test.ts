@@ -95,6 +95,20 @@ describe("dsp adapter", () => {
     assert.ok(engine.drums[0].age < ageMid);
   });
 
+  it("keeps default bass audible through a slow attack", () => {
+    const project = defaultProject();
+    for (const lane of ["kick", "snare", "hat", "perc", "lead", "chords"] as const) project.mute[lane] = true;
+    const engine = createEngine();
+    loadPhrase(engine, phraseLoop(project), project.global.tempo, true, soundMotions(project));
+    let peak = 0;
+    for (let i = 0; i < 80; i++) {
+      const buf = renderClock(engine);
+      for (const sample of buf) peak = Math.max(peak, Math.abs(sample));
+    }
+    assert.ok(peak > 0.01);
+    assert.ok(engine.notes.some((note) => note.on || note.age > 100));
+  });
+
   it("moves cutoff across a held note", () => {
     const tempo = 120;
     const sixteenth = tickToSample(SIXTEENTH_TICKS, tempo);

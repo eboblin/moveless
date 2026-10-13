@@ -5,6 +5,7 @@ import { unitForIndex } from "../src/core/clock.ts";
 import { defaultProject } from "../src/core/defaults.ts";
 import { modulated } from "../src/core/modulate.ts";
 import { createSet, record } from "../src/core/performance.ts";
+import { generatePhrase } from "../src/core/phrase.ts";
 import { lanePages, pageCount, pageGroupColor } from "../src/ui/pages.ts";
 import { menuLed, padLeds, stepLed, stepLeds, trackLeds } from "../src/ui/leds.ts";
 import { HEADER_H, PARAM_H, pixel, renderScreen, VIZ_H, type Screen } from "../src/ui/screen.ts";
@@ -157,6 +158,31 @@ describe("surface", () => {
     assert.ok(columnSpan(screen, 6) > 0);
     assert.equal(columnSpan(screen, 7), 0);
     assert.ok(columnSpan(screen, 8) > 0);
+  });
+
+  it("collapses monophonic overlaps so one sixteenth draws one event", () => {
+    const project = defaultProject();
+    project.working.bass.gen1 = { ...project.working.bass.gen1, length: 16, hits: 16, rotate: 0 };
+    project.working.bass.gen2.hits = 0;
+    project.working.bass.follow = 0;
+    project.working.bass.repeat = modulated(unitForIndex(1, 8));
+    project.working.bass.step = modulated(1);
+    project.working.bass.degree = modulated(0.2);
+    project.working.bass.range = modulated(0.8);
+    const ticks = new Map<number, number>();
+    for (const event of generatePhrase(project).lanes.bass) {
+      ticks.set(event.tick, (ticks.get(event.tick) ?? 0) + 1);
+    }
+    assert.ok([...ticks.values()].some((count) => count > 1));
+    const notesAt = new Map<number, Set<number>>();
+    for (const event of generatePhrase(project).lanes.bass) {
+      const set = notesAt.get(event.tick) ?? new Set();
+      set.add(event.note);
+      notesAt.set(event.tick, set);
+    }
+    assert.ok([...notesAt.values()].some((notes) => notes.size > 1));
+    const screen = renderScreen(project, { ...defaultUi(), context: "bass" }, 0, false);
+    for (let x = 0; x < 128; x++) assert.ok(columnSpan(screen, x) <= VIZ_H / 2);
   });
 
   it("wraps ratchet tails into the phrase so the playhead still reaches the end", () => {

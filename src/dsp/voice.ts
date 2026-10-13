@@ -278,7 +278,8 @@ function noteSample(engine: Engine, note: NoteVoice): [number, number] {
   else note.env *= Math.exp(-1 / ((0.04 + note.release * 1.6) * SAMPLE_RATE));
   note.age += 1;
   note.left -= 1;
-  if (note.left <= 0 || note.env < 0.0008) note.on = false;
+  // Do not silence during attack: a slow attack starts below 0.0008 and would mute the note.
+  if (note.left <= 0 || (note.age >= attackSamples && note.env < 0.0008)) note.on = false;
   const gain = resonated * note.env * note.gain * 0.38;
   const wide = second * note.width * gain * 1.35;
   return [gain + wide, gain - wide];

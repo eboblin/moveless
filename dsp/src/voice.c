@@ -366,7 +366,8 @@ static void note_sample(Engine *engine, Note *note, float *left, float *right) {
     else note->env *= expf(-1.0f / ((0.04f + note->release * 1.6f) * SR));
     note->age += 1;
     note->left -= 1;
-    if (note->left <= 0 || note->env < 0.0008f) note->on = 0;
+    /* Slow attacks start below 0.0008; only silence after the ramp finishes. */
+    if (note->left <= 0 || ((float)note->age >= attack_samples && note->env < 0.0008f)) note->on = 0;
     float gain = resonated * note->env * note->gain * 0.38f;
     float wide = second * note->width * gain * 1.35f;
     *left += gain + wide;

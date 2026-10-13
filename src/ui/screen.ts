@@ -1,7 +1,7 @@
 import { SIXTEENTH_TICKS } from "../core/clock.ts";
 import { generatePhrase, laneSteps } from "../core/phrase.ts";
 import { evalModulated } from "../core/modulate.ts";
-import { LANE_CODE, type ContextId, type LaneId, type Project } from "../core/types.ts";
+import { LANE_CODE, type ContextId, type LaneId, type Project, type TimedEvent } from "../core/types.ts";
 import { readControl } from "./controls.ts";
 import { pagesFor } from "./pages.ts";
 import type { UiState } from "./state.ts";
@@ -130,8 +130,8 @@ function drawGenerator(pixels: Uint8Array, project: Project, context: ContextId,
 
 function drawPhrase(pixels: Uint8Array, project: Project, lane: LaneId, playhead: number): void {
   const phrase = generatePhrase(project);
-  const events = phrase.lanes[lane];
   const steps = Math.max(1, phrase.steps[lane]);
+  const events = lane === "chords" ? phrase.lanes[lane] : collapseMono(phrase.lanes[lane], steps);
   const yTop = HEADER_H;
   const yBottom = HEADER_H + VIZ_H - 2;
   const maxEvent = Math.floor(VIZ_H / 2);
@@ -173,6 +173,19 @@ function paintPlayhead(pixels: Uint8Array, pos: number, steps: number, yTop: num
 /** Keep a time inside one lane loop. A ratchet or repeat past the end returns to the start. */
 function wrapStep(step: number, steps: number): number {
   return ((step % steps) + steps) % steps;
+}
+
+/** Drums, bass and lead are monophonic: one drawn event per sixteenth. */
+function collapseMono(events: TimedEvent[], steps: number): TimedEvent[] {
+  const best = new Map<number, TimedEvent>();
+  for (const event of events) {
+    const key = Math.floor(wrapStep(event.tick / SIXTEENTH_TICKS, steps) + 1e-9);
+    const prev = best.get(key);
+    if (!prev || event.velocity > prev.velocity || (event.velocity === prev.velocity && event.tick >= prev.tick)) {
+      best.set(key, event);
+    }
+  }
+  return [...best.values()];
 }
 
 function pitchCenter(note: number, minNote: number, maxNote: number, yTop: number, yBottom: number, maxEvent: number): number {

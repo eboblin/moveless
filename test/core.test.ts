@@ -109,6 +109,20 @@ describe("euclid generator", () => {
     assert.equal(generatePhrase(base).lanes.kick.length, 0);
   });
 
+  it("spreads probability so dense hits thin gradually across the knob", () => {
+    const project = bar(defaultProject());
+    project.working.kick.gen1 = { ...project.working.kick.gen1, length: 16, hits: 16, rotate: 0 };
+    project.working.kick.gen2.hits = 0;
+    const counts = new Set<number>();
+    for (let i = 0; i <= 20; i++) {
+      project.working.kick.gen1.probability = i / 20;
+      counts.add(generatePhrase(project).lanes.kick.length);
+    }
+    assert.ok(counts.size >= 8, `expected gradual thinning, got ${[...counts].sort((a, b) => a - b)}`);
+    assert.ok(counts.has(0));
+    assert.ok(counts.has(16));
+  });
+
   it("uses max length as the phrase and loops the shorter ring", () => {
     const project = bar(defaultProject());
     project.working.kick.gen1.length = 8;
