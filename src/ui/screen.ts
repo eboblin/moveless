@@ -93,8 +93,10 @@ function fillViz(pixels: Uint8Array): void {
 
 const MIX_CHANNELS = ["kick", "snare", "hat", "perc", "bass", "lead", "chords", "master"] as const;
 const MIX_COL_W = 16;
-const MIX_LABEL_H = 7;
-const MIX_IND_H = 7;
+/** Bottom strip: mute/lock, 1 px gap, lane code, 1 px pad. */
+const MIX_CODE_Y = HEIGHT - FONT_H - 1;
+const MIX_MARK_Y = MIX_CODE_Y - FONT_H - 1;
+const MIX_FADER_BOTTOM = MIX_MARK_Y - 2;
 
 function mixCode(id: (typeof MIX_CHANNELS)[number]): string {
   return id === "master" ? "MST" : LANE_CODE[id];
@@ -104,10 +106,10 @@ function mixFocusLabel(id: (typeof MIX_CHANNELS)[number]): string {
   return id === "master" ? "MASTER" : LANE_CODE[id];
 }
 
-/** Eight vertical faders: lane codes above, mute/lock below. */
+/** Eight vertical faders; mute/lock then lane codes under the meters. */
 function drawMixer(pixels: Uint8Array, project: Project, focus: string | null): void {
-  const top = HEADER_H + MIX_LABEL_H;
-  const bottom = HEIGHT - MIX_IND_H - 1;
+  const top = HEADER_H;
+  const bottom = MIX_FADER_BOTTOM;
   const trackH = Math.max(1, bottom - top);
   for (let i = 0; i < MIX_CHANNELS.length; i++) {
     const id = MIX_CHANNELS[i];
@@ -139,25 +141,25 @@ function drawMixer(pixels: Uint8Array, project: Project, focus: string | null): 
 
 function mixerChannelLabels(project: Project, focus: string | null): Label[] {
   const labels: Label[] = [];
-  const codeY = HEADER_H + 1;
-  const markY = HEIGHT - FONT_H - 1;
   for (let i = 0; i < MIX_CHANNELS.length; i++) {
     const id = MIX_CHANNELS[i];
     const x0 = i * MIX_COL_W;
+    if (id !== "master") {
+      const marks = `${project.mute[id] ? "M" : ""}${project.lock[id] ? "L" : ""}`;
+      if (marks) {
+        labels.push({
+          x: x0 + Math.max(0, Math.floor((MIX_COL_W - marks.length * CHAR_W) / 2)),
+          y: MIX_MARK_Y,
+          text: marks,
+        });
+      }
+    }
     const code = mixCode(id);
     labels.push({
       x: x0 + Math.max(0, Math.floor((MIX_COL_W - code.length * CHAR_W) / 2)),
-      y: codeY,
+      y: MIX_CODE_Y,
       text: code,
       invert: focus === mixFocusLabel(id),
-    });
-    if (id === "master") continue;
-    const marks = `${project.mute[id] ? "M" : ""}${project.lock[id] ? "L" : ""}`;
-    if (!marks) continue;
-    labels.push({
-      x: x0 + Math.max(0, Math.floor((MIX_COL_W - marks.length * CHAR_W) / 2)),
-      y: markY,
-      text: marks,
     });
   }
   return labels;

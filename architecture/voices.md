@@ -6,7 +6,7 @@
 
 Первая версия звучит **своим** голосом. libpo32 и Surge в дерево не вендорятся (лицензия / сборка). Имена восьми параметров на странице — baseline из initial.md; ключи в `map.ts` совместимы со старой картой (`v01_*` и т.д.), чтобы адаптер и тесты не разъезжались.
 
-Ударные — четыре голоса с разным характером (kick bend+body, snare body+noise, hat metal/noise, perc ping). Bass, Lead и Chords делят один пул из двенадцати нот.
+Ударные — четыре голоса с разным характером (kick bend+noise, snare body+noise, hat click+tone, perc bend+noise). Bass, Lead и Chords делят один пул из двенадцати нот.
 
 ## Куда смотрят параметры
 
@@ -16,16 +16,16 @@
 | --- | --- | --- |
 | `freq` | pitch (фиксируется на ударе) | высота |
 | `dcy` | `decay` | decay тонального тела |
-| `nedcy` | `noiseDecay` | decay шума / ring |
+| `nedcy` | `noiseDecay` | decay шума / tail |
 | `mix` | `noise` | доля шума |
 | `dist` | `drive` | дисторшн |
 | `nfq` | `tone` | тон / LP |
 | `atk` | `snap` | сила и длина клика |
-| `nffrq` | `bright` | яркость клика / metal |
+| `nffrq` | `bright` | яркость клика |
 | `mamt` | `bend` | pitch bend |
 | `lvl` | `body` | уровень тонального тела |
 | `pan` | `pan` | панорама |
-| `mrate` | `spread` | разнос / metallic spread |
+| `mrate` | `spread` | разнос |
 
 `atk` и `nffrq` больше не схлопываются в один параметр. `lvl` и `nedcy` читаются голосом.
 

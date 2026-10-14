@@ -36,7 +36,7 @@ interface DrumVoice {
   spread: number;
   /** `atk` / snap — click amount and length. */
   snap: number;
-  /** `nffrq` / click·crisp·metal — click brightness / metallic colour. */
+  /** `nffrq` / click — click brightness. */
   bright: number;
   bend: number;
   /** `lvl` / body — tonal oscillator level. */
@@ -208,9 +208,11 @@ function armDrum(drum: DrumVoice, event: BlockEvent | LoopEvent, pitch: number, 
   drum.base = base * dropped;
   drum.freq = drum.base * (0.5 + pitch);
   drum.loop = loop;
-  drum.decay = 0.04 + read(event.params, ["dcy"], 0.5) * 0.9;
-  drum.noiseDecay = 0.02 + read(event.params, ["nedcy"], hat ? 0.35 : 0.45) * 0.85;
-  drum.noise = read(event.params, ["mix"], hat ? 0.85 : lane === 1 ? 0.55 : 0.15);
+  const dcyUnit = read(event.params, ["dcy"], 0.5);
+  drum.decay = drumDecaySeconds(dcyUnit);
+  // Hat has no tail knob — noise used to keep a fixed ~100 ms hiss after body died.
+  drum.noiseDecay = drumNoiseDecaySeconds(read(event.params, ["nedcy"], hat ? dcyUnit : 0.45));
+  drum.noise = read(event.params, ["mix"], hat ? 0.35 : lane === 1 ? 0.55 : 0.15);
   drum.drive = read(event.params, ["dist"], 0.15);
   drum.tone = read(event.params, ["nfq"], hat ? 0.75 : 0.45);
   drum.pan = read(event.params, ["pan"], 0.5);
@@ -266,8 +268,8 @@ function drumSample(engine: Engine, drum: DrumVoice): number {
   // Drive is squared so the top of the knob stays the smash zone, not a dead plateau.
   const driven = shapeDrive(drum.low, drum.drive * drum.drive);
 
-  drum.env *= Math.exp(-1 / (Math.max(0.015, drum.decay) * SAMPLE_RATE));
-  drum.noiseEnv *= Math.exp(-1 / (Math.max(0.012, drum.noiseDecay) * SAMPLE_RATE));
+  drum.env *= Math.exp(-1 / (Math.max(0.004, drum.decay) * SAMPLE_RATE));
+  drum.noiseEnv *= Math.exp(-1 / (Math.max(0.003, drum.noiseDecay) * SAMPLE_RATE));
   drum.age += 1;
   if (drum.env < 0.0008 && drum.noiseEnv < 0.0008 && drum.age > clickTau * 4) drum.on = false;
   return driven;
@@ -362,8 +364,10 @@ function applyDrum(drum: DrumVoice, motion: Motion, step: number): void {
   const unit = live(motion, step);
   const id = motion.id;
   if (ends(id, "freq")) return;
-  if (ends(id, "dcy")) drum.decay = 0.04 + unit * 0.9;
-  else if (ends(id, "nedcy")) drum.noiseDecay = 0.02 + unit * 0.85;
+  if (ends(id, "dcy")) {
+    drum.decay = drumDecaySeconds(unit);
+    if (drum.lane === 2) drum.noiseDecay = drumNoiseDecaySeconds(unit);
+  } else if (ends(id, "nedcy")) drum.noiseDecay = drumNoiseDecaySeconds(unit);
   else if (ends(id, "mix")) drum.noise = unit;
   else if (ends(id, "dist")) drum.drive = unit;
   else if (ends(id, "nfq")) drum.tone = unit;
@@ -417,6 +421,17 @@ function read(params: EngineParam[], keys: string[], fallback: number): number {
     if (found) return found.value;
   }
   return fallback;
+}
+
+/** Squared unit → seconds: low end stays clicky, top still reaches ~1 s. */
+function drumDecaySeconds(unit: number): number {
+  const u = Math.max(0, Math.min(1, unit));
+  return 0.005 + u * u * 0.95;
+}
+
+function drumNoiseDecaySeconds(unit: number): number {
+  const u = Math.max(0, Math.min(1, unit));
+  return 0.004 + u * u * 0.86;
 }
 
 function drumIndex(lane: LaneId): number {

@@ -141,6 +141,17 @@ static float clampf01(float value) {
     return value;
 }
 
+/* Squared unit → seconds: low end stays clicky, top still reaches ~1 s. */
+static float drum_decay_seconds(float unit) {
+    float u = clampf01(unit);
+    return 0.005f + u * u * 0.95f;
+}
+
+static float drum_noise_decay_seconds(float unit) {
+    float u = clampf01(unit);
+    return 0.004f + u * u * 0.86f;
+}
+
 static float euclid_gate(int steps, int pulses, float phase) {
     int idx = (int)floorf(phase * (float)steps) % steps;
     if (idx < 0) idx += steps;
@@ -216,8 +227,10 @@ static void follow_sound(Engine *engine) {
             if (motion->lane != d || motion->amount == 0.0f) continue;
             float unit = eval_motion(motion, step);
             if (suffix_is(motion->id, "freq")) continue;
-            else if (suffix_is(motion->id, "dcy")) drum->decay = 0.04f + unit * 0.9f;
-            else if (suffix_is(motion->id, "nedcy")) drum->noise_decay = 0.02f + unit * 0.85f;
+            else if (suffix_is(motion->id, "dcy")) {
+                drum->decay = drum_decay_seconds(unit);
+                if (drum->lane == 2) drum->noise_decay = drum_noise_decay_seconds(unit);
+            } else if (suffix_is(motion->id, "nedcy")) drum->noise_decay = drum_noise_decay_seconds(unit);
             else if (suffix_is(motion->id, "mix")) drum->noise = unit;
             else if (suffix_is(motion->id, "dist")) drum->drive = unit;
             else if (suffix_is(motion->id, "nfq")) drum->tone = unit;
@@ -268,9 +281,11 @@ static void arm_drum(Engine *engine, int lane, int note, int velocity, const cha
     drum->base = base * dropped;
     drum->freq = drum->base * (0.5f + pitch);
     drum->loop = loop;
-    drum->decay = 0.04f + read_param(params, "dcy", 0.5f) * 0.9f;
-    drum->noise_decay = 0.02f + read_param(params, "nedcy", hat ? 0.35f : 0.45f) * 0.85f;
-    drum->noise = read_param(params, "mix", hat ? 0.85f : (idx == 1 ? 0.55f : 0.15f));
+    float dcy_unit = read_param(params, "dcy", 0.5f);
+    drum->decay = drum_decay_seconds(dcy_unit);
+    /* Hat has no tail knob — keep noise decay on the same throw as body decay. */
+    drum->noise_decay = drum_noise_decay_seconds(read_param(params, "nedcy", hat ? dcy_unit : 0.45f));
+    drum->noise = read_param(params, "mix", hat ? 0.35f : (idx == 1 ? 0.55f : 0.15f));
     drum->drive = read_param(params, "dist", 0.15f);
     drum->tone = read_param(params, "nfq", hat ? 0.75f : 0.45f);
     drum->pan = read_param(params, "pan", 0.5f);
@@ -341,8 +356,8 @@ static float drum_sample(Engine *engine, Drum *drum) {
     float gain = 1.0f + drive * 8.0f;
     float driven = drum->low * gain;
     driven = driven / (1.0f + fabsf(driven));
-    float dcy = drum->decay < 0.015f ? 0.015f : drum->decay;
-    float ndcy = drum->noise_decay < 0.012f ? 0.012f : drum->noise_decay;
+    float dcy = drum->decay < 0.004f ? 0.004f : drum->decay;
+    float ndcy = drum->noise_decay < 0.003f ? 0.003f : drum->noise_decay;
     drum->env *= expf(-1.0f / (dcy * SR));
     drum->noise_env *= expf(-1.0f / (ndcy * SR));
     drum->age += 1;

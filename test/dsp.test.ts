@@ -10,11 +10,11 @@ describe("dsp adapter", () => {
   it("maps kick semantics onto v01 chain keys", () => {
     const params = mapKick({
       pitch: 0.2,
-      boom: 0.3,
+      bend: 0.3,
       snap: 0.4,
       click: 0.5,
       decay: 0.6,
-      punch: 0.7,
+      noise: 0.7,
       drive: 0.8,
       tone: 0.9,
     });
@@ -54,7 +54,7 @@ describe("dsp adapter", () => {
 
     const leftHat = renderBlock(createEngine(), [{
       sampleOffset: 0, lane: "hat", note: 42, velocity: 100, lengthTicks: 48,
-      params: mapSound("hat", { pitch: 0.5, metal: 0.8, attack: 0.2, decay: 0.5, bright: 0.7, grit: 0.1, pan: 0, spread: 0 }),
+      params: mapSound("hat", { pitch: 0.5, click: 0.8, snap: 0.2, decay: 0.5, tone: 0.7, drive: 0.1, pan: 0, spread: 0 }),
     }], 120);
     let left = 0;
     let right = 0;
@@ -84,7 +84,7 @@ describe("dsp adapter", () => {
     const engine = createEngine();
     loadPhrase(engine, [{
       sample: 0, loop: 300, lane: "kick", note: 36, velocity: 120, lengthTicks: 48,
-      params: mapSound("kick", { pitch: 0.5, boom: 0, snap: 0, click: 0, decay: 0.05, punch: 0, drive: 0, tone: 0.5 }),
+      params: mapSound("kick", { pitch: 0.5, bend: 0, snap: 0, click: 0, decay: 0.05, noise: 0, drive: 0, tone: 0.5 }),
     }], 120, true);
     renderClock(engine);
     const ageFirst = engine.drums[0].age;
@@ -149,7 +149,7 @@ describe("dsp adapter", () => {
       note: 36,
       velocity: 120,
       lengthTicks: 48,
-      params: mapSound("kick", { pitch: 0.2, boom: 0, snap: 0, click: 0, decay: 0.7, punch: 0, drive: 0, tone: 0.5 }),
+      params: mapSound("kick", { pitch: 0.2, bend: 0, snap: 0, click: 0, decay: 0.7, noise: 0, drive: 0, tone: 0.5 }),
     }], tempo, true, [{
       lane: "kick", id: "v01_freq", value: 0.2, pattern: 0, cycle: 8, amount: 1, loop,
     }]);
@@ -168,7 +168,7 @@ describe("dsp adapter", () => {
     loadPhrase(engine, [{
       sample: 0, loop: 100000, lane: "snare", note: 38, velocity: 100, lengthTicks: 48,
       params: mapSound("snare", {
-        pitch: 0.2, body: 0.31, noise: 0.42, snap: 0.53, decay: 0.64, ring: 0.75, crisp: 0.86, drive: 0.97,
+        pitch: 0.2, body: 0.31, noise: 0.42, snap: 0.53, decay: 0.64, tail: 0.75, click: 0.86, drive: 0.97,
       }),
     }], 120, true);
     renderClock(engine);
@@ -177,8 +177,8 @@ describe("dsp adapter", () => {
     assert.equal(drum.body, 0.31);
     assert.equal(drum.noise, 0.42);
     assert.equal(drum.snap, 0.53);
-    assert.ok(Math.abs(drum.decay - (0.04 + 0.64 * 0.9)) < 1e-6);
-    assert.ok(Math.abs(drum.noiseDecay - (0.02 + 0.75 * 0.85)) < 1e-6);
+    assert.ok(Math.abs(drum.decay - (0.005 + 0.64 * 0.64 * 0.95)) < 1e-6);
+    assert.ok(Math.abs(drum.noiseDecay - (0.004 + 0.75 * 0.75 * 0.86)) < 1e-6);
     assert.equal(drum.bright, 0.86);
     assert.equal(drum.drive, 0.97);
   });
@@ -188,7 +188,7 @@ describe("dsp adapter", () => {
     loadPhrase(engine, [{
       sample: 0, loop: 100000, lane: "kick", note: 36, velocity: 120, lengthTicks: 48,
       params: mapSound("kick", {
-        pitch: 0.5, boom: 0.2, snap: 0.9, click: 0.1, decay: 0.5, punch: 0.2, drive: 0.1, tone: 0.5,
+        pitch: 0.5, bend: 0.2, snap: 0.9, click: 0.1, decay: 0.5, noise: 0.2, drive: 0.1, tone: 0.5,
       }),
     }], 120, true);
     renderClock(engine);
@@ -200,21 +200,21 @@ describe("dsp adapter", () => {
   it("changes early energy when snap or body moves", () => {
     const quietSnap = peak(renderBlock(createEngine(), [{
       sampleOffset: 0, lane: "snare", note: 38, velocity: 120, lengthTicks: 48,
-      params: mapSound("snare", { pitch: 0.5, body: 0.8, noise: 0.2, snap: 0, decay: 0.5, ring: 0.4, crisp: 0.5, drive: 0 }),
+      params: mapSound("snare", { pitch: 0.5, body: 0.8, noise: 0.2, snap: 0, decay: 0.5, tail: 0.4, click: 0.5, drive: 0 }),
     }], 120));
     const loudSnap = peak(renderBlock(createEngine(), [{
       sampleOffset: 0, lane: "snare", note: 38, velocity: 120, lengthTicks: 48,
-      params: mapSound("snare", { pitch: 0.5, body: 0.8, noise: 0.2, snap: 1, decay: 0.5, ring: 0.4, crisp: 0.5, drive: 0 }),
+      params: mapSound("snare", { pitch: 0.5, body: 0.8, noise: 0.2, snap: 1, decay: 0.5, tail: 0.4, click: 0.5, drive: 0 }),
     }], 120));
     assert.ok(loudSnap > quietSnap);
 
     const thin = peak(renderBlock(createEngine(), [{
       sampleOffset: 0, lane: "snare", note: 38, velocity: 120, lengthTicks: 48,
-      params: mapSound("snare", { pitch: 0.5, body: 0, noise: 0.1, snap: 0, decay: 0.6, ring: 0.3, crisp: 0.2, drive: 0 }),
+      params: mapSound("snare", { pitch: 0.5, body: 0, noise: 0.1, snap: 0, decay: 0.6, tail: 0.3, click: 0.2, drive: 0 }),
     }], 120));
     const fat = peak(renderBlock(createEngine(), [{
       sampleOffset: 0, lane: "snare", note: 38, velocity: 120, lengthTicks: 48,
-      params: mapSound("snare", { pitch: 0.5, body: 1, noise: 0.1, snap: 0, decay: 0.6, ring: 0.3, crisp: 0.2, drive: 0 }),
+      params: mapSound("snare", { pitch: 0.5, body: 1, noise: 0.1, snap: 0, decay: 0.6, tail: 0.3, click: 0.2, drive: 0 }),
     }], 120));
     assert.ok(fat > thin);
   });

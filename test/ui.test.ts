@@ -201,15 +201,18 @@ describe("surface", () => {
     assert.equal(pixel(screen, 0, HEADER_H + VIZ_H - 1), 0);
     const kickMid = 8;
     const masterMid = 7 * 16 + 8;
-    const faderTop = HEADER_H + 7;
-    assert.equal(pixel(screen, kickMid, HEIGHT - 8), 1);
+    const faderTop = HEADER_H;
+    const codeY = HEIGHT - FONT_H - 1;
+    const markY = codeY - FONT_H - 1;
+    const faderBottom = markY - 2;
+    assert.equal(pixel(screen, kickMid, faderBottom), 1);
     // Master at 0: no fill beside the dotted guide (guide only on even rows).
     assert.equal(pixel(screen, masterMid + 1, faderTop), 0);
-    assert.equal(pixel(screen, masterMid + 1, HEIGHT - 8), 0);
-    const codes = screen.labels.filter((label) => label.y === HEADER_H + 1).map((label) => label.text);
+    assert.equal(pixel(screen, masterMid + 1, faderBottom), 0);
+    const codes = screen.labels.filter((label) => label.y === codeY).map((label) => label.text);
     assert.deepEqual(codes, ["KCK", "SNR", "HAT", "PRC", "BAS", "LEA", "CHD", "MST"]);
-    assert.ok(screen.labels.some((label) => label.text === "M" && label.y === HEIGHT - 6 && label.x >= 16 && label.x < 32));
-    assert.ok(screen.labels.some((label) => label.text === "ML" && label.y === HEIGHT - 6 && label.x >= 64 && label.x < 80));
+    assert.ok(screen.labels.some((label) => label.text === "M" && label.y === markY && label.x >= 16 && label.x < 32));
+    assert.ok(screen.labels.some((label) => label.text === "ML" && label.y === markY && label.x >= 64 && label.x < 80));
   });
 
   it("leaves a one-pixel gap between adjacent same-pitch hits", () => {
@@ -318,7 +321,7 @@ describe("surface", () => {
     const mix = renderScreen(defaultProject(), { ...defaultUi(), context: "mix" }, 0);
     assert.equal(pixel(mix, 15, PAGER_Y), 1);
     assert.equal(mix.viz, "mixer");
-    assert.ok(mix.labels.some((label) => label.text === "KCK" && label.y === HEADER_H + 1));
+    assert.ok(mix.labels.some((label) => label.text === "KCK" && label.y === HEIGHT - FONT_H - 1));
     const bassProject = defaultProject();
     bassProject.working.bass.degree = modulated(0.5, 0, 8, 1);
     bassProject.working.bass.follow = 0;
