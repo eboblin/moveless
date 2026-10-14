@@ -1,7 +1,8 @@
 import { SIXTEENTH_TICKS } from "../core/clock.ts";
-import { generatePhrase, laneSteps } from "../core/phrase.ts";
+import { chordSymbol, degreeNumeral } from "../core/harmony.ts";
+import { chordFigure, directionLabel, generatePhrase, laneSteps } from "../core/phrase.ts";
 import { evalModulated } from "../core/modulate.ts";
-import { LANE_CODE, type ContextId, type LaneId, type Project, type TimedEvent } from "../core/types.ts";
+import { LANE_CODE, type ContextId, type HarmonicEvent, type LaneId, type Project, type TimedEvent } from "../core/types.ts";
 import { DIGIT_H, displayAmount, type BigAmount } from "./digits.ts";
 import { readControl } from "./controls.ts";
 import { pagesFor, type Page } from "./pages.ts";
@@ -64,7 +65,7 @@ export function renderScreen(project: Project, ui: UiState, tick: number, playin
   const notice = ui.notice && now < ui.notice.untilMs ? ui.notice : null;
   const focusState = !notice && ui.focus && (ui.focus.held || tick < ui.focus.untilTick) ? ui.focus : null;
   const focus = focusState?.label ?? null;
-  const header = focus ? fullName(focus) : laneHeader(project, context, page);
+  const header = figureHeader(project, context, focus) ?? (focus ? fullName(focus) : laneHeader(project, context, page));
   const vizLane: LaneId | null = context === "mix" || context === "global" ? null : context;
   const generator = vizLane && focusState?.generator ? focusState.generator : null;
   const mixer = !notice && context === "mix";
@@ -73,13 +74,17 @@ export function renderScreen(project: Project, ui: UiState, tick: number, playin
   const pixels = new Uint8Array(WIDTH * HEIGHT);
   drawPager(pixels, Math.min(pageIndex, Math.max(0, pages.length - 1)), pages.length);
   if (!mixer) drawParamSeparator(pixels);
+  const chordRoll = vizLane === "chords" && page?.id !== "prog";
   if (notice) fillViz(pixels);
   else if (mixer) drawMixer(pixels, project, focus);
   else if (generator) drawGenerator(pixels, project, context, generator, focusState?.showPattern ?? false, playing ? stepAt(project, tick) : -1);
+  else if (chordRoll) drawChordRoll(pixels, project, playing ? stepAt(project, tick) : -1);
+  else if (vizLane === "chords") drawChordBars(pixels, project, playing ? stepAt(project, tick) : -1);
   else if (vizLane) drawPhrase(pixels, project, vizLane, playing ? stepAt(project, tick) : -1);
   const labels = mixer
     ? [{ x: 1, y: 1, text: header.slice(0, LINE_LIMIT) }, ...mixerChannelLabels(project, focus)]
     : drawLabels(project, context, page, focus);
+  if (vizLane === "chords" && !notice && !generator && !chordRoll) labels.push(...chordNameLabels(project));
   if (notice) labels.push(...noticeLabels(notice.title, notice.value));
   const digits = mixer || !page ? [] : paramDigits(project, context, page, focus);
   return { header, viz, params, pixels, labels, digits };
@@ -258,6 +263,103 @@ function drawGenerator(pixels: Uint8Array, project: Project, context: ContextId,
   }
 }
 
+interface ChordSpan {
+  x0: number;
+  x1: number;
+  event: HarmonicEvent;
+}
+
+function chordSpans(events: readonly HarmonicEvent[], steps: number): ChordSpan[] {
+  const spans = events.map((event) => {
+    const start = event.startTick / SIXTEENTH_TICKS;
+    const end = (event.startTick + event.lengthTicks) / SIXTEENTH_TICKS;
+    const x0 = Math.min(WIDTH - 1, Math.floor((start * WIDTH) / steps));
+    const x1 = Math.min(WIDTH, Math.max(x0 + 1, Math.floor((end * WIDTH) / steps)));
+    return { x0, x1, event };
+  });
+  for (let i = 0; i < spans.length - 1; i++) {
+    if (spans[i].x1 - spans[i].x0 > 1) spans[i].x1 -= 1;
+  }
+  return spans;
+}
+
+/** Names and duration blocks. Width is the harmonic length. */
+function drawChordBars(pixels: Uint8Array, project: Project, playhead: number): void {
+  const phrase = generatePhrase(project);
+  const steps = Math.max(1, phrase.steps.chords);
+  const yTop = HEADER_H;
+  const yBottom = HEADER_H + VIZ_H - 2;
+  for (const span of chordSpans(phrase.harmony, steps)) {
+    for (let x = span.x0; x < span.x1; x++) {
+      for (let y = yTop; y <= yBottom; y++) set(pixels, x, y, 1);
+    }
+  }
+  if (playhead >= 0) paintPlayhead(pixels, wrapStep(playhead, steps), steps, yTop, yBottom);
+}
+
+function chordNameLabels(project: Project): Label[] {
+  const phrase = generatePhrase(project);
+  const steps = Math.max(1, phrase.steps.chords);
+  const yTop = HEADER_H;
+  const yBottom = HEADER_H + VIZ_H - 2;
+  const stack = FONT_H + 1 + FONT_H;
+  const nameY = yTop + Math.max(0, Math.floor((yBottom - yTop + 1 - stack) / 2));
+  const degreeY = nameY + FONT_H + 1;
+  const labels: Label[] = [];
+  for (const span of chordSpans(phrase.harmony, steps)) {
+    const width = span.x1 - span.x0;
+    const chars = Math.floor(width / CHAR_W);
+    if (chars < 1) continue;
+    const text = chordSymbol(span.event, project.global).slice(0, chars);
+    const textW = text.length * CHAR_W;
+    labels.push({
+      x: span.x0 + Math.max(0, Math.floor((width - textW) / 2)),
+      y: nameY,
+      text,
+      invert: true,
+    });
+    const numeral = degreeNumeral(span.event, project.global);
+    if (numeral.length > chars) continue;
+    const numeralW = numeral.length * CHAR_W;
+    labels.push({
+      x: span.x0 + Math.max(0, Math.floor((width - numeralW) / 2)),
+      y: degreeY,
+      text: numeral,
+      invert: true,
+    });
+  }
+  return labels;
+}
+
+/** Piano roll of the notes the chord figure actually plays. */
+function drawChordRoll(pixels: Uint8Array, project: Project, playhead: number): void {
+  const phrase = generatePhrase(project);
+  const steps = Math.max(1, phrase.steps.chords);
+  const events = phrase.lanes.chords;
+  const yTop = HEADER_H;
+  const yBottom = HEADER_H + VIZ_H - 2;
+  let minNote = events[0]?.note ?? 0;
+  let maxNote = minNote;
+  for (const event of events) {
+    minNote = Math.min(minNote, event.note);
+    maxNote = Math.max(maxNote, event.note);
+  }
+  const yOf = (note: number) => {
+    if (maxNote === minNote) return Math.floor((yTop + yBottom) / 2);
+    const high = (note - minNote) / (maxNote - minNote);
+    return yBottom - Math.round(high * (yBottom - yTop));
+  };
+  for (const event of events) {
+    const start = wrapStep(event.tick / SIXTEENTH_TICKS, steps);
+    const end = Math.min(steps, start + event.lengthTicks / SIXTEENTH_TICKS);
+    const x0 = Math.min(WIDTH - 1, Math.floor((start * WIDTH) / steps));
+    const x1 = Math.min(WIDTH, Math.max(x0 + 1, Math.floor((end * WIDTH) / steps)));
+    const y = yOf(event.note);
+    for (let x = x0; x < x1; x++) set(pixels, x, y, 1);
+  }
+  if (playhead >= 0) paintPlayhead(pixels, wrapStep(playhead, steps), steps, yTop, yBottom);
+}
+
 function drawPhrase(pixels: Uint8Array, project: Project, lane: LaneId, playhead: number): void {
   const phrase = generatePhrase(project);
   const steps = Math.max(1, phrase.steps[lane]);
@@ -336,6 +438,14 @@ function bucket(index: number, count: number, size: number): [number, number] {
   const start = Math.floor((index * size) / count);
   const end = Math.floor(((index + 1) * size) / count);
   return [Math.min(size - 1, start), Math.min(size, Math.max(start + 1, end))];
+}
+
+/** Rate value: BLOCK or the division. Direction: the order name. Digits stay numeric. */
+function figureHeader(project: Project, context: ContextId, focus: string | null): string | null {
+  if (context !== "chords") return null;
+  if (focus === "RATE V") return chordFigure(readControl(project, "chords", "rate.value")).label.slice(0, LINE_LIMIT);
+  if (focus === "DIR") return directionLabel(readControl(project, "chords", "direction")).slice(0, LINE_LIMIT);
+  return null;
 }
 
 function stepAt(_project: Project, tick: number): number {

@@ -142,22 +142,20 @@ function pitched(lane: "bass" | "lead", follow: number, hits: number, octaveBias
 
 function chords(): ChordLane {
   return {
-    change: modulated(0.35),
-    length: modulated(0.8),
-    motion: modulated(0.35),
-    variation: modulated(0),
-    mood: modulated(0),
-    tension: modulated(0.15),
-    play: {
-      mode: 0,
-      rate: 1,
-      gate: 0.7,
-      octaves: 1,
-      spread: 0.25,
-      flow: 0.5,
-      strum: 0,
-      direction: 0,
-    },
+    start: 0,
+    count: 4,
+    length: 4,
+    motion: 1,
+    variation: 0,
+    mood: 0,
+    tension: 0.15,
+    way: 3,
+    spread: 0.25,
+    flow: 0.5,
+    octaves: 1,
+    direction: 0,
+    rate: modulated(0),
+    gate: modulated(0.7),
     sound: sound("chords"),
   };
 }

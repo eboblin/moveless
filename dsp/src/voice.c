@@ -17,29 +17,62 @@
 #define TEXT_CAP 8192
 #define PHRASE_TEXT 65536
 #define PHRASE_CAP 512
-#define MOTION_CAP 80
+#define LANE_COUNT 8
+#define LANE_MOTION_CAP 8
+
+enum {
+    P_NONE = 0,
+    P_FREQ,
+    P_DCY,
+    P_NEDCY,
+    P_MIX,
+    P_DIST,
+    P_NFQ,
+    P_PAN,
+    P_MRATE,
+    P_NFFRQ,
+    P_ATK,
+    P_MAMT,
+    P_LVL,
+    P_SHAPE,
+    P_DETUNE,
+    P_FM,
+    P_NOISE,
+    P_CUTOFF,
+    P_RESONANCE,
+    P_ATTACK,
+    P_RELEASE,
+    P_WIDTH
+};
 
 typedef struct {
     int on;
     int lane;
     float phase, phase2, env, noise_env, freq, decay, noise_decay;
     float noise, drive, tone, pan, spread, snap, bright, bend, body, low, base;
+    float env_k, noise_k, click_k, click_env, click_tau;
     int age, loop;
 } Drum;
 
 typedef struct {
     int on;
     float phase, phase2, env, freq, shape, detune, fm, noise, cutoff, resonance, attack, release, width, gain, low, band;
+    float release_k;
     int age, left, lane, loop;
 } Note;
 
 typedef struct {
-    int lane;
-    int loop;
+    int param;
     int pattern;
     float value, cycle, amount;
-    char id[24];
-} Motion;
+} LaneMotion;
+
+typedef struct {
+    int live_count;
+    int still_count;
+    LaneMotion live[LANE_MOTION_CAP];
+    LaneMotion still[LANE_MOTION_CAP];
+} LaneBox;
 
 typedef struct {
     int sample;
@@ -61,8 +94,8 @@ typedef struct {
     int phrase_on;
     int phrase_count;
     int clock;
-    int motion_count;
-    Motion motions[MOTION_CAP];
+    unsigned phrase_sig;
+    LaneBox lanes[LANE_COUNT];
     PhraseEv phrase[PHRASE_CAP];
     Drum drums[DRUMS];
     Note notes[NOTES];
@@ -202,63 +235,152 @@ static float motif_at(int id, float phase01) {
     return sample;
 }
 
-static float eval_motion(const Motion *motion, float step) {
+static int param_of(const char *id) {
+    if (strcmp(id, "osc_shape") == 0) return P_SHAPE;
+    if (strcmp(id, "osc_detune") == 0) return P_DETUNE;
+    if (strcmp(id, "osc_fm") == 0) return P_FM;
+    if (strcmp(id, "noise") == 0) return P_NOISE;
+    if (strcmp(id, "cutoff") == 0) return P_CUTOFF;
+    if (strcmp(id, "resonance") == 0) return P_RESONANCE;
+    if (strcmp(id, "attack") == 0) return P_ATTACK;
+    if (strcmp(id, "release") == 0 || strcmp(id, "decay") == 0) return P_RELEASE;
+    if (strcmp(id, "osc_width") == 0) return P_WIDTH;
+    if (suffix_is(id, "freq")) return P_FREQ;
+    if (suffix_is(id, "nedcy")) return P_NEDCY;
+    if (suffix_is(id, "nffrq")) return P_NFFRQ;
+    if (suffix_is(id, "mrate")) return P_MRATE;
+    if (suffix_is(id, "mamt")) return P_MAMT;
+    if (suffix_is(id, "dcy")) return P_DCY;
+    if (suffix_is(id, "mix")) return P_MIX;
+    if (suffix_is(id, "dist")) return P_DIST;
+    if (suffix_is(id, "nfq")) return P_NFQ;
+    if (suffix_is(id, "pan")) return P_PAN;
+    if (suffix_is(id, "atk")) return P_ATK;
+    if (suffix_is(id, "lvl")) return P_LVL;
+    return P_NONE;
+}
+
+static float eval_lane(const LaneMotion *motion, float step) {
     int cycle = (int)roundf(motion->cycle);
     if (cycle < 1) cycle = 1;
     float wrapped = fmodf(step, (float)cycle);
     if (wrapped < 0) wrapped += (float)cycle;
-    if (motion->amount == 0.0f) return clampf01(motion->value);
     return clampf01(motion->value + motif_at(motion->pattern, wrapped / (float)cycle) * motion->amount);
 }
 
+static void refresh_drum_env(Drum *drum) {
+    float dcy = drum->decay < 0.004f ? 0.004f : drum->decay;
+    float ndcy = drum->noise_decay < 0.003f ? 0.003f : drum->noise_decay;
+    drum->env_k = expf(-1.0f / (dcy * SR));
+    drum->noise_k = expf(-1.0f / (ndcy * SR));
+}
+
+static void refresh_click(Drum *drum) {
+    float tau = 10.0f + drum->snap * 160.0f + (1.0f - drum->bright) * 260.0f;
+    if (tau < 1.0f) tau = 1.0f;
+    drum->click_tau = tau;
+    drum->click_k = expf(-1.0f / tau);
+}
+
+static void refresh_release(Note *note) {
+    note->release_k = expf(-1.0f / ((0.04f + note->release * 1.6f) * SR));
+}
+
+static void apply_drum(Drum *drum, int param, float unit) {
+    switch (param) {
+    case P_DCY:
+        drum->decay = drum_decay_seconds(unit);
+        if (drum->lane == 2) drum->noise_decay = drum_noise_decay_seconds(unit);
+        refresh_drum_env(drum);
+        break;
+    case P_NEDCY:
+        drum->noise_decay = drum_noise_decay_seconds(unit);
+        refresh_drum_env(drum);
+        break;
+    case P_MIX: drum->noise = unit; break;
+    case P_DIST: drum->drive = unit; break;
+    case P_NFQ: drum->tone = unit; break;
+    case P_PAN: drum->pan = unit; break;
+    case P_MRATE: drum->spread = unit; break;
+    case P_NFFRQ:
+        drum->bright = unit;
+        refresh_click(drum);
+        break;
+    case P_ATK:
+        drum->snap = unit;
+        refresh_click(drum);
+        break;
+    case P_MAMT: drum->bend = unit; break;
+    case P_LVL: drum->body = unit; break;
+    default: break;
+    }
+}
+
+static void apply_note(Note *note, int param, float unit) {
+    switch (param) {
+    case P_SHAPE: note->shape = unit; break;
+    case P_DETUNE: note->detune = unit; break;
+    case P_FM: note->fm = unit; break;
+    case P_NOISE: note->noise = unit; break;
+    case P_CUTOFF: note->cutoff = unit; break;
+    case P_RESONANCE: note->resonance = unit; break;
+    case P_ATTACK: note->attack = unit; break;
+    case P_RELEASE:
+        note->release = unit;
+        refresh_release(note);
+        break;
+    case P_WIDTH: note->width = unit; break;
+    default: break;
+    }
+}
+
+static void stamp_note(Engine *engine, Note *note) {
+    if (note->lane < DRUMS || note->lane >= LANE_COUNT) return;
+    LaneBox *box = &engine->lanes[note->lane];
+    for (int m = 0; m < box->still_count; m++) apply_note(note, box->still[m].param, clampf01(box->still[m].value));
+}
+
+static void stamp_held(Engine *engine) {
+    for (int n = 0; n < NOTES; n++) {
+        if (engine->notes[n].on) stamp_note(engine, &engine->notes[n]);
+    }
+}
+
 static void follow_sound(Engine *engine) {
-    if (!engine->motion_count || engine->clock < 1) return;
+    if (engine->clock < 1) return;
     float tempo = engine->tempo > 1.0f ? engine->tempo : 120.0f;
     float span = roundf((48.0f * SR * 60.0f) / (tempo * 192.0f));
     if (span < 1.0f) span = 1.0f;
     int pos = engine->clock - 1;
-    for (int d = 0; d < DRUMS; d++) {
-        Drum *drum = &engine->drums[d];
-        if (!drum->on || drum->loop < 1) continue;
-        float step = (float)(pos % drum->loop) / span;
-        for (int m = 0; m < engine->motion_count; m++) {
-            Motion *motion = &engine->motions[m];
-            /* Amount 0 is constant — already baked into the note-on params. */
-            if (motion->lane != d || motion->amount == 0.0f) continue;
-            float unit = eval_motion(motion, step);
-            if (suffix_is(motion->id, "freq")) continue;
-            else if (suffix_is(motion->id, "dcy")) {
-                drum->decay = drum_decay_seconds(unit);
-                if (drum->lane == 2) drum->noise_decay = drum_noise_decay_seconds(unit);
-            } else if (suffix_is(motion->id, "nedcy")) drum->noise_decay = drum_noise_decay_seconds(unit);
-            else if (suffix_is(motion->id, "mix")) drum->noise = unit;
-            else if (suffix_is(motion->id, "dist")) drum->drive = unit;
-            else if (suffix_is(motion->id, "nfq")) drum->tone = unit;
-            else if (suffix_is(motion->id, "pan")) drum->pan = unit;
-            else if (suffix_is(motion->id, "mrate")) drum->spread = unit;
-            else if (suffix_is(motion->id, "nffrq")) drum->bright = unit;
-            else if (suffix_is(motion->id, "atk")) drum->snap = unit;
-            else if (suffix_is(motion->id, "mamt")) drum->bend = unit;
-            else if (suffix_is(motion->id, "lvl")) drum->body = unit;
+    for (int lane = 0; lane < LANE_COUNT; lane++) {
+        LaneBox *box = &engine->lanes[lane];
+        if (!box->live_count) continue;
+        int loop = 0;
+        if (lane < DRUMS) {
+            Drum *drum = &engine->drums[lane];
+            if (drum->on && drum->loop > 0) loop = drum->loop;
+        } else {
+            for (int n = 0; n < NOTES; n++) {
+                Note *note = &engine->notes[n];
+                if (note->on && note->lane == lane && note->loop > 0) {
+                    loop = note->loop;
+                    break;
+                }
+            }
         }
-    }
-    for (int n = 0; n < NOTES; n++) {
-        Note *note = &engine->notes[n];
-        if (!note->on || note->loop < 1) continue;
-        float step = (float)(pos % note->loop) / span;
-        for (int m = 0; m < engine->motion_count; m++) {
-            Motion *motion = &engine->motions[m];
-            if (motion->lane != note->lane || motion->amount == 0.0f) continue;
-            float unit = eval_motion(motion, step);
-            if (strcmp(motion->id, "osc_shape") == 0) note->shape = unit;
-            else if (strcmp(motion->id, "osc_detune") == 0) note->detune = unit;
-            else if (strcmp(motion->id, "osc_fm") == 0) note->fm = unit;
-            else if (strcmp(motion->id, "noise") == 0) note->noise = unit;
-            else if (strcmp(motion->id, "cutoff") == 0) note->cutoff = unit;
-            else if (strcmp(motion->id, "resonance") == 0) note->resonance = unit;
-            else if (strcmp(motion->id, "attack") == 0) note->attack = unit;
-            else if (strcmp(motion->id, "release") == 0 || strcmp(motion->id, "decay") == 0) note->release = unit;
-            else if (strcmp(motion->id, "osc_width") == 0) note->width = unit;
+        if (loop < 1) continue;
+        float step = (float)(pos % loop) / span;
+        float units[LANE_MOTION_CAP];
+        for (int m = 0; m < box->live_count; m++) units[m] = eval_lane(&box->live[m], step);
+        if (lane < DRUMS) {
+            Drum *drum = &engine->drums[lane];
+            for (int m = 0; m < box->live_count; m++) apply_drum(drum, box->live[m].param, units[m]);
+        } else {
+            for (int n = 0; n < NOTES; n++) {
+                Note *note = &engine->notes[n];
+                if (!note->on || note->lane != lane || note->loop < 1) continue;
+                for (int m = 0; m < box->live_count; m++) apply_note(note, box->live[m].param, units[m]);
+            }
         }
     }
 }
@@ -295,6 +417,9 @@ static void arm_drum(Engine *engine, int lane, int note, int velocity, const cha
     drum->bend = read_param(params, "mamt", idx == 0 ? 0.55f : (idx == 3 ? 0.35f : 0.1f));
     drum->body = read_param(params, "lvl", hat ? 0.12f : 1.0f);
     drum->low = 0;
+    drum->click_env = 1.0f;
+    refresh_drum_env(drum);
+    refresh_click(drum);
     (void)engine;
     (void)lane;
 }
@@ -308,7 +433,7 @@ static Note *steal(Engine *engine) {
     return quiet;
 }
 
-static void arm_note(Engine *engine, int note_num, int velocity, int ticks, const char *params, int lane, int loop) {
+static Note *arm_note(Engine *engine, int note_num, int velocity, int ticks, const char *params, int lane, int loop) {
     Note *note = steal(engine);
     float tempo = engine->tempo > 1.0f ? engine->tempo : 120.0f;
     int samples = (int)((ticks * SR * 60.0f) / (tempo * 192.0f));
@@ -334,6 +459,9 @@ static void arm_note(Engine *engine, int note_num, int velocity, int ticks, cons
     note->gain = velocity / 127.0f;
     note->low = 0;
     note->band = 0;
+    refresh_release(note);
+    stamp_note(engine, note);
+    return note;
 }
 
 static float drum_sample(Engine *engine, Drum *drum) {
@@ -345,8 +473,7 @@ static float drum_sample(Engine *engine, Drum *drum) {
     drum->phase += inc;
     drum->phase2 += inc * (1.0f + drum->spread * (hat ? 2.5f : 0.12f) + (hat ? drum->bright * 0.55f : 0.0f));
     float body = (sinf(drum->phase) + sinf(drum->phase2) * spread_mul) * drum->body;
-    float click_tau = 10.0f + drum->snap * 160.0f + (1.0f - drum->bright) * 260.0f;
-    float click = rng(engine) * expf(-(float)drum->age / click_tau) * drum->snap * (0.35f + drum->bright * 1.4f);
+    float click = rng(engine) * drum->click_env * drum->snap * (0.35f + drum->bright * 1.4f);
     float noisy = rng(engine) * drum->noise * (hat ? 0.45f + drum->bright * 0.7f : 1.0f);
     float mixed = body * drum->env + noisy * drum->noise_env + click;
     float coef = 0.025f + drum->tone * drum->tone * 0.95f;
@@ -356,12 +483,11 @@ static float drum_sample(Engine *engine, Drum *drum) {
     float gain = 1.0f + drive * 8.0f;
     float driven = drum->low * gain;
     driven = driven / (1.0f + fabsf(driven));
-    float dcy = drum->decay < 0.004f ? 0.004f : drum->decay;
-    float ndcy = drum->noise_decay < 0.003f ? 0.003f : drum->noise_decay;
-    drum->env *= expf(-1.0f / (dcy * SR));
-    drum->noise_env *= expf(-1.0f / (ndcy * SR));
+    drum->env *= drum->env_k;
+    drum->noise_env *= drum->noise_k;
+    drum->click_env *= drum->click_k;
     drum->age += 1;
-    if (drum->env < 0.0008f && drum->noise_env < 0.0008f && (float)drum->age > click_tau * 4.0f) drum->on = 0;
+    if (drum->env < 0.0008f && drum->noise_env < 0.0008f && (float)drum->age > drum->click_tau * 4.0f) drum->on = 0;
     return driven;
 }
 
@@ -395,17 +521,37 @@ static void note_sample(Engine *engine, Note *note, float *left, float *right) {
         note->band = 0;
     }
     float attack_samples = 1.0f + note->attack * 0.2f * SR;
-    if ((float)note->age < attack_samples) note->env = ((float)note->age + 1.0f) / attack_samples;
-    else note->env *= expf(-1.0f / ((0.04f + note->release * 1.6f) * SR));
+    /* Hold full level for the whole note. Release is the tail after that length. */
+    if (note->left > 0 && (float)note->age < attack_samples) note->env = ((float)note->age + 1.0f) / attack_samples;
+    else if (note->left > 0) note->env = 1.0f;
+    else note->env *= note->release_k;
     note->age += 1;
-    note->left -= 1;
-    /* Slow attacks start below 0.0008; only silence after the ramp finishes. */
-    if (note->left <= 0 || ((float)note->age >= attack_samples && note->env < 0.0008f)) note->on = 0;
+    if (note->left > 0) note->left -= 1;
+    /* Slow attacks start below 0.0008; only silence once the gate is over and the tail is quiet. */
+    if (note->left <= 0 && (float)note->age >= attack_samples && note->env < 0.0008f) note->on = 0;
     float gain = resonated * note->env * note->gain * 0.38f;
     float wide = need_second ? second * note->width * gain * 1.35f : 0.0f;
     *left += gain + wide;
     *right += gain - wide;
 }
+
+static void push_lane(Engine *engine, int lane, int param, float value, int pattern, float cycle, float amount) {
+    if (lane < 0 || lane >= LANE_COUNT || param == P_NONE || param == P_FREQ) return;
+    LaneBox *box = &engine->lanes[lane];
+    int still = amount == 0.0f;
+    int *count = still ? &box->still_count : &box->live_count;
+    if (*count >= LANE_MOTION_CAP) return;
+    LaneMotion *slot = still ? &box->still[*count] : &box->live[*count];
+    slot->param = param;
+    slot->pattern = pattern;
+    slot->value = value;
+    slot->cycle = cycle;
+    slot->amount = amount;
+    (*count)++;
+}
+
+static unsigned phrase_timing_sig(const Engine *engine);
+static void catch_holding(Engine *engine);
 
 static void ingest_phrase(Engine *engine) {
     char *text = engine->phrase_text;
@@ -423,7 +569,10 @@ static void ingest_phrase(Engine *engine) {
     if (atoi(reset + 1)) engine->clock = 0;
     engine->phrase_on = 1;
     engine->phrase_count = 0;
-    engine->motion_count = 0;
+    for (int lane = 0; lane < LANE_COUNT; lane++) {
+        engine->lanes[lane].live_count = 0;
+        engine->lanes[lane].still_count = 0;
+    }
     char *cursor = body + 1;
     char *split = strchr(cursor, '#');
     if (split) *split = 0;
@@ -448,16 +597,59 @@ static void ingest_phrase(Engine *engine) {
         }
         cursor = semi ? semi + 1 : NULL;
     }
-    if (!split) return;
-    char *motion = split + 1;
-    while (motion && *motion && engine->motion_count < MOTION_CAP) {
-        char *semi = strchr(motion, ';');
-        if (semi) *semi = 0;
-        Motion *slot = &engine->motions[engine->motion_count];
-        if (sscanf(motion, "%d:%23[^:]:%f:%d:%f:%f:%d", &slot->lane, slot->id, &slot->value, &slot->pattern, &slot->cycle, &slot->amount, &slot->loop) == 7) {
-            engine->motion_count++;
+    if (split) {
+        char *motion = split + 1;
+        while (motion && *motion) {
+            char *semi = strchr(motion, ';');
+            if (semi) *semi = 0;
+            int lane = 0, pattern = 0, loop = 0;
+            float value = 0, cycle = 0, amount = 0;
+            char id[24];
+            if (sscanf(motion, "%d:%23[^:]:%f:%d:%f:%f:%d", &lane, id, &value, &pattern, &cycle, &amount, &loop) == 7) {
+                push_lane(engine, lane, param_of(id), value, pattern, cycle, amount);
+            }
+            motion = semi ? semi + 1 : NULL;
         }
-        motion = semi ? semi + 1 : NULL;
+    }
+    /* A rebuilt chord grid keeps the running clock. Starts already behind that
+     * clock would otherwise stay silent until the next loop — bars late.
+     * The same grid sent again (the keepalive) must not re-attack. */
+    unsigned sig = phrase_timing_sig(engine);
+    int restarted = atoi(reset + 1);
+    if (!restarted && engine->clock > 0 && sig != engine->phrase_sig) catch_holding(engine);
+    engine->phrase_sig = sig;
+    stamp_held(engine);
+}
+
+static unsigned phrase_timing_sig(const Engine *engine) {
+    unsigned h = 2166136261u;
+    for (int e = 0; e < engine->phrase_count; e++) {
+        const PhraseEv *hit = &engine->phrase[e];
+        if (hit->lane < DRUMS) continue;
+        h = (h ^ (unsigned)hit->sample) * 16777619u;
+        h = (h ^ (unsigned)hit->loop) * 16777619u;
+        h = (h ^ (unsigned)hit->lane) * 16777619u;
+        h = (h ^ (unsigned)hit->note) * 16777619u;
+        h = (h ^ (unsigned)hit->ticks) * 16777619u;
+    }
+    return h;
+}
+
+static void catch_holding(Engine *engine) {
+    float tempo = engine->tempo > 1.0f ? engine->tempo : 120.0f;
+    for (int e = 0; e < engine->phrase_count; e++) {
+        PhraseEv *hit = &engine->phrase[e];
+        if (hit->lane < DRUMS) continue;
+        int loop = hit->loop > 0 ? hit->loop : 1;
+        int pos = engine->clock % loop;
+        int start = hit->sample % loop;
+        int dur = (int)((hit->ticks * SR * 60.0f) / (tempo * 192.0f));
+        if (dur < 1) dur = 1;
+        int elapsed = pos - start;
+        if (elapsed < 0) elapsed += loop;
+        if (elapsed <= 0 || elapsed >= dur) continue;
+        Note *note = arm_note(engine, hit->note, hit->velocity, hit->ticks, hit->params, hit->lane, loop);
+        note->left = dur - elapsed;
     }
 }
 

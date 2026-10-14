@@ -22,7 +22,7 @@ describe("pages and leds", () => {
     assert.equal(pageCount("kick"), 7);
     assert.equal(pageCount("bass"), 9);
     assert.equal(pageCount("lead"), 9);
-    assert.equal(pageCount("chords"), 8);
+    assert.equal(pageCount("chords"), 7);
     assert.equal(lanePages("kick")[0].title, "GEN 1");
     assert.deepEqual(lanePages("kick")[0].groups, ["GEN 1", "VEL"]);
     assert.deepEqual(lanePages("kick")[2].groups, ["COUNT", "RATE"]);
@@ -331,7 +331,57 @@ describe("surface", () => {
     assert.ok(pitchSpread(bass) > columnSpan(bass, 0));
     const chords = renderScreen(defaultProject(), { ...defaultUi(), context: "chords" }, 0);
     const chordNames = chords.labels.filter((label) => label.y === NAME_Y).map((label) => label.text);
-    assert.deepEqual(chordNames, ["V", "P", "C", "A", "V", "P", "C", "A"]);
+    assert.deepEqual(chordNames, ["STA", "COU", "LEN", "MOT", "VAR", "MOO", "TEN", "WAY"]);
+  });
+
+  it("draws chord names with duration blocks, and a piano roll on the arp page", () => {
+    const project = defaultProject();
+    project.working.chords.count = 3;
+    project.working.chords.length = 4;
+    project.working.chords.variation = 0;
+    const bars = renderScreen(project, { ...defaultUi(), context: "chords", page: 0 }, 0);
+    const chordName = bars.labels.find((label) => label.text === "C" && label.y >= HEADER_H && label.y < HEADER_H + VIZ_H);
+    assert.ok(chordName);
+    const degree = bars.labels.find((label) => label.text === "I" && label.x === chordName.x);
+    assert.ok(degree);
+    assert.equal(degree.y, chordName.y + FONT_H + 1);
+    assert.ok(columnSpan(bars, 0) > VIZ_H / 2);
+    assert.equal(columnSpan(bars, 31), 0);
+    const run = (x: number) => {
+      let n = 0;
+      while (x + n < 128 && columnSpan(bars, x + n) > 0) n++;
+      return n;
+    };
+    assert.ok(run(0) < run(64));
+    const play = renderScreen(project, { ...defaultUi(), context: "chords", page: 1 }, 0);
+    assert.ok(play.labels.some((label) => label.text === "RATE"));
+    assert.ok(play.labels.some((label) => label.text === "GATE"));
+    const voiceNames = renderScreen(project, { ...defaultUi(), context: "chords", page: 2 }, 0)
+      .labels.filter((label) => label.y === NAME_Y)
+      .map((label) => label.text);
+    assert.deepEqual(voiceNames.slice(0, 4), ["SPR", "FLO", "OCT", "DIR"]);
+    const zone = (rate: number) => renderScreen(
+      { ...project, working: { ...project.working, chords: { ...project.working.chords, rate: modulated(rate) } } },
+      { ...defaultUi(), context: "chords", page: 1, focus: { label: "RATE V", generator: "rate.value", showPattern: false, held: true, untilTick: 0 } },
+      0,
+    ).header;
+    assert.equal(zone(0), "BLOCK");
+    assert.equal(zone(0.25), "1/16");
+    assert.match(zone(0.75), /^\d/);
+    const roll = renderScreen(project, { ...defaultUi(), context: "chords", page: 2 }, 0);
+    assert.equal(
+      roll.labels.some((label) => label.y >= HEADER_H && label.y < HEADER_H + VIZ_H && /^[A-G]/.test(label.text)),
+      false,
+    );
+    assert.ok(pitchSpread(roll) > 1);
+    assert.ok(columnSpan(roll, 0) > 1);
+    assert.ok(columnSpan(roll, 0) < VIZ_H / 2);
+    const sound = renderScreen(project, { ...defaultUi(), context: "chords", page: 3 }, 0);
+    assert.equal(
+      sound.labels.some((label) => label.y >= HEADER_H && label.y < HEADER_H + VIZ_H && /^[A-G]/.test(label.text)),
+      false,
+    );
+    assert.ok(pitchSpread(sound) > 1);
   });
 
   it("keeps big digits for 0..99 and uses small 3+ digit text past that", () => {

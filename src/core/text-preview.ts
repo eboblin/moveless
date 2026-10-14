@@ -2,7 +2,8 @@ import { countFromUnit } from "./clock.ts";
 import { generateHits } from "./events.ts";
 import { evalModulated } from "./modulate.ts";
 import { generatePhrase, laneSteps } from "./phrase.ts";
-import { LANE_CODE, LANES, QUALITY_NAMES, type LaneId, type Project } from "./types.ts";
+import { chordSymbol } from "./harmony.ts";
+import { LANE_CODE, LANES, type LaneId, type Project } from "./types.ts";
 
 /** One character per sixteenth of that lane's phrase. Same generator as playback. */
 export function textPreview(project: Project): string {
@@ -30,7 +31,7 @@ function lineFor(project: Project, lane: LaneId, steps: number): string {
   }
   for (const harm of generatePhrase(project).harmony) {
     const step = Math.floor(harm.startTick / 48);
-    if (step >= 0 && step < chars.length) chars[step] = String(Math.abs(Math.round(harm.root)) % 10);
+    if (step >= 0 && step < chars.length) chars[step] = chordSymbol(harm, project.global)[0] ?? "-";
   }
   return chars.join("");
 }
@@ -56,7 +57,7 @@ function degreeChar(note: number, octave: number, project: Project): string {
 }
 
 export function chordLabels(project: Project): string[] {
-  return generatePhrase(project).harmony.map((event) => `${event.root}:${QUALITY_NAMES[event.quality]}`);
+  return generatePhrase(project).harmony.map((event) => chordSymbol(event, project.global));
 }
 
 export function phraseStepsOf(project: Project, lane: LaneId): number {

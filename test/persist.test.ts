@@ -82,6 +82,47 @@ describe("project persist", () => {
     assert.equal(parsed.ui.page, 6);
   });
 
+  it("replaces an old chord lane with defaults", () => {
+    const project = defaultProject();
+    const old = {
+      change: { value: 0.35, pattern: 0, cycle: 1, amount: 0 },
+      length: { value: 0.2, pattern: 0, cycle: 1, amount: 0 },
+      play: { mode: 1, rate: 2, gate: 0.4, octaves: 3, spread: 0.9, flow: 0.1, strum: 0.4, direction: 1 },
+    };
+    const stored = {
+      ...project,
+      working: { ...project.working, chords: old },
+      journal: [{ id: "001", color: 3, lanes: { ...project.working, chords: old } }],
+    };
+    const parsed = parseStored(JSON.stringify({
+      version: 1,
+      project: stored,
+      ui: { context: "chords", page: 0, mode: "journal" },
+    }));
+    assert.ok(parsed);
+    const fresh = defaultProject().working.chords;
+    assert.deepEqual(parsed.project.working.chords, fresh);
+    assert.deepEqual(parsed.project.journal[0].lanes.chords, fresh);
+    assert.equal(parsed.project.journal[0].id, "001");
+  });
+
+  it("folds a saved strum into rate", () => {
+    const project = defaultProject();
+    const chords = {
+      ...project.working.chords,
+      strum: { value: 0.8, pattern: 2, cycle: 4, amount: 0 },
+      rate: { value: 0, pattern: 0, cycle: 1, amount: 0 },
+    };
+    const parsed = parseStored(JSON.stringify({
+      version: 1,
+      project: { ...project, working: { ...project.working, chords } },
+      ui: { context: "chords", page: 0, mode: "journal" },
+    }));
+    assert.ok(parsed);
+    assert.equal(parsed.project.working.chords.rate.value, 0.8);
+    assert.equal("strum" in parsed.project.working.chords, false);
+  });
+
   it("drops clipboard when the scene is gone", () => {
     const project = defaultProject();
     project.clipboardSceneId = "missing";

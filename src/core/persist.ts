@@ -5,6 +5,7 @@ import {
   LANES,
   SCALE_IDS,
   type CaptureIntensity,
+  type ChordLane,
   type ContextId,
   type Lanes,
   type Project,
@@ -70,7 +71,8 @@ export function parseStored(raw: string): StoredBundle | null {
   const root = data as Record<string, unknown>;
   if (root.version !== STORE_VERSION) return null;
   if (!root.project || typeof root.project !== "object") return null;
-  const project = mergeProject(root.project as Record<string, unknown>);
+  const source = root.project as Record<string, unknown>;
+  const project = resetStaleChords(mergeProject(source), source);
   const ui = mergeUi(root.ui, project);
   return { project: sanitizeProject(project), ui };
 }
@@ -136,6 +138,31 @@ function mergeProject(raw: Record<string, unknown>): Project {
     captureNonce: Math.max(0, asInt(raw.captureNonce, base.captureNonce)),
     captureIntensity: asIntensity(raw.captureIntensity) ?? base.captureIntensity,
   };
+}
+
+function currentChords(raw: unknown): ChordLane {
+  const base = clone(defaultProject().working.chords);
+  if (!isRecord(raw) || typeof raw.start !== "number") return base;
+  const merged = deepMerge(base, raw) as ChordLane & { strum?: { value?: number } };
+  const strumValue = merged.strum?.value;
+  delete merged.strum;
+  if (typeof strumValue === "number" && strumValue > 0 && merged.rate.value <= 0) {
+    merged.rate = { ...merged.rate, value: Math.min(1, strumValue) };
+  }
+  return merged;
+}
+
+/** A chord lane without `start` is the previous shape. Replace it; do not translate fields. */
+function resetStaleChords(project: Project, raw: Record<string, unknown>): Project {
+  if (isRecord(raw.working)) project.working.chords = currentChords(raw.working.chords);
+  if (Array.isArray(raw.journal)) {
+    raw.journal.forEach((scene, index) => {
+      const saved = project.journal[index];
+      if (!isRecord(scene) || !isRecord(scene.lanes) || !saved?.lanes) return;
+      saved.lanes.chords = currentChords(scene.lanes.chords);
+    });
+  }
+  return project;
 }
 
 function mergeUi(raw: unknown, project: Project): StoredUi {

@@ -10,7 +10,6 @@ import {
   SOUND,
   WANDER_BARS,
   type CaptureIntensity,
-  type ChordPlay,
   type EuclidGen,
   type LaneId,
   type Lanes,
@@ -229,7 +228,6 @@ export function sharedParamIds(): string[] {
     bump(id);
     bump(id);
   }
-  for (const id of ["change", "length", "motion", "variation", "mood", "tension"]) bump(id);
   return [...counts.entries()].filter(([, count]) => count >= 2).map(([id]) => id).sort();
 }
 
@@ -279,7 +277,7 @@ export function captureGenerator(project: Project, lane: LaneId, target: string)
 
 /**
  * Reroll only the parameters listed on one page (binding paths). Avoids importing pages.ts.
- * Groups paths into euclid roots, modulators, play fields, and scalars.
+ * Groups paths into euclid roots, modulators, and scalars.
  */
 export function capturePaths(project: Project, lane: LaneId, paths: string[]): Project {
   if (project.lock[lane]) return project;
@@ -302,8 +300,31 @@ export function capturePaths(project: Project, lane: LaneId, paths: string[]): P
 type CaptureTarget =
   | { kind: "euclid"; key: string; path: string }
   | { kind: "modulated"; key: string; path: string }
-  | { kind: "play"; key: "play" }
   | { kind: "scalar"; key: string; path: string };
+
+const CHORD_RANGE: Record<string, [number, number, boolean]> = {
+  start: [-7, 7, true],
+  count: [1, 16, true],
+  length: [0, 4, true],
+  motion: [0, 7, true],
+  variation: [0, 3, true],
+  mood: [0, 1, false],
+  tension: [0, 1, false],
+  way: [0, 3, true],
+  spread: [0, 1, false],
+  flow: [0, 1, false],
+  octaves: [1, 4, true],
+  direction: [0, 7, true],
+};
+
+function rollChordScalar(key: string, unit: number): number {
+  const spec = CHORD_RANGE[key];
+  if (!spec) return unit;
+  const [min, max, integer] = spec;
+  const value = min + unit * (max - min);
+  if (!integer) return value;
+  return Math.max(min, Math.min(max, Math.round(value)));
+}
 
 function captureTarget(path: string): CaptureTarget | null {
   const euclid = /^(gen[12])\.(length|hits|rotate|probability|velocity(?:\.(?:value|pattern|cycle|amount))?)$/.exec(path);
@@ -314,8 +335,7 @@ function captureTarget(path: string): CaptureTarget | null {
     const base = path.slice(0, -suffix.length);
     return { kind: "modulated", key: base, path: base };
   }
-  if (path.startsWith("play.")) return { kind: "play", key: "play" };
-  if (path === "follow") return { kind: "scalar", key: "follow", path: "follow" };
+  if (!path.includes(".")) return { kind: "scalar", key: path, path };
   return null;
 }
 
@@ -337,15 +357,11 @@ function applyCaptureTarget(
     }
     return;
   }
-  if (target.kind === "play") {
-    const play = root.play;
-    if (play && typeof play === "object") {
-      root.play = touchPlay(play as ChordPlay, roll, intensity);
-    }
-    return;
-  }
   if (intensity === "clear") return;
-  if (typeof root[target.path] === "number") root[target.path] = roll(target.path);
+  if (typeof root[target.path] === "number") {
+    const unit = roll(target.path);
+    root[target.path] = target.path in CHORD_RANGE ? rollChordScalar(target.path, unit) : unit;
+  }
 }
 
 function readNode(root: unknown, path: string): unknown {
@@ -474,21 +490,6 @@ function touchEuclid(
   };
 }
 
-function touchPlay(current: ChordPlay, roll: (...parts: (string | number)[]) => number, intensity: CaptureIntensity): ChordPlay {
-  if (intensity === "clear") return { ...current };
-  const rate = expensiveChance(intensity);
-  const next = { ...current };
-  if (roll("play", "mode?") < rate) next.mode = Math.floor(roll("play", "mode") * 4);
-  if (roll("play", "rate?") < rate) next.rate = Math.floor(roll("play", "rate") * 6);
-  if (roll("play", "gate?") < rate) next.gate = roll("play", "gate");
-  if (roll("play", "oct?") < rate) next.octaves = 1 + Math.floor(roll("play", "oct") * 4);
-  if (roll("play", "spread?") < rate) next.spread = roll("play", "spread");
-  if (roll("play", "flow?") < rate) next.flow = roll("play", "flow");
-  if (roll("play", "strum?") < rate) next.strum = roll("play", "strum");
-  if (roll("play", "dir?") < rate) next.direction = Math.floor(roll("play", "dir") * 3);
-  return next;
-}
-
 function clamp01(value: number): number {
   if (value < 0) return 0;
   if (value > 1) return 1;
@@ -532,13 +533,11 @@ function randomizeNotes(
   }
   if (lane !== "chords") return;
   const chords = lanes.chords;
-  chords.change = touchModulated(chords.change, roll, "change", intensity);
-  chords.length = touchModulated(chords.length, roll, "length", intensity);
-  chords.motion = touchModulated(chords.motion, roll, "motion", intensity);
-  chords.variation = touchModulated(chords.variation, roll, "variation", intensity);
-  chords.mood = touchModulated(chords.mood, roll, "mood", intensity);
-  chords.tension = touchModulated(chords.tension, roll, "tension", intensity);
-  chords.play = touchPlay(chords.play, roll, intensity);
+  chords.rate = touchModulated(chords.rate, roll, "rate", intensity);
+  chords.gate = touchModulated(chords.gate, roll, "gate", intensity);
+  if (intensity === "clear") return;
+  const plain = chords as unknown as Record<string, number>;
+  for (const key of Object.keys(CHORD_RANGE)) plain[key] = rollChordScalar(key, roll(key));
 }
 
 function randomizeSound(

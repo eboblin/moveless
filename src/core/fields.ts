@@ -23,14 +23,18 @@ const EUCLID_KIND = {
   probability: "lerp",
 } as const;
 
-const PLAY_KIND = {
-  mode: "switch",
-  rate: "switch",
-  gate: "lerp",
-  octaves: "switch",
+const CHORD_PLAIN = {
+  start: "switch",
+  count: "switch",
+  length: "switch",
+  motion: "switch",
+  variation: "switch",
+  mood: "lerp",
+  tension: "lerp",
+  way: "switch",
   spread: "lerp",
   flow: "lerp",
-  strum: "lerp",
+  octaves: "switch",
   direction: "switch",
 } as const;
 
@@ -78,12 +82,11 @@ function pushPitched(out: Field[], id: string, lane: PitchedLane): void {
 }
 
 function pushChords(out: Field[], lane: ChordLane): void {
-  for (const key of ["change", "length", "motion", "variation", "mood", "tension"] as const) {
-    pushMod(out, `chords.${key}`, lane[key]);
+  for (const key of Object.keys(CHORD_PLAIN) as (keyof typeof CHORD_PLAIN)[]) {
+    out.push({ path: `chords.${key}`, kind: CHORD_PLAIN[key], value: lane[key] });
   }
-  for (const key of Object.keys(PLAY_KIND) as (keyof typeof PLAY_KIND)[]) {
-    out.push({ path: `chords.play.${key}`, kind: PLAY_KIND[key], value: lane.play[key] });
-  }
+  pushMod(out, "chords.rate", lane.rate);
+  pushMod(out, "chords.gate", lane.gate);
   pushSound(out, "chords", lane.sound);
 }
 

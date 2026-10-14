@@ -101,33 +101,50 @@ function soundPages(ids: readonly string[]): Page[] {
   return pages;
 }
 
+function progPage(): Page {
+  return {
+    id: "prog",
+    title: "PROG",
+    groups: ["WALK", "TONE"],
+    bindings: slots([
+      num("start", "START", -7, 7, 1, true),
+      num("count", "COUNT", 1, 16, 1, true),
+      num("length", "LENGTH", 0, 4, 1, true),
+      num("motion", "MOTION", 0, 7, 1, true),
+      num("variation", "VARIATION", 0, 3, 1, true),
+      num("mood", "MOOD", 0, 1, 0.01),
+      num("tension", "TENSION", 0, 1, 0.01),
+      num("way", "WAY", 0, 3, 1, true),
+    ]),
+  };
+}
+
 function playPage(): Page {
   return {
     id: "play",
     title: "PLAY",
-    groups: ["PLAY", "FLOW"],
+    groups: ["RATE", "GATE"],
+    bindings: slots([...vpca("rate", "RATE"), ...vpca("gate", "GATE")]),
+  };
+}
+
+function voicePage(): Page {
+  return {
+    id: "voice",
+    title: "VOICE",
+    groups: ["VOICE", null],
     bindings: slots([
-      num("play.mode", "MODE", 0, 3, 1, true),
-      num("play.rate", "RATE", 0, 5, 1, true),
-      num("play.gate", "GATE", 0, 1, 0.01),
-      num("play.octaves", "OCT", 1, 4, 1, true),
-      num("play.spread", "SPREAD", 0, 1, 0.01),
-      num("play.flow", "FLOW", 0, 1, 0.01),
-      num("play.strum", "STRUM", 0, 1, 0.01),
-      num("play.direction", "DIR", 0, 2, 1, true),
+      num("spread", "SPREAD", 0, 1, 0.01),
+      num("flow", "FLOW", 0, 1, 0.01),
+      num("octaves", "OCT", 1, 4, 1, true),
+      num("direction", "DIR", 0, 7, 1, true),
     ]),
   };
 }
 
 export function lanePages(lane: LaneId): Page[] {
   if (lane === "chords") {
-    return [
-      pair("change", "CHANGE", "length", "LENGTH"),
-      pair("motion", "MOTION", "variation", "VARIATION"),
-      pair("mood", "MOOD", "tension", "TENSION"),
-      playPage(),
-      ...soundPages(SOUND.chords),
-    ];
+    return [progPage(), playPage(), voicePage(), ...soundPages(SOUND.chords)];
   }
   const pitched = lane === "bass" || lane === "lead";
   return [
@@ -208,7 +225,7 @@ export const PAGE_GROUP_COLOR: Record<PageGroup, number> = {
 export function pageGroup(context: ContextId, index: number): PageGroup {
   if (context === "mix") return "mix";
   if (context === "global") return index === 0 ? "global" : "macro";
-  if (context === "chords") return index < 4 ? "notes" : "sound";
+  if (context === "chords") return index < 3 ? "notes" : "sound";
   if (context === "bass" || context === "lead") {
     if (index < 2) return "pattern";
     if (index < 5) return "notes";

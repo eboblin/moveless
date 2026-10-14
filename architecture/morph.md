@@ -4,7 +4,7 @@
 
 У каждого числового поля есть kind.
 
-- **lerp** — level генератора, `value` и `amount` модулятора, `abSplit`, `follow`, `varAmount`, gate, spread, flow, strum.
+- **lerp** — level генератора, `value` и `amount` модулятора, `abSplit`, `follow`, `varAmount`, gate, spread, flow.
 - **switch** при `t >= 0.5` — pattern id, cycle и offset генератора, cycle модулятора, целые form/play/count/rate.
 
 Промежуточного Cycle между 4 и 7 нет. Pattern 12 и 47 не смешиваются.

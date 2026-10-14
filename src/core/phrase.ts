@@ -10,6 +10,7 @@ import {
 } from "./clock.ts";
 import { generateHits, phraseStepsOf, type Hit } from "./events.ts";
 import { applyFollowMidi, chordTonePitchClasses, degreeToMidi, generateHarmony, harmonyAt, scaleOf } from "./harmony.ts";
+import { hash01 } from "./hash.ts";
 import { bipolarFromUnit, evalModulated, withMacro } from "./modulate.ts";
 import { mod } from "./motif.ts";
 import {
@@ -18,7 +19,7 @@ import {
   isPitched,
   LANES,
   QUALITY_SEMITONES,
-  type ChordPlay,
+  type ChordLane,
   type DrumLane,
   type GlobalSettings,
   type HarmonicEvent,
@@ -39,7 +40,7 @@ export function generatePhrase(project: Project): Phrase {
   const bassSteps = laneSteps(working, "bass", global);
   const leadSteps = laneSteps(working, "lead", global);
   const chordSteps = sixteenthSteps(global.phrase, global.bar);
-  const harmony = generateHarmony(working.chords, global, Math.max(bassSteps, leadSteps, chordSteps), lock.chords ? {} : macros);
+  const harmony = generateHarmony(working.chords, global, Math.max(bassSteps, leadSteps, chordSteps));
   const lanes = {} as Phrase["lanes"];
   const steps = {} as Phrase["steps"];
   for (const lane of LANES) {
@@ -71,7 +72,7 @@ function eventsFor(
 ): TimedEvent[] {
   if (isDrum(lane)) return drumEvents(lanes[lane], lane, global, macros, steps);
   if (isPitched(lane)) return pitchedEvents(lanes[lane], lane, global, macros, harmony, steps);
-  return chordAudio(lanes.chords.play, harmony, global, macros, lanes.chords.sound);
+  return chordAudio(lanes.chords, harmony, global, macros, lanes.chords.sound);
 }
 
 function macro(macros: Record<string, number>, id: string): number {
@@ -153,8 +154,88 @@ function pitchedEvents(
   return out;
 }
 
+export interface ChordFigure {
+  mode: "block" | "arp";
+  ticks: number;
+  /** Header while the rate value knob is held. */
+  label: string;
+}
+
+/** 0 is a block chord. Above that, the rate table runs from 1/8 to 1/64 as an arp. */
+export function chordFigure(unit: number): ChordFigure {
+  if (unit <= 0) return { mode: "block", ticks: 0, label: "BLOCK" };
+  const index = Math.min(RATES.length - 1, Math.floor(Math.min(1, unit) * RATES.length));
+  const rate = RATES[index] ?? RATES[0];
+  return { mode: "arp", ticks: rate.ticks, label: rate.id };
+}
+
+/** 0 up, 1 down, 2 alternate chords, 3 up-down, 4 down-up, 5 in, 6 out, 7 random. */
+const DIRECTION_LABEL = ["UP", "DOWN", "ALT", "UP DOWN", "DOWN UP", "IN", "OUT", "RAND"] as const;
+
+export function directionLabel(direction: number): string {
+  const index = Math.max(0, Math.min(DIRECTION_LABEL.length - 1, Math.round(direction)));
+  return DIRECTION_LABEL[index] ?? "UP";
+}
+
+/** Order the chord tones for one arp cycle. */
+export function chordOrder(notes: readonly number[], direction: number, chordIndex: number, seed: number): number[] {
+  const dir = Math.max(0, Math.min(DIRECTION_LABEL.length - 1, Math.round(direction)));
+  let ordered = notes.slice();
+  if (dir === 1 || (dir === 2 && chordIndex % 2 === 1)) ordered.reverse();
+  else if (dir === 4) ordered.reverse();
+  else if (dir === 5) ordered = endsFirst(ordered);
+  else if (dir === 6) ordered = middleFirst(ordered);
+  else if (dir === 7) ordered = shuffled(ordered, seed, chordIndex);
+  if (dir === 3 || dir === 4) ordered = withReturn(ordered);
+  return ordered;
+}
+
+function withReturn(notes: number[]): number[] {
+  if (notes.length < 3) return notes;
+  return notes.concat(notes.slice(1, -1).reverse());
+}
+
+function endsFirst(notes: number[]): number[] {
+  const out: number[] = [];
+  let lo = 0;
+  let hi = notes.length - 1;
+  while (lo <= hi) {
+    out.push(notes[lo]);
+    lo += 1;
+    if (lo <= hi) {
+      out.push(notes[hi]);
+      hi -= 1;
+    }
+  }
+  return out;
+}
+
+function middleFirst(notes: number[]): number[] {
+  const n = notes.length;
+  const mid = Math.floor((n - 1) / 2);
+  const out: number[] = [];
+  for (let k = 0; k < n; k++) {
+    const mag = Math.ceil(k / 2);
+    const index = k % 2 === 0 ? mid - mag : mid + mag;
+    const note = notes[index];
+    if (note !== undefined) out.push(note);
+  }
+  return out;
+}
+
+function shuffled(notes: number[], seed: number, chordIndex: number): number[] {
+  const out = notes.slice();
+  for (let i = out.length - 1; i > 0; i--) {
+    const j = Math.floor(hash01(seed, "chords", "order", chordIndex, i) * (i + 1));
+    const swap = out[i];
+    out[i] = out[j] ?? out[i];
+    out[j] = swap;
+  }
+  return out;
+}
+
 function chordAudio(
-  play: ChordPlay,
+  lane: ChordLane,
   harmony: HarmonicEvent[],
   global: GlobalSettings,
   macros: Record<string, number>,
@@ -162,16 +243,19 @@ function chordAudio(
 ): TimedEvent[] {
   const scale = scaleOf(global.scale);
   const rootPc = mod(global.root + global.transpose, 12);
-  const rate = RATES[Math.max(0, Math.min(RATES.length - 1, Math.round(play.rate)))] ?? RATES[1];
-  const octaves = Math.max(1, Math.round(play.octaves));
+  const octaves = Math.max(1, Math.round(lane.octaves));
   const out: TimedEvent[] = [];
   harmony.forEach((harm, index) => {
-    const tones = voices(harm, scale, rootPc, play, octaves, index);
-    const gateTicks = Math.max(1, Math.round(rate.ticks * clampGate(play.gate)));
-    tones.forEach((note, voice) => {
-      const arpTick = play.mode === 1 || play.mode === 3 ? voice * rate.ticks : 0;
-      const strumTick = play.mode === 2 || play.mode === 3 ? Math.round(voice * play.strum * SIXTEENTH_TICKS) : 0;
-      const start = harm.startTick + arpTick + strumTick;
+    const voiced = voices(harm, scale, rootPc, lane, octaves);
+    const ordered = chordOrder(voiced, lane.direction, index, global.seed);
+    const hits = walkChord(harm, voiced, ordered, (tick) => {
+      const step = tick / SIXTEENTH_TICKS;
+      const rateU = evalModulated(withMacro(lane.rate, macro(macros, "rate")), step);
+      const gateU = evalModulated(withMacro(lane.gate, macro(macros, "gate")), step);
+      return { ...chordFigure(rateU), gate: gateU };
+    });
+    hits.forEach(({ note, delay, lengthTicks }) => {
+      const start = harm.startTick + delay;
       const rendered = soundValues(sound, start / SIXTEENTH_TICKS, macros);
       const sample = tickToSample(start, global.tempo);
       out.push({
@@ -181,7 +265,7 @@ function chordAudio(
         sampleOffset: sampleOffset(sample),
         note,
         velocity: 0.85,
-        lengthTicks: play.mode === 0 && play.strum === 0 ? harm.lengthTicks : gateTicks,
+        lengthTicks,
         step: Math.floor(harm.startTick / SIXTEENTH_TICKS),
         sound: rendered,
       });
@@ -190,22 +274,75 @@ function chordAudio(
   return out;
 }
 
+type FigureAt = ChordFigure & { gate: number };
+
+/**
+ * Rate and gate are read once per note, so the figure follows their envelopes
+ * at the resolution the pattern is drawn. A block is rechecked each sixteenth.
+ */
+function walkChord(
+  harm: HarmonicEvent,
+  voiced: readonly number[],
+  ordered: readonly number[],
+  at: (tick: number) => FigureAt,
+): { note: number; delay: number; lengthTicks: number }[] {
+  const length = harm.lengthTicks;
+  const hits: { note: number; delay: number; lengthTicks: number }[] = [];
+  let cursor = 0;
+  let voice = 0;
+  let mode: FigureAt["mode"] | null = null;
+  while (cursor < length) {
+    const now = at(harm.startTick + cursor);
+    if (now.mode !== mode) {
+      voice = 0;
+      mode = now.mode;
+    }
+    if (now.mode === "block" || now.ticks <= 0) {
+      const end = blockEnd(cursor, length, harm.startTick, at);
+      voiced.forEach((note) => hits.push({ note, delay: cursor, lengthTicks: Math.max(1, end - cursor) }));
+      cursor = end;
+      mode = null;
+      continue;
+    }
+    if (ordered.length === 0) break;
+    const note = ordered[voice % ordered.length];
+    if (note === undefined) break;
+    const step = Math.max(1, now.ticks);
+    const next = Math.min(length, cursor + step);
+    const gateTicks = Math.max(1, Math.round(step * clampGate(now.gate)));
+    const room = Math.max(1, Math.min(gateTicks, next - cursor, length - cursor));
+    hits.push({ note, delay: cursor, lengthTicks: room });
+    voice += 1;
+    cursor = next;
+  }
+  return hits;
+}
+
+/** Leave a block on the sixteenth where rate steps out of it. */
+function blockEnd(cursor: number, length: number, start: number, at: (tick: number) => FigureAt): number {
+  let tick = Math.min(length, cursor + SIXTEENTH_TICKS);
+  while (tick < length) {
+    const later = at(start + tick);
+    if (later.mode !== "block" && later.ticks > 0) return tick;
+    tick = Math.min(length, tick + SIXTEENTH_TICKS);
+  }
+  return length;
+}
+
 type ChordLaneSound = Parameters<typeof soundValues>[0];
 
-function voices(harm: HarmonicEvent, scale: readonly number[], rootPc: number, play: ChordPlay, octaves: number, index: number): number[] {
+function voices(harm: HarmonicEvent, scale: readonly number[], rootPc: number, lane: ChordLane, octaves: number): number[] {
   const rootPitch = pitchOf(harm.root, scale, rootPc);
   const semis = QUALITY_SEMITONES[harm.quality] ?? QUALITY_SEMITONES[0];
   let notes: number[] = [];
   for (let oct = 0; oct < octaves; oct++) {
     semis.forEach((semi, voice) => {
-      const spread = voice % 2 === 1 ? Math.round(play.spread) : 0;
+      const spread = voice % 2 === 1 ? Math.round(lane.spread) : 0;
       notes.push(CHORD_OCTAVE * 12 + rootPitch + semi + (oct + spread) * 12);
     });
   }
-  if (play.direction === 1) notes.reverse();
-  if (play.direction === 2 && index % 2 === 1) notes.reverse();
-  if (play.flow > 0 && notes.length > 1) {
-    const pull = Math.round((play.flow - 0.5) * 2);
+  if (lane.flow > 0 && notes.length > 1) {
+    const pull = Math.round((lane.flow - 0.5) * 2);
     notes = notes.map((note, i) => note + (i - (notes.length - 1) / 2) * pull);
   }
   return notes;

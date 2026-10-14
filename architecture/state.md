@@ -24,7 +24,7 @@ Mute убирает lane из слышимого выхода. Harmonic events C
 
 Bass и Lead дополнительно: `follow`, `degree`, `range`, `length` (длительность ноты), `repeat`, `step`, восемь sound-модуляторов. Отдельного lane.velocity нет — громкость из `gen*.velocity`.
 
-Chords: `change`, `length`, `motion`, `variation`, `mood`, `tension`, прямая страница `play`, восемь sound-модуляторов.
+Chords: `start`, `count`, `length` (доля 0..4: шестнадцатая, восьмая, доля, полтакта, такт), `motion`, `variation`, `mood`, `tension`, `way`, генераторы `rate` / `gate`, прямые `spread`, `flow`, `octaves`, `direction`, восемь sound-модуляторов. `rate` 0 — блок; (0, 1] — арпеджио от 1/8 до 1/64, длина ноты `gate` на шаг. `rate` и `gate` читаются на каждой ноте арпеджио; блок проверяется раз в шестнадцатую, так что фигура может смениться внутри аккорда. `direction`: 0 вверх, 1 вниз, 2 через аккорд, 3 вверх-вниз, 4 вниз-вверх, 5 с краёв, 6 из середины, 7 случайно от seed. Макрос `length` на аккорды не действует.
 
 Метр — `global.bar`. `follow` только у bass/lead.
 
@@ -59,6 +59,6 @@ Ratchet и Repeat считают исходное событие за едини
 
 ## Гармония
 
-`HarmonicEvent` — `startTick`, `lengthTicks`, `root` (ступень), `quality` (0..7: maj, min, sus2, sus4, 7, m7, dim, aug). Bass и Lead квантуют желаемую ступень к тонам этого аккорда на величину `follow`. Направление arp на их ноты не влияет.
+`HarmonicEvent` — `startTick`, `lengthTicks`, `root` (ступень), `quality` (0..7: maj, min, sus2, sus4, 7, m7, dim, aug). Длины сидят на сетке долей такта и в сумме равны фразе. `variation` выше нуля укорачивает часть аккордов до проходящих, время забирает сосед. Качество одно на фразу, из `mood` и `tension`. Bass и Lead квантуют желаемую ступень к тонам этого аккорда на величину `follow`. Порядок голосов аккорда на их ноты не влияет.
 
 Генерация фразы и preview — одна функция `generatePhrase`.

@@ -58,25 +58,28 @@ export interface PitchedLane {
   sound: Record<string, Modulated>;
 }
 
-export interface ChordPlay {
-  mode: number;
-  rate: number;
-  gate: number;
-  octaves: number;
+export interface ChordLane {
+  /** Starting scale degree. */
+  start: number;
+  /** How many chords fill the phrase. */
+  count: number;
+  /** Base harmonic unit: 0 sixteenth, 1 eighth, 2 beat, 3 half bar, 4 bar. */
+  length: number;
+  /** Scale steps between chords. */
+  motion: number;
+  /** Pitch jitter and how many chords become passing. */
+  variation: number;
+  mood: number;
+  tension: number;
+  /** 0 up, 1 down, 2 alternate, 3 random from the seed. */
+  way: number;
   spread: number;
   flow: number;
-  strum: number;
+  octaves: number;
+  /** 0 up, 1 down, 2 alternate chords, 3 up-down, 4 down-up, 5 in, 6 out, 7 random. Voice order only. */
   direction: number;
-}
-
-export interface ChordLane {
-  change: Modulated;
-  length: Modulated;
-  motion: Modulated;
-  variation: Modulated;
-  mood: Modulated;
-  tension: Modulated;
-  play: ChordPlay;
+  rate: Modulated;
+  gate: Modulated;
   sound: Record<string, Modulated>;
 }
 

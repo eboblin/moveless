@@ -26,7 +26,7 @@ import {
   setMacro,
   audibleEvents,
 } from "../src/core/performance.ts";
-import { generatePhrase, previewPhrase } from "../src/core/phrase.ts";
+import { chordOrder, generatePhrase, previewPhrase } from "../src/core/phrase.ts";
 import { chordLabels, textPreview } from "../src/core/text-preview.ts";
 import { punch } from "../src/core/morph.ts";
 import type { Project } from "../src/core/types.ts";
@@ -305,8 +305,8 @@ describe("harmony", () => {
     project.working.bass.degree = modulated(0.5 + 1 / 14);
     project.working.bass.range = modulated(1);
     project.working.bass.follow = 1;
-    project.working.chords.mood = modulated(0);
-    project.working.chords.tension = modulated(0);
+    project.working.chords.mood = 0;
+    project.working.chords.tension = 0;
     const followed = generatePhrase(project).lanes.bass[0].note;
     project.working.bass.follow = 0;
     const free = generatePhrase(project).lanes.bass[0].note;
@@ -315,7 +315,7 @@ describe("harmony", () => {
     project.mute.chords = true;
     const phrase = generatePhrase(project);
     assert.ok(phrase.harmony.length > 0);
-    assert.equal(chordLabels(project)[0], "0:maj");
+    assert.equal(chordLabels(project)[0], "C");
     const heard = audibleEvents(project, phrase.lanes);
     assert.equal(heard.some((event) => event.lane === "chords"), false);
     assert.equal(heard.some((event) => event.lane === "bass"), true);
@@ -341,9 +341,9 @@ describe("harmony", () => {
   it("follows the sounding chord tones, including chromatic ones off the scale", () => {
     const project = bar(defaultProject());
     project.global.scale = "minor";
-    project.working.chords.mood = modulated(0);
-    project.working.chords.tension = modulated(0);
-    project.working.chords.change = modulated(0);
+    project.working.chords.mood = 0;
+    project.working.chords.tension = 0;
+    project.working.chords.count = 1;
     project.working.bass.follow = 1;
     project.working.bass.degree = modulated(0.5 + 2 / 14);
     project.working.bass.range = modulated(1);
@@ -357,14 +357,100 @@ describe("harmony", () => {
     }
   });
 
+  it("orders chord tones up, down, across, and back through the chord", () => {
+    const notes = [48, 52, 55];
+    assert.deepEqual(chordOrder(notes, 0, 0, 1), [48, 52, 55]);
+    assert.deepEqual(chordOrder(notes, 1, 0, 1), [55, 52, 48]);
+    assert.deepEqual(chordOrder(notes, 2, 0, 1), [48, 52, 55]);
+    assert.deepEqual(chordOrder(notes, 2, 1, 1), [55, 52, 48]);
+    assert.deepEqual(chordOrder(notes, 3, 0, 1), [48, 52, 55, 52]);
+    assert.deepEqual(chordOrder(notes, 4, 0, 1), [55, 52, 48, 52]);
+    assert.deepEqual(chordOrder(notes, 5, 0, 1), [48, 55, 52]);
+    assert.deepEqual(chordOrder(notes, 6, 0, 1), [52, 55, 48]);
+    assert.deepEqual(chordOrder(notes, 7, 0, 1), chordOrder(notes, 7, 0, 1));
+    const again = chordOrder(notes, 7, 0, 1).join();
+    assert.ok([2, 3, 4, 5, 6, 7, 8, 9].some((seed) => chordOrder(notes, 7, 0, seed).join() !== again));
+  });
+
+  it("holds a block for the chord and repeats an arp inside it", () => {
+    const project = bar(defaultProject(), 1);
+    project.global.phrase = 1;
+    project.working.chords.count = 1;
+    project.working.chords.length = 4;
+    project.working.chords.variation = 0;
+    project.working.chords.octaves = 1;
+    project.working.chords.direction = 0;
+    const chordTicks = 16 * 48;
+    project.working.chords.rate = modulated(0);
+    const block = generatePhrase(project).lanes.chords;
+    assert.ok(block.length >= 3);
+    assert.ok(block.every((event) => event.tick === 0 && event.lengthTicks === chordTicks));
+
+    project.working.chords.rate = modulated(0.25);
+    project.working.chords.gate = modulated(0.5);
+    const arp = generatePhrase(project).lanes.chords;
+    const step = arp[1].tick - arp[0].tick;
+    assert.ok(step > 0);
+    assert.ok(arp.length > block.length);
+    for (const event of arp) {
+      assert.ok(event.lengthTicks <= step);
+      assert.ok(event.tick + event.lengthTicks <= chordTicks);
+    }
+  });
+
+  it("rereads rate and gate before the chord ends", () => {
+    const project = bar(defaultProject(), 1);
+    project.global.phrase = 1;
+    project.working.chords.count = 1;
+    project.working.chords.length = 4;
+    project.working.chords.variation = 0;
+    project.working.chords.octaves = 1;
+    project.working.chords.direction = 0;
+    const chordTicks = 16 * 48;
+    project.working.chords.rate = modulated(0.5, 2, 16, 0.5);
+    project.working.chords.gate = modulated(0.5);
+    const mixed = generatePhrase(project).lanes.chords;
+    const early = mixed.filter((event) => event.tick < chordTicks / 2);
+    const late = mixed.filter((event) => event.tick >= chordTicks / 2);
+    assert.ok(new Set(early.map((event) => event.tick)).size > 3);
+    assert.ok(early.every((event) => event.lengthTicks < 48));
+    assert.equal(new Set(late.map((event) => event.tick)).size, 1);
+    assert.ok(late.length >= 3);
+    assert.ok(late.every((event) => event.tick + event.lengthTicks === chordTicks));
+
+    project.working.chords.rate = modulated(0.75);
+    project.working.chords.gate = modulated(0.15, 1, 16, 0.8);
+    const arp = generatePhrase(project).lanes.chords;
+    const short = arp.find((event) => event.tick === 0);
+    const later = arp.find((event) => event.tick > chordTicks / 2 && event.tick + event.lengthTicks < chordTicks);
+    assert.ok(short && later);
+    assert.ok(later.lengthTicks > short.lengthTicks);
+  });
+
   it("keeps bass notes stable when the arp direction changes", () => {
     const project = bar(defaultProject());
-    project.working.chords.play.mode = 1;
+    project.working.chords.rate = modulated(1);
     const up = generatePhrase(project);
-    project.working.chords.play.direction = 1;
+    project.working.chords.direction = 1;
     const down = generatePhrase(project);
     assert.deepEqual(up.lanes.bass.map((event) => event.note), down.lanes.bass.map((event) => event.note));
     assert.notDeepEqual(up.lanes.chords.map((event) => event.note), down.lanes.chords.map((event) => event.note));
+  });
+
+  it("fits chord lengths to the bar grid and shortens passing chords", () => {
+    const project = defaultProject();
+    project.working.chords.count = 3;
+    project.working.chords.length = 4;
+    project.working.chords.variation = 0;
+    const even = generatePhrase(project).harmony.map((event) => event.lengthTicks / 48);
+    assert.equal(even.reduce((sum, length) => sum + length, 0), 64);
+    assert.deepEqual(even, [16, 16, 32]);
+    project.working.chords.count = 4;
+    project.working.chords.variation = 3;
+    const passed = generatePhrase(project).harmony.map((event) => event.lengthTicks / 48);
+    assert.equal(passed.reduce((sum, length) => sum + length, 0), 64);
+    assert.ok(Math.min(...passed) < Math.max(...passed));
+    for (const length of [...even, ...passed]) assert.equal(length % 4, 0);
   });
 
   it("walks repeats along the scale", () => {

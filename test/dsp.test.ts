@@ -95,6 +95,71 @@ describe("dsp adapter", () => {
     assert.ok(engine.drums[0].age < ageMid);
   });
 
+  it("holds a block chord until its length, then releases", () => {
+    const tempo = 120;
+    const lengthTicks = 16 * SIXTEENTH_TICKS;
+    const gate = tickToSample(lengthTicks, tempo);
+    const engine = createEngine();
+    loadPhrase(engine, [{
+      sample: 0,
+      loop: gate * 4,
+      lane: "chords",
+      note: 60,
+      velocity: 110,
+      lengthTicks,
+      params: mapSound("chords", {
+        shape: 0, detune: 0.5, fm: 0, width: 0, cutoff: 1, resonance: 0, attack: 0.5, release: 0.5,
+      }),
+    }], tempo, true);
+    const late = Math.floor(gate * 0.85);
+    for (let i = 0; i < Math.ceil(late / 128); i++) renderClock(engine);
+    const held = engine.notes.find((note) => note.on);
+    assert.ok(held);
+    assert.ok(held.env > 0.9);
+    assert.ok(held.left > 0);
+    let guard = 0;
+    while (held.on && held.left > 0 && guard < 2000) {
+      renderClock(engine);
+      guard += 1;
+    }
+    assert.equal(held.left, 0);
+    const atGate = held.env;
+    for (let i = 0; i < 220; i++) renderClock(engine);
+    assert.ok(held.env < atGate * 0.5);
+  });
+
+  it("starts a rebuilt chord that the clock has already passed", () => {
+    const tempo = 120;
+    const bar = tickToSample(16 * SIXTEENTH_TICKS, tempo);
+    const loop = bar * 4;
+    const chord = (sample: number, note: number) => ({
+      sample,
+      loop,
+      lane: "chords" as const,
+      note,
+      velocity: 100,
+      lengthTicks: 16 * SIXTEENTH_TICKS,
+      params: [],
+    });
+    const kick = {
+      sample: 0, loop, lane: "kick" as const, note: 36, velocity: 100, lengthTicks: SIXTEENTH_TICKS, params: [],
+    };
+    const engine = createEngine();
+    loadPhrase(engine, [chord(0, 60), chord(bar, 64), kick], tempo, true);
+    engine.clock = bar + Math.floor(bar / 2);
+    loadPhrase(engine, [chord(0, 60), chord(bar, 67), kick], tempo, false);
+    const held = engine.notes.find((note) => note.on);
+    assert.ok(held);
+    assert.ok(Math.abs(held.freq - 440 * 2 ** ((67 - 69) / 12)) < 0.01);
+    assert.ok(held.left < bar);
+    assert.ok(held.left > bar / 4);
+    assert.equal(engine.drums[0].on, false);
+    const age = held.age;
+    renderClock(engine);
+    loadPhrase(engine, engine.phrase, tempo, false);
+    assert.equal(held.age, age + 128);
+  });
+
   it("keeps default bass audible through a slow attack", () => {
     const project = defaultProject();
     for (const lane of ["kick", "snare", "hat", "perc", "lead", "chords"] as const) project.mute[lane] = true;
@@ -132,6 +197,26 @@ describe("dsp adapter", () => {
       renderClock(engine);
       heard += 128;
     }
+    assert.ok(engine.notes[0].cutoff > 0.9);
+  });
+
+  it("follows a held chord cutoff when amount is zero", () => {
+    const tempo = 120;
+    const sixteenth = tickToSample(SIXTEENTH_TICKS, tempo);
+    const loop = sixteenth * 16;
+    const engine = createEngine();
+    loadPhrase(engine, [{
+      sample: 0,
+      loop,
+      lane: "chords",
+      note: 60,
+      velocity: 100,
+      lengthTicks: 16 * 48,
+      params: mapSound("chords", { shape: 0.2, detune: 0.5, fm: 0, width: 0, cutoff: 0, resonance: 0, attack: 0, release: 0.8 }),
+    }], tempo, true, [{
+      lane: "chords", id: "cutoff", value: 0.95, pattern: 0, cycle: 8, amount: 0, loop,
+    }]);
+    renderClock(engine);
     assert.ok(engine.notes[0].cutoff > 0.9);
   });
 

@@ -218,8 +218,12 @@ function paint(): void {
 function advanceClock(): void {
   const now = Date.now();
   if (!clockMs) clockMs = now;
-  const dt = Math.max(0, Math.min(100, now - clockMs));
+  const elapsed = now - clockMs;
   clockMs = now;
+  /* A knob scrub blocks this thread while the voice keeps running. Dropping
+   * the gap leaves the playhead bars behind the chords. A clock jump past
+   * half a minute is ignored so a time discontinuity does not fast-forward. */
+  const dt = elapsed < 0 || elapsed > 30000 ? 0 : elapsed;
   const starting = session.playing && !voiceOn;
   if (starting) session = { ...session, tick: 0 };
   else if (session.playing && dt > 0) {

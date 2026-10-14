@@ -7,6 +7,31 @@ import type { BlockEvent, LoopEvent, Motion } from "./schedule.ts";
 const TWO_PI = Math.PI * 2;
 const DRUM_COUNT = 4;
 const NOTE_COUNT = 12;
+const LANE_COUNT = 8;
+const LANE_MOTION_CAP = 8;
+
+const P_NONE = 0;
+const P_FREQ = 1;
+const P_DCY = 2;
+const P_NEDCY = 3;
+const P_MIX = 4;
+const P_DIST = 5;
+const P_NFQ = 6;
+const P_PAN = 7;
+const P_MRATE = 8;
+const P_NFFRQ = 9;
+const P_ATK = 10;
+const P_MAMT = 11;
+const P_LVL = 12;
+const P_SHAPE = 13;
+const P_DETUNE = 14;
+const P_FM = 15;
+const P_NOISE = 16;
+const P_CUTOFF = 17;
+const P_RESONANCE = 18;
+const P_ATTACK = 19;
+const P_RELEASE = 20;
+const P_WIDTH = 21;
 
 export interface Engine {
   noise: number;
@@ -16,6 +41,9 @@ export interface Engine {
   motions: Motion[];
   clock: number;
   tempo: number;
+  /** Pitched-note timing of the phrase last loaded. Same grid must not re-attack. */
+  holdSig: string;
+  lanes: LaneBox[];
 }
 
 interface DrumVoice {
@@ -44,6 +72,11 @@ interface DrumVoice {
   low: number;
   base: number;
   loop: number;
+  envK: number;
+  noiseK: number;
+  clickK: number;
+  clickEnv: number;
+  clickTau: number;
 }
 
 interface NoteVoice {
@@ -68,6 +101,20 @@ interface NoteVoice {
   band: number;
   lane: number;
   loop: number;
+  releaseK: number;
+}
+
+interface LaneMotion {
+  param: number;
+  pattern: number;
+  value: number;
+  cycle: number;
+  amount: number;
+}
+
+interface LaneBox {
+  live: LaneMotion[];
+  still: LaneMotion[];
 }
 
 export function createEngine(): Engine {
@@ -79,15 +126,55 @@ export function createEngine(): Engine {
     motions: [],
     clock: 0,
     tempo: 120,
+    holdSig: "",
+    lanes: emptyLanes(),
   };
 }
 
 /** Store a looping phrase. `reset` starts the audio clock at the downbeat. */
 export function loadPhrase(engine: Engine, events: LoopEvent[], tempo: number, reset: boolean, motions: Motion[] = []): void {
+  const sig = holdSig(events);
+  const previous = engine.holdSig;
   engine.phrase = events;
   engine.motions = motions;
-  engine.tempo = tempo;
-  if (reset) engine.clock = 0;
+  engine.tempo = Math.max(1, tempo);
+  engine.holdSig = sig;
+  bucketMotions(engine, motions);
+  stampHeld(engine);
+  if (reset) {
+    engine.clock = 0;
+    return;
+  }
+  if (engine.clock > 0 && sig !== previous) catchHolding(engine);
+}
+
+/** Notes already under the playhead when a knob rebuilds the grid. Drums stay put. */
+function holdSig(events: LoopEvent[]): string {
+  let sig = "";
+  for (const event of events) {
+    if (isDrumLane(event.lane)) continue;
+    sig += `${event.lane}:${event.sample}:${event.loop}:${event.note}:${event.lengthTicks};`;
+  }
+  return sig;
+}
+
+function isDrumLane(lane: LaneId): boolean {
+  return lane === "kick" || lane === "snare" || lane === "hat" || lane === "perc";
+}
+
+function catchHolding(engine: Engine): void {
+  const tempo = Math.max(1, engine.tempo);
+  for (const event of engine.phrase) {
+    if (isDrumLane(event.lane)) continue;
+    const loop = Math.max(1, event.loop);
+    const pos = ((engine.clock % loop) + loop) % loop;
+    const start = ((event.sample % loop) + loop) % loop;
+    const dur = Math.max(1, Math.round((event.lengthTicks * SAMPLE_RATE * 60) / (tempo * 192)));
+    let elapsed = pos - start;
+    if (elapsed < 0) elapsed += loop;
+    if (elapsed <= 0 || elapsed >= dur) continue;
+    armNote(engine, steal(engine), event, dur - elapsed, loop);
+  }
 }
 
 /** One shared-memory write: a phrase the voice loops on its own sample clock. */
@@ -189,7 +276,7 @@ function trigger(engine: Engine, event: BlockEvent | LoopEvent, tempo: number): 
   }
   const note = steal(engine);
   const samples = Math.max(1, Math.round((event.lengthTicks * SAMPLE_RATE * 60) / (tempo * 192)));
-  armNote(note, event, samples, loop);
+  armNote(engine, note, event, samples, loop);
 }
 
 function armDrum(drum: DrumVoice, event: BlockEvent | LoopEvent, pitch: number, loop: number): void {
@@ -222,9 +309,12 @@ function armDrum(drum: DrumVoice, event: BlockEvent | LoopEvent, pitch: number, 
   drum.bend = read(event.params, ["mamt"], lane === 0 ? 0.55 : lane === 3 ? 0.35 : 0.1);
   drum.body = read(event.params, ["lvl"], hat ? 0.12 : 1);
   drum.low = 0;
+  drum.clickEnv = 1;
+  refreshDrumEnv(drum);
+  refreshClick(drum);
 }
 
-function armNote(note: NoteVoice, event: BlockEvent | LoopEvent, samples: number, loop: number): void {
+function armNote(engine: Engine, note: NoteVoice, event: BlockEvent | LoopEvent, samples: number, loop: number): void {
   note.on = true;
   note.phase = 0;
   note.phase2 = 0;
@@ -246,6 +336,8 @@ function armNote(note: NoteVoice, event: BlockEvent | LoopEvent, samples: number
   note.gain = event.velocity / 127;
   note.low = 0;
   note.band = 0;
+  refreshRelease(note);
+  stampNote(engine, note);
 }
 
 function drumSample(engine: Engine, drum: DrumVoice): number {
@@ -258,8 +350,7 @@ function drumSample(engine: Engine, drum: DrumVoice): number {
   drum.phase2 += inc * (1 + drum.spread * (hat ? 2.5 : 0.12) + (hat ? drum.bright * 0.55 : 0));
   const bodyOsc = (Math.sin(drum.phase) + Math.sin(drum.phase2) * spreadMul) * drum.body;
 
-  const clickTau = 10 + drum.snap * 160 + (1 - drum.bright) * 260;
-  const click = rng(engine) * Math.exp(-drum.age / clickTau) * drum.snap * (0.35 + drum.bright * 1.4);
+  const click = rng(engine) * drum.clickEnv * drum.snap * (0.35 + drum.bright * 1.4);
 
   const noisy = rng(engine) * drum.noise * (hat ? 0.45 + drum.bright * 0.7 : 1);
   const mixed = bodyOsc * drum.env + noisy * drum.noiseEnv + click;
@@ -268,10 +359,11 @@ function drumSample(engine: Engine, drum: DrumVoice): number {
   // Drive is squared so the top of the knob stays the smash zone, not a dead plateau.
   const driven = shapeDrive(drum.low, drum.drive * drum.drive);
 
-  drum.env *= Math.exp(-1 / (Math.max(0.004, drum.decay) * SAMPLE_RATE));
-  drum.noiseEnv *= Math.exp(-1 / (Math.max(0.003, drum.noiseDecay) * SAMPLE_RATE));
+  drum.env *= drum.envK;
+  drum.noiseEnv *= drum.noiseK;
+  drum.clickEnv *= drum.clickK;
   drum.age += 1;
-  if (drum.env < 0.0008 && drum.noiseEnv < 0.0008 && drum.age > clickTau * 4) drum.on = false;
+  if (drum.env < 0.0008 && drum.noiseEnv < 0.0008 && drum.age > drum.clickTau * 4) drum.on = false;
   return driven;
 }
 
@@ -306,12 +398,13 @@ function noteSample(engine: Engine, note: NoteVoice): [number, number] {
     note.band = 0;
   }
   const attackSamples = 1 + note.attack * 0.2 * SAMPLE_RATE;
-  if (note.age < attackSamples) note.env = (note.age + 1) / attackSamples;
-  else note.env *= Math.exp(-1 / ((0.04 + note.release * 1.6) * SAMPLE_RATE));
+  // Hold full level for the whole note. Release is the tail after that length, not a decay from the attack.
+  if (note.left > 0 && note.age < attackSamples) note.env = (note.age + 1) / attackSamples;
+  else if (note.left > 0) note.env = 1;
+  else note.env *= note.releaseK;
   note.age += 1;
-  note.left -= 1;
-  // Do not silence during attack: a slow attack starts below 0.0008 and would mute the note.
-  if (note.left <= 0 || (note.age >= attackSamples && note.env < 0.0008)) note.on = false;
+  if (note.left > 0) note.left -= 1;
+  if (note.left <= 0 && note.age >= attackSamples && note.env < 0.0008) note.on = false;
   const gain = resonated * note.env * note.gain * 0.38;
   const wide = needSecond ? second * note.width * gain * 1.35 : 0;
   return [gain + wide, gain - wide];
@@ -337,68 +430,159 @@ function shapeDrive(sample: number, drive: number): number {
 }
 
 function follow(engine: Engine): void {
-  if (!engine.motions.length) return;
   const pos = engine.clock - 1;
   if (pos < 0) return;
   const span = Math.max(1, tickToSample(SIXTEENTH_TICKS, engine.tempo));
-  for (let index = 0; index < engine.drums.length; index++) {
-    const drum = engine.drums[index];
-    if (!drum.on || drum.loop < 1) continue;
-    const step = (pos % drum.loop) / span;
-    for (const motion of engine.motions) {
-      if (LANES.indexOf(motion.lane) !== index || motion.amount === 0) continue;
-      applyDrum(drum, motion, step);
+  for (let lane = 0; lane < LANE_COUNT; lane++) {
+    const box = engine.lanes[lane];
+    if (!box.live.length) continue;
+    const loop = laneLoop(engine, lane);
+    if (loop < 1) continue;
+    const step = (pos % loop) / span;
+    const units = box.live.map((motion) => evalModulated({
+      value: motion.value,
+      pattern: motion.pattern,
+      cycle: motion.cycle,
+      amount: motion.amount,
+    }, step));
+    if (lane < DRUM_COUNT) {
+      const drum = engine.drums[lane];
+      for (let m = 0; m < box.live.length; m++) applyDrum(drum, box.live[m].param, units[m]);
+    } else {
+      for (const note of engine.notes) {
+        if (!note.on || note.lane !== lane || note.loop < 1) continue;
+        for (let m = 0; m < box.live.length; m++) applyNote(note, box.live[m].param, units[m]);
+      }
     }
+  }
+}
+
+function laneLoop(engine: Engine, lane: number): number {
+  if (lane < DRUM_COUNT) {
+    const drum = engine.drums[lane];
+    return drum.on && drum.loop > 0 ? drum.loop : 0;
   }
   for (const note of engine.notes) {
-    if (!note.on || note.loop < 1) continue;
-    const step = (pos % note.loop) / span;
-    for (const motion of engine.motions) {
-      if (LANES.indexOf(motion.lane) !== note.lane || motion.amount === 0) continue;
-      applyNote(note, motion, step);
-    }
+    if (note.on && note.lane === lane && note.loop > 0) return note.loop;
+  }
+  return 0;
+}
+
+function applyDrum(drum: DrumVoice, param: number, unit: number): void {
+  if (param === P_DCY) {
+    drum.decay = drumDecaySeconds(unit);
+    if (drum.lane === 2) drum.noiseDecay = drumNoiseDecaySeconds(unit);
+    refreshDrumEnv(drum);
+  } else if (param === P_NEDCY) {
+    drum.noiseDecay = drumNoiseDecaySeconds(unit);
+    refreshDrumEnv(drum);
+  } else if (param === P_MIX) drum.noise = unit;
+  else if (param === P_DIST) drum.drive = unit;
+  else if (param === P_NFQ) drum.tone = unit;
+  else if (param === P_PAN) drum.pan = unit;
+  else if (param === P_MRATE) drum.spread = unit;
+  else if (param === P_NFFRQ) {
+    drum.bright = unit;
+    refreshClick(drum);
+  } else if (param === P_ATK) {
+    drum.snap = unit;
+    refreshClick(drum);
+  } else if (param === P_MAMT) drum.bend = unit;
+  else if (param === P_LVL) drum.body = unit;
+}
+
+function applyNote(note: NoteVoice, param: number, unit: number): void {
+  if (param === P_SHAPE) note.shape = unit;
+  else if (param === P_DETUNE) note.detune = unit;
+  else if (param === P_FM) note.fm = unit;
+  else if (param === P_NOISE) note.noise = unit;
+  else if (param === P_CUTOFF) note.cutoff = unit;
+  else if (param === P_RESONANCE) note.resonance = unit;
+  else if (param === P_ATTACK) note.attack = unit;
+  else if (param === P_RELEASE) {
+    note.release = unit;
+    refreshRelease(note);
+  } else if (param === P_WIDTH) note.width = unit;
+}
+
+function refreshDrumEnv(drum: DrumVoice): void {
+  drum.envK = Math.exp(-1 / (Math.max(0.004, drum.decay) * SAMPLE_RATE));
+  drum.noiseK = Math.exp(-1 / (Math.max(0.003, drum.noiseDecay) * SAMPLE_RATE));
+}
+
+function refreshClick(drum: DrumVoice): void {
+  const tau = Math.max(1, 10 + drum.snap * 160 + (1 - drum.bright) * 260);
+  drum.clickTau = tau;
+  drum.clickK = Math.exp(-1 / tau);
+}
+
+function refreshRelease(note: NoteVoice): void {
+  note.releaseK = Math.exp(-1 / ((0.04 + note.release * 1.6) * SAMPLE_RATE));
+}
+
+function bucketMotions(engine: Engine, motions: Motion[]): void {
+  engine.lanes = emptyLanes();
+  for (const motion of motions) {
+    const lane = LANES.indexOf(motion.lane);
+    const param = paramOf(motion.id);
+    if (lane < 0 || lane >= LANE_COUNT || param === P_NONE || param === P_FREQ) continue;
+    const box = engine.lanes[lane];
+    const list = motion.amount === 0 ? box.still : box.live;
+    if (list.length >= LANE_MOTION_CAP) continue;
+    list.push({
+      param,
+      pattern: motion.pattern,
+      value: motion.value,
+      cycle: motion.cycle,
+      amount: motion.amount,
+    });
   }
 }
 
-function applyDrum(drum: DrumVoice, motion: Motion, step: number): void {
-  const unit = live(motion, step);
-  const id = motion.id;
-  if (ends(id, "freq")) return;
-  if (ends(id, "dcy")) {
-    drum.decay = drumDecaySeconds(unit);
-    if (drum.lane === 2) drum.noiseDecay = drumNoiseDecaySeconds(unit);
-  } else if (ends(id, "nedcy")) drum.noiseDecay = drumNoiseDecaySeconds(unit);
-  else if (ends(id, "mix")) drum.noise = unit;
-  else if (ends(id, "dist")) drum.drive = unit;
-  else if (ends(id, "nfq")) drum.tone = unit;
-  else if (ends(id, "pan")) drum.pan = unit;
-  else if (ends(id, "mrate")) drum.spread = unit;
-  else if (ends(id, "nffrq")) drum.bright = unit;
-  else if (ends(id, "atk")) drum.snap = unit;
-  else if (ends(id, "mamt")) drum.bend = unit;
-  else if (ends(id, "lvl")) drum.body = unit;
+function stampHeld(engine: Engine): void {
+  for (const note of engine.notes) {
+    if (note.on) stampNote(engine, note);
+  }
 }
 
-function applyNote(note: NoteVoice, motion: Motion, step: number): void {
-  const unit = live(motion, step);
-  const id = motion.id;
-  if (id === "osc_shape") note.shape = unit;
-  else if (id === "osc_detune") note.detune = unit;
-  else if (id === "osc_fm") note.fm = unit;
-  else if (id === "noise") note.noise = unit;
-  else if (id === "cutoff") note.cutoff = unit;
-  else if (id === "resonance") note.resonance = unit;
-  else if (id === "attack") note.attack = unit;
-  else if (id === "release" || id === "decay") note.release = unit;
-  else if (id === "osc_width") note.width = unit;
+function stampNote(engine: Engine, note: NoteVoice): void {
+  if (note.lane < DRUM_COUNT || note.lane >= LANE_COUNT) return;
+  for (const motion of engine.lanes[note.lane].still) {
+    applyNote(note, motion.param, Math.max(0, Math.min(1, motion.value)));
+  }
 }
 
-function live(motion: Motion, step: number): number {
-  return evalModulated(motion, step);
+function paramOf(id: string): number {
+  if (id === "osc_shape") return P_SHAPE;
+  if (id === "osc_detune") return P_DETUNE;
+  if (id === "osc_fm") return P_FM;
+  if (id === "noise") return P_NOISE;
+  if (id === "cutoff") return P_CUTOFF;
+  if (id === "resonance") return P_RESONANCE;
+  if (id === "attack") return P_ATTACK;
+  if (id === "release" || id === "decay") return P_RELEASE;
+  if (id === "osc_width") return P_WIDTH;
+  if (ends(id, "freq")) return P_FREQ;
+  if (ends(id, "nedcy")) return P_NEDCY;
+  if (ends(id, "nffrq")) return P_NFFRQ;
+  if (ends(id, "mrate")) return P_MRATE;
+  if (ends(id, "mamt")) return P_MAMT;
+  if (ends(id, "dcy")) return P_DCY;
+  if (ends(id, "mix")) return P_MIX;
+  if (ends(id, "dist")) return P_DIST;
+  if (ends(id, "nfq")) return P_NFQ;
+  if (ends(id, "pan")) return P_PAN;
+  if (ends(id, "atk")) return P_ATK;
+  if (ends(id, "lvl")) return P_LVL;
+  return P_NONE;
 }
 
 function ends(id: string, suffix: string): boolean {
   return id === suffix || id.endsWith(`_${suffix}`);
+}
+
+function emptyLanes(): LaneBox[] {
+  return Array.from({ length: LANE_COUNT }, () => ({ live: [], still: [] }));
 }
 
 function soft(sample: number): number {
@@ -451,6 +635,7 @@ function emptyDrum(): DrumVoice {
     on: false, lane: 0, phase: 0, phase2: 0, env: 0, noiseEnv: 0, age: 0, freq: 0,
     decay: 0.2, noiseDecay: 0.15, noise: 0, drive: 0, tone: 0.5, pan: 0.5, spread: 0,
     snap: 0, bright: 0.4, bend: 0, body: 1, low: 0, base: 0, loop: 0,
+    envK: 1, noiseK: 1, clickK: 1, clickEnv: 1, clickTau: 10,
   };
 }
 
@@ -458,6 +643,6 @@ function emptyNote(): NoteVoice {
   return {
     on: false, phase: 0, phase2: 0, env: 0, age: 0, left: 0, freq: 0, shape: 0, detune: 0.5,
     fm: 0, noise: 0, cutoff: 0.7, resonance: 0, attack: 0, release: 0.4, width: 0, gain: 0,
-    low: 0, band: 0, lane: 0, loop: 0,
+    low: 0, band: 0, lane: 0, loop: 0, releaseK: 1,
   };
 }
