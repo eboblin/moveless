@@ -6,15 +6,16 @@ import { phraseLoop, soundMotions } from "../dsp/schedule.ts";
 import { packPhraseBody } from "../dsp/voice.ts";
 import { reduce, type MidiMsg, type Session } from "../ui/input.ts";
 import { MENU_CC, ledColorAt, menuLed, padLeds, stepLeds, trackLeds } from "../ui/leds.ts";
+import { plotAmount, plotMinus } from "../ui/digits.ts";
 import {
   CHAR_W,
+  DIGIT_Y,
   FONT_H,
   HEADER_H,
   HEIGHT,
   PARAM_COL_W,
   VIZ_H,
   cellTextX,
-  plotParamMeter,
   renderScreen,
 } from "../ui/screen.ts";
 import { defaultUi } from "../ui/state.ts";
@@ -160,15 +161,23 @@ function paint(): void {
   for (const cell of invertedCells) {
     host.fill_rect?.(cell * PARAM_COL_W, cellTop, PARAM_COL_W, cellH, 1);
   }
-  for (const meter of screen.meters) {
-    if (!invertedCells.has(meter.cell)) continue;
-    plotParamMeter(meter, (x, y) => host.set_pixel?.(x, y, 0));
+  for (const digit of screen.digits) {
+    const color = digit.invert ? 0 : 1;
+    plotAmount(digit.cell * PARAM_COL_W, PARAM_COL_W, DIGIT_Y, digit.amount, (x, y) => {
+      host.set_pixel?.(x, y, color);
+    });
   }
   for (const label of screen.labels) {
     const width = host.text_width?.(label.text) ?? label.text.length * CHAR_W;
     const x = label.cell !== undefined ? cellTextX(label.cell, label.text, width) : label.x;
     if (label.cell !== undefined) {
-      host.print?.(x, label.y, label.text, invertedCells.has(label.cell) ? 0 : 1);
+      const color = invertedCells.has(label.cell) ? 0 : 1;
+      host.print?.(x, label.y, label.text, color);
+      if (label.minus) {
+        plotMinus(label.cell * PARAM_COL_W, PARAM_COL_W, DIGIT_Y, (px, py) => {
+          host.set_pixel?.(px, py, color);
+        });
+      }
       continue;
     }
     if (!label.invert) {

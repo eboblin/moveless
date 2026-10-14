@@ -8,7 +8,8 @@ import { createSet, launchScene, record } from "../src/core/performance.ts";
 import { generatePhrase } from "../src/core/phrase.ts";
 import { lanePages, pageCount, pageGroupColor } from "../src/ui/pages.ts";
 import { menuLed, padLeds, shadeColor, stepLed, stepLeds, trackLeds } from "../src/ui/leds.ts";
-import { BAR_Y, FONT_H, HEADER_H, HEIGHT, NAME_Y, PAGER_Y, PARAM_H, SEP_Y, TITLE_Y, VALUE_Y, VIZ_H, pixel, renderScreen, type Screen } from "../src/ui/screen.ts";
+import { DIGIT_H, displayAmount, plotAmount } from "../src/ui/digits.ts";
+import { DIGIT_Y, FONT_H, HEADER_H, HEIGHT, NAME_Y, PAGER_Y, PARAM_COL_W, PARAM_H, SEP_Y, TITLE_Y, VALUE_Y, VIZ_H, pixel, renderScreen, type Screen } from "../src/ui/screen.ts";
 import { defaultUi, openSetMode } from "../src/ui/state.ts";
 import { reduce, relDelta, type Session } from "../src/ui/input.ts";
 
@@ -160,12 +161,20 @@ describe("surface", () => {
     assert.ok(state.project.working.kick.gen1.length < 16);
     assert.equal(state.ui.focus?.label, "G1 LEN");
     const screen = renderScreen(state.project, state.ui, 0);
-    assert.equal(screen.header, "G1 LEN");
-    assert.ok(screen.labels.some((label) => label.text === "G1 LEN" && label.y === TITLE_Y));
+    assert.equal(screen.header, "GEN 1 LENGTH");
+    assert.ok(screen.labels.some((label) => label.text === "GEN 1 LENGTH" && label.y === TITLE_Y));
     assert.ok(screen.labels.some((label) => label.text === "KCK" && label.y === TITLE_Y && !label.invert));
     const marked = screen.labels.filter((label) => label.invert);
-    assert.ok(marked.some((label) => label.text === "15"));
     assert.ok(marked.some((label) => label.text === "LEN"));
+    assert.equal(screen.digits[0]?.invert, true);
+    assert.deepEqual(screen.digits[0]?.amount, displayAmount(state.project.working.kick.gen1.length, {
+      path: "gen1.length",
+      label: "G1 LEN",
+      min: 0,
+      max: 64,
+      step: 1,
+      integer: true,
+    }));
     assert.equal(HEADER_H + VIZ_H + PARAM_H, 64);
     assert.equal(PAGER_Y, TITLE_Y + FONT_H + 1);
     assert.equal(HEADER_H, PAGER_Y + 2);
@@ -274,24 +283,22 @@ describe("surface", () => {
     assert.equal(velX, 65);
     const names = screen.labels.filter((label) => label.y === NAME_Y);
     assert.deepEqual(names.map((label) => label.text), ["LEN", "HIT", "ROT", "PRB", "V", "P", "C", "A"]);
-    const values = screen.labels.filter((label) => label.y === VALUE_Y);
-    assert.equal(values.length, 8);
-    assert.equal(BAR_Y, HEIGHT - 2);
-    assert.equal(NAME_Y, BAR_Y - FONT_H - 2);
-    assert.equal(VALUE_Y, NAME_Y - FONT_H - 2);
-    assert.equal(SEP_Y, VALUE_Y - 3);
+    assert.equal(NAME_Y, HEIGHT - FONT_H - 1);
+    assert.equal(DIGIT_Y, NAME_Y - 2 - DIGIT_H);
+    assert.equal(SEP_Y, DIGIT_Y - 4);
     assert.equal(pixel(screen, 0, SEP_Y), 1);
     assert.equal(pixel(screen, 63, SEP_Y), 1);
     assert.equal(pixel(screen, 127, SEP_Y), 1);
-    // Default gen1 length=16/64 → quarter bar in column 0 (inner width 14), under the name labels.
-    assert.equal(pixel(screen, 1, BAR_Y), 1);
-    assert.equal(pixel(screen, 1 + 3, BAR_Y), 1);
-    assert.equal(pixel(screen, 1 + 4, BAR_Y), 0);
-    values.forEach((label, index) => {
-      assert.equal(label.cell, index);
-      const left = index * 16;
-      assert.ok(label.x >= left && label.x + label.text.length * 5 <= left + 16);
-    });
+    // PRB=1 and VEL V=1 → natural 100 → small text; other six stay big digits.
+    assert.equal(screen.digits.length, 6);
+    assert.deepEqual(screen.digits[0]?.amount, { kind: "big", n: 16, negative: false });
+    assert.ok(screen.labels.some((label) => label.y === VALUE_Y && label.text === "100" && label.cell === 3));
+    assert.ok(screen.labels.some((label) => label.y === VALUE_Y && label.text === "100" && label.cell === 4));
+    assert.equal(screen.labels.some((label) => label.y === DIGIT_Y), false);
+    const ink: Array<[number, number]> = [];
+    plotAmount(0, PARAM_COL_W, DIGIT_Y, { kind: "big", n: 16, negative: false }, (x, y) => ink.push([x, y]));
+    assert.ok(ink.length > 20);
+    assert.ok(ink.every(([x, y]) => x >= 0 && x < PARAM_COL_W && y >= DIGIT_Y && y < DIGIT_Y + DIGIT_H));
     names.forEach((label, index) => {
       assert.equal(label.cell, index);
       const left = index * 16;
@@ -324,6 +331,35 @@ describe("surface", () => {
     assert.deepEqual(chordNames, ["V", "P", "C", "A", "V", "P", "C", "A"]);
   });
 
+  it("keeps big digits for 0..99 and uses small 3+ digit text past that", () => {
+    const small = { min: 0, max: 64, path: "x", label: "X", step: 1, integer: true };
+    assert.deepEqual(displayAmount(0, small), { kind: "big", n: 0, negative: false });
+    assert.deepEqual(displayAmount(32, small), { kind: "big", n: 32, negative: false });
+    assert.deepEqual(displayAmount(64, small), { kind: "big", n: 64, negative: false });
+    const unit = { min: 0, max: 1, path: "p", label: "P", step: 0.01, integer: false };
+    assert.deepEqual(displayAmount(0.5, unit), { kind: "big", n: 50, negative: false });
+    assert.deepEqual(displayAmount(1, unit), { kind: "wide", text: "100", negative: false });
+    const tempo = { min: 40, max: 240, path: "tempo", label: "TEMPO", step: 1, integer: true };
+    assert.deepEqual(displayAmount(80, tempo), { kind: "big", n: 80, negative: false });
+    assert.deepEqual(displayAmount(120, tempo), { kind: "wide", text: "120", negative: false });
+    assert.deepEqual(displayAmount(240, tempo), { kind: "wide", text: "240", negative: false });
+    const seed = { min: 0, max: 999, path: "seed", label: "SEED", step: 1, integer: true };
+    assert.deepEqual(displayAmount(42, seed), { kind: "big", n: 42, negative: false });
+    assert.deepEqual(displayAmount(123, seed), { kind: "wide", text: "123", negative: false });
+    assert.deepEqual(displayAmount(999, seed), { kind: "wide", text: "999", negative: false });
+    const bipolar = { min: -1, max: 1, path: "y", label: "Y", step: 0.01, integer: false };
+    assert.deepEqual(displayAmount(0, bipolar), { kind: "big", n: 0, negative: false });
+    assert.deepEqual(displayAmount(-0.5, bipolar), { kind: "big", n: 50, negative: true });
+    assert.deepEqual(displayAmount(1, bipolar), { kind: "wide", text: "100", negative: false });
+    const dash: Array<[number, number]> = [];
+    plotAmount(0, PARAM_COL_W, DIGIT_Y, { kind: "big", n: 7, negative: true }, (x, y) => dash.push([x, y]));
+    assert.ok(dash.some(([, y]) => y === DIGIT_Y - 2));
+    assert.ok(dash.some(([, y]) => y >= DIGIT_Y));
+    const global = renderScreen(defaultProject(), { ...defaultUi(), context: "global" }, 0);
+    assert.equal(global.digits.some((d) => d.cell === 0), false);
+    assert.ok(global.labels.some((label) => label.y === VALUE_Y && label.text === "120" && label.cell === 0));
+  });
+
   it("shows a modulated generator while its knob is held and the lane phrase after release", () => {
     let state = session();
     state = reduce(state, { kind: "cc", data1: 14, data2: 1 });
@@ -345,7 +381,7 @@ describe("surface", () => {
     pattern = reduce(pattern, { kind: "note", data1: 1, data2: 127 });
     const phrase = renderScreen(pattern.project, pattern.ui, 0);
     assert.equal(phrase.viz, "phrase");
-    assert.equal(phrase.header, "G1 HIT");
+    assert.equal(phrase.header, "GEN 1 HITS");
   });
 
   it("draws a generator cycle on the phrase scale", () => {

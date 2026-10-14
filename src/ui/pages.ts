@@ -166,7 +166,7 @@ export function globalPages(): Page[] {
       num("transpose", "TRANS", -24, 24, 1, true),
       num("bar", "BAR", 1, 16, 1, true),
       num("phrase", "PHRASE", 1, 64, 1, true),
-      num("seed", "SEED", 0, 9999, 1, true),
+      num("seed", "SEED", 0, 999, 1, true),
     ]),
   };
   const ids = sharedParamIds();

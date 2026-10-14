@@ -2,8 +2,9 @@ import { SIXTEENTH_TICKS } from "../core/clock.ts";
 import { generatePhrase, laneSteps } from "../core/phrase.ts";
 import { evalModulated } from "../core/modulate.ts";
 import { LANE_CODE, type ContextId, type LaneId, type Project, type TimedEvent } from "../core/types.ts";
+import { DIGIT_H, displayAmount, type BigAmount } from "./digits.ts";
 import { readControl } from "./controls.ts";
-import { pagesFor, type Binding, type Page } from "./pages.ts";
+import { pagesFor, type Page } from "./pages.ts";
 import type { UiState } from "./state.ts";
 
 export const WIDTH = 128;
@@ -17,12 +18,13 @@ export const PARAM_COL_W = WIDTH / PARAM_COLS;
 export const TITLE_Y = 1;
 export const PAGER_Y = TITLE_Y + FONT_H + 1;
 export const HEADER_H = PAGER_Y + 2;
-/** Bottom strip: value → 2 px → name → 2 px → meter → 1 px pad. */
-export const BAR_Y = HEIGHT - 2;
-export const NAME_Y = BAR_Y - FONT_H - 2;
-export const VALUE_Y = NAME_Y - FONT_H - 2;
-/** Viz zone ends with a separator, then 2 px gap above values. */
-export const VIZ_H = VALUE_Y - HEADER_H - 2;
+/** Bottom strip: big digits → 2 px → name → 1 px pad (no meter). */
+export const NAME_Y = HEIGHT - FONT_H - 1;
+export const DIGIT_Y = NAME_Y - 2 - DIGIT_H;
+/** Wide (3+ digit) values: small face centered in the digit band. */
+export const VALUE_Y = DIGIT_Y + Math.floor((DIGIT_H - FONT_H) / 2);
+/** Viz ends with separator, then 3 px (minus sits in that gap). */
+export const VIZ_H = DIGIT_Y - HEADER_H - 3;
 export const SEP_Y = HEADER_H + VIZ_H - 1;
 export const PARAM_H = HEIGHT - HEADER_H - VIZ_H;
 
@@ -33,13 +35,15 @@ export interface Label {
   invert?: boolean;
   /** Param column 0..7 — paint centers text in this fixed-width cell. */
   cell?: number;
+  /** Draw the bipolar minus dash above the digit band. */
+  minus?: boolean;
 }
 
-export interface ParamMeter {
+/** Big 0..99 value drawn by the host after cell invert. */
+export interface DigitCell {
   cell: number;
-  /** 0..1 unipolar, or -1..1 when bipolar. */
-  level: number;
-  bipolar: boolean;
+  amount: BigAmount;
+  invert: boolean;
 }
 
 export interface Screen {
@@ -48,7 +52,7 @@ export interface Screen {
   params: string;
   pixels: Uint8Array;
   labels: Label[];
-  meters: ParamMeter[];
+  digits: DigitCell[];
 }
 
 export function renderScreen(project: Project, ui: UiState, tick: number, playing = false, now = Date.now()): Screen {
@@ -73,13 +77,12 @@ export function renderScreen(project: Project, ui: UiState, tick: number, playin
   else if (mixer) drawMixer(pixels, project, focus);
   else if (generator) drawGenerator(pixels, project, context, generator, focusState?.showPattern ?? false, playing ? stepAt(project, tick) : -1);
   else if (vizLane) drawPhrase(pixels, project, vizLane, playing ? stepAt(project, tick) : -1);
-  const meters = mixer || !page ? [] : paramMeters(project, context, page);
-  if (meters.length) drawParamMeters(pixels, meters, 1);
   const labels = mixer
     ? [{ x: 1, y: 1, text: header.slice(0, LINE_LIMIT) }, ...mixerChannelLabels(project, focus)]
     : drawLabels(project, context, page, focus);
   if (notice) labels.push(...noticeLabels(notice.title, notice.value));
-  return { header, viz, params, pixels, labels, meters };
+  const digits = mixer || !page ? [] : paramDigits(project, context, page, focus);
+  return { header, viz, params, pixels, labels, digits };
 }
 
 function fillViz(pixels: Uint8Array): void {
@@ -338,22 +341,39 @@ function stepAt(_project: Project, tick: number): number {
 }
 
 const LINE_LIMIT = 24;
-const FIELD_NAME: Record<string, string> = {
-  LV: "LEVEL",
-  CY: "CYCLE",
-  OF: "OFFSET",
+/** Expands each token of a binding label for the focus header. */
+const WORD: Record<string, string> = {
+  G1: "GEN 1",
+  G2: "GEN 2",
+  LEN: "LENGTH",
+  HIT: "HITS",
+  ROT: "ROTATE",
+  PRB: "PROB",
+  VEL: "VELOCITY",
   V: "VALUE",
   P: "PATTERN",
   C: "CYCLE",
   A: "AMOUNT",
+  TRANS: "TRANSPOSE",
+  OCT: "OCTAVES",
+  DIR: "DIRECTION",
+  KCK: "KICK",
+  SNR: "SNARE",
+  PRC: "PERC",
+  BAS: "BASS",
+  LEA: "LEAD",
+  CHD: "CHORDS",
+  LV: "LEVEL",
+  CY: "CYCLE",
+  OF: "OFFSET",
 };
 
 function fullName(label: string): string {
-  const parts = label.split(" ");
-  const tag = parts[parts.length - 1] ?? "";
-  const word = FIELD_NAME[tag];
-  if (!word) return label;
-  return `${parts.slice(0, -1).join(" ")} ${word}`.trim();
+  return label
+    .trim()
+    .split(/\s+/)
+    .map((part) => WORD[part] ?? part)
+    .join(" ");
 }
 
 /** Last token, max 3 letters — fits a PARAM_COL_W cell at CHAR_W. */
@@ -386,70 +406,37 @@ function drawLabels(
   }
   page?.bindings.forEach((binding, index) => {
     if (!binding || index >= PARAM_COLS) return;
-    const shown = formatValue(readControl(project, context, binding.path), binding.integer);
     const name = shortName(binding.label);
     const lit = focus === binding.label;
-    labels.push({ x: cellTextX(index, shown), y: VALUE_Y, text: shown, invert: lit, cell: index });
+    const amount = displayAmount(readControl(project, context, binding.path), binding);
+    if (amount.kind === "wide") {
+      labels.push({
+        x: cellTextX(index, amount.text),
+        y: VALUE_Y,
+        text: amount.text,
+        invert: lit,
+        cell: index,
+        minus: amount.negative,
+      });
+    }
     labels.push({ x: cellTextX(index, name), y: NAME_Y, text: name, invert: lit, cell: index });
   });
   return labels;
 }
 
-function paramMeters(project: Project, context: ContextId, page: Page): ParamMeter[] {
-  const meters: ParamMeter[] = [];
+function paramDigits(project: Project, context: ContextId, page: Page, focus: string | null): DigitCell[] {
+  const digits: DigitCell[] = [];
   page.bindings.forEach((binding, index) => {
     if (!binding || index >= PARAM_COLS) return;
-    meters.push({
+    const amount = displayAmount(readControl(project, context, binding.path), binding);
+    if (amount.kind !== "big") return;
+    digits.push({
       cell: index,
-      level: meterLevel(readControl(project, context, binding.path), binding),
-      bipolar: binding.min < 0 && binding.max > 0,
+      amount,
+      invert: focus === binding.label,
     });
   });
-  return meters;
-}
-
-function meterLevel(value: number, binding: Binding): number {
-  if (binding.min < 0 && binding.max > 0) {
-    const peak = Math.max(Math.abs(binding.min), Math.abs(binding.max));
-    return peak <= 0 ? 0 : Math.max(-1, Math.min(1, value / peak));
-  }
-  const span = binding.max - binding.min;
-  if (span <= 0) return 0;
-  return Math.max(0, Math.min(1, (value - binding.min) / span));
-}
-
-export function drawParamMeters(
-  pixels: Uint8Array,
-  meters: ParamMeter[],
-  color: number,
-): void {
-  for (const meter of meters) plotParamMeter(meter, (x, y) => set(pixels, x, y, color));
-}
-
-/** Lit x positions for a 1 px value bar inside a param cell. */
-export function plotParamMeter(meter: ParamMeter, plot: (x: number, y: number) => void): void {
-  const x0 = meter.cell * PARAM_COL_W + 1;
-  const inner = PARAM_COL_W - 2;
-  if (inner <= 0) return;
-  if (meter.bipolar) {
-    const mid = x0 + Math.floor(inner / 2);
-    plot(mid, BAR_Y);
-    const span = Math.floor(inner / 2);
-    if (meter.level >= 0) {
-      const n = Math.round(meter.level * span);
-      for (let i = 1; i <= n; i++) plot(mid + i, BAR_Y);
-    } else {
-      const n = Math.round(-meter.level * span);
-      for (let i = 1; i <= n; i++) plot(mid - i, BAR_Y);
-    }
-    return;
-  }
-  const n = Math.round(meter.level * inner);
-  for (let i = 0; i < n; i++) plot(x0 + i, BAR_Y);
-}
-
-function formatValue(value: number, integer: boolean): string {
-  return integer ? String(Math.round(value)) : String(Math.round(value * 100));
+  return digits;
 }
 
 function set(pixels: Uint8Array, x: number, y: number, value: number): void {

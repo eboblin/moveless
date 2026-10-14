@@ -161,7 +161,7 @@ function mergeGlobal(base: Project["global"], raw: unknown): Project["global"] {
     transpose: Math.max(-24, Math.min(24, asInt(raw.transpose, base.transpose))),
     bar: Math.max(1, Math.min(16, asInt(raw.bar, base.bar))),
     phrase: Math.max(1, Math.min(64, asInt(raw.phrase, base.phrase))),
-    seed: Math.max(0, asInt(raw.seed, base.seed)),
+    seed: Math.max(0, Math.min(999, asInt(raw.seed, base.seed))),
   };
 }
 
