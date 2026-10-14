@@ -1,6 +1,15 @@
 import { morphProgress } from "../core/morph.ts";
 import { sceneColor, journalPadIds, setPadIds } from "../core/performance.ts";
-import { LANE_CODE, type ContextId, type LaneId, type Project, type TransitionId, type WanderId } from "../core/types.ts";
+import {
+  CAPTURE_INTENSITIES,
+  LANE_CODE,
+  type CaptureIntensity,
+  type ContextId,
+  type LaneId,
+  type Project,
+  type TransitionId,
+  type WanderId,
+} from "../core/types.ts";
 import { pageCount, pageGroupColor } from "./pages.ts";
 
 export const LED = {
@@ -12,6 +21,13 @@ export const LED = {
   /** Unsaved working state when journal/set has no scenes yet. */
   working: 8,
 } as const;
+
+/** Soft / medium / hard pad colours on the Capture overlay (clear uses red). */
+const CAPTURE_MODE_COLOR: Record<Exclude<CaptureIntensity, "clear">, number> = {
+  soft: LED.yellow,
+  medium: 14,
+  hard: LED.purple,
+};
 
 export type LedFamily = "red" | "yellow" | "purple" | "lock" | "off";
 
@@ -78,6 +94,7 @@ const TRANSITIONS: TransitionId[] = ["now", "fast", "medium", "slow"];
 const WANDERS: WanderId[] = ["fast", "medium", "slow", "glacial"];
 export interface PadSurface {
   wheelTouch?: boolean;
+  captureHeld?: boolean;
   heldLane?: LaneId | null;
   context?: ContextId;
   page?: number;
@@ -86,15 +103,33 @@ export interface PadSurface {
 /**
  * Playing and morph-target pads share the same beat-locked blink. Target also shades
  * dark→dim→bright by morph progress. An empty journal/set still shows pad 0 as the
- * current working scene. Wheel-touch replaces the grid with pages, Transition and Wander.
+ * current working scene. Capture-hold and wheel-touch replace the grid with overlays.
  */
 export function padLeds(project: Project, mode: "journal" | "set", surface?: PadSurface, tick = 0): Led[] {
   const context = surface?.context ?? "kick";
   const page = surface?.page ?? 0;
+  if (surface?.captureHeld) {
+    const lane = surface.heldLane ?? context;
+    return capturePadLeds(project, lane, surface.heldLane === context || !surface.heldLane ? page : -1);
+  }
   if (surface?.wheelTouch) return wheelPadLeds(project, context, page);
   const scenes = scenePadLeds(project, mode, tick);
   if (surface?.heldLane) return pageOverlay(scenes, surface.heldLane, surface.heldLane === context ? page : -1);
   return scenes;
+}
+
+/** Top rows = lane pages; bottom cols 0–3 = clear / soft / medium / hard. */
+function capturePadLeds(project: Project, context: ContextId, page: number): Led[] {
+  const out = pageOverlay(Array.from({ length: 32 }, () => led("off", false)), context, page);
+  CAPTURE_INTENSITIES.forEach((id, col) => {
+    const selected = project.captureIntensity === id;
+    if (id === "clear") {
+      out[col] = { family: "red", color: LED.red, blink: selected };
+      return;
+    }
+    out[col] = { family: "yellow", color: CAPTURE_MODE_COLOR[id], blink: selected };
+  });
+  return out;
 }
 
 /**

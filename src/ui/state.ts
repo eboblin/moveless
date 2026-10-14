@@ -28,6 +28,8 @@ export interface UiState {
   deleteHeld: boolean;
   captureHeld: boolean;
   captureGenerator: string | null;
+  /** True after a page-pad capture during hold — release must not also group-reroll. */
+  captureAction: boolean;
   heldLane: LaneId | null;
   heldPage: number | null;
   focus: Focus | null;
@@ -59,6 +61,7 @@ export function defaultUi(): UiState {
     deleteHeld: false,
     captureHeld: false,
     captureGenerator: null,
+    captureAction: false,
     heldLane: null,
     heldPage: null,
     focus: null,

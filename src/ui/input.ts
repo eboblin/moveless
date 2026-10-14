@@ -1,6 +1,7 @@
 import {
   captureLane,
   captureGenerator,
+  capturePaths,
   copyScene,
   cycleSet,
   deleteSet,
@@ -9,12 +10,13 @@ import {
   record,
   removeSceneFromSet,
   journalPadIds,
+  setCaptureIntensity,
   setPadIds,
   setWander,
   toggleLock,
   toggleMute,
 } from "../core/performance.ts";
-import type { LaneId, Project, TransitionId, WanderId } from "../core/types.ts";
+import { CAPTURE_INTENSITIES, type CaptureIntensity, type LaneId, type TransitionId, type WanderId } from "../core/types.ts";
 import { writeControl } from "./controls.ts";
 import { pageCount, pageGroup, pagesFor } from "./pages.ts";
 import { applyBookmark, focusHoldTicks, HOLD_MS, HOLD_TICKS, type Notice, type UiState } from "./state.ts";
@@ -119,6 +121,9 @@ function onPad(session: Session, index: number, press: boolean): Session {
   const top = row === 3;
   const second = row === 2;
   const bottom = row === 0;
+  if (session.ui.captureHeld) {
+    return onCapturePad(session, row, col, top, second, bottom);
+  }
   if (session.ui.heldLane && (top || second)) {
     const page = top ? col : 8 + col;
     const lane = session.ui.heldLane;
@@ -160,6 +165,36 @@ function onPad(session: Session, index: number, press: boolean): Session {
   const sceneId = pads[index];
   if (!sceneId) return session;
   return { ...session, project: launchScene(session.project, sceneId, session.tick) };
+}
+
+/** Capture overlay: page pads reroll and switch page; cols 0–3 set intensity. */
+function onCapturePad(session: Session, row: number, col: number, top: boolean, second: boolean, bottom: boolean): Session {
+  if (bottom && col < CAPTURE_INTENSITIES.length) {
+    const intensity = CAPTURE_INTENSITIES[col] as CaptureIntensity;
+    return {
+      ...session,
+      project: setCaptureIntensity(session.project, intensity),
+      ui: { ...session.ui, notice: modeNotice("CAPTURE", intensity.toUpperCase()) },
+    };
+  }
+  if (!top && !second) return session;
+  const page = top ? col : 8 + col;
+  const lane = session.ui.heldLane ?? session.ui.context;
+  if (lane === "mix" || lane === "global") return session;
+  const pages = pagesFor(lane);
+  if (page >= pages.length) return session;
+  const paths = pages[page].bindings.filter((binding): binding is NonNullable<typeof binding> => !!binding).map((binding) => binding.path);
+  return {
+    ...session,
+    project: capturePaths(session.project, lane, paths),
+    ui: {
+      ...session.ui,
+      context: lane,
+      page,
+      heldPage: session.ui.heldLane ? page : session.ui.heldPage,
+      captureAction: true,
+    },
+  };
 }
 
 const NOTICE_MS = 500;
@@ -268,21 +303,27 @@ function currentBinding(session: Session, index: number) {
 }
 
 function onCapture(session: Session, press: boolean): Session {
-  if (press) return { ...session, ui: { ...session.ui, captureHeld: true, captureGenerator: null } };
+  if (press) {
+    return { ...session, ui: { ...session.ui, captureHeld: true, captureGenerator: null, captureAction: false } };
+  }
   const lane = session.ui.heldLane ?? session.ui.context;
   const rawPage = session.ui.heldLane ? session.ui.heldPage ?? session.ui.page : session.ui.page;
   const page = Math.min(rawPage, Math.max(0, pageCount(lane) - 1));
-  const target = session.ui.captureGenerator;
+  const already = session.ui.captureGenerator || session.ui.captureAction;
   let project = session.project;
-  // Generator already rerolled on encoder touch/turn; release only does page/shift when none was chosen.
-  if (lane !== "mix" && lane !== "global" && !target) {
+  // Encoder or page pad already acted; release only group-rerolls when neither did.
+  if (lane !== "mix" && lane !== "global" && !already) {
     if (session.ui.shiftHeld) project = captureLane(project, lane, "all");
     else {
       const scope = pageGroup(lane, page);
       project = captureLane(project, lane, scope === "sound" || scope === "notes" ? scope : "pattern");
     }
   }
-  return { ...session, project, ui: { ...session.ui, captureHeld: false, captureGenerator: null } };
+  return {
+    ...session,
+    project,
+    ui: { ...session.ui, captureHeld: false, captureGenerator: null, captureAction: false },
+  };
 }
 
 function onCopy(session: Session, press: boolean): Session {

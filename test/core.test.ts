@@ -12,12 +12,15 @@ import {
   advance,
   captureLane,
   captureGenerator,
+  capturePaths,
   createSet,
+  cycleBiased,
   launchScene,
   pickWanderCandidate,
   record,
   sceneColor,
   sceneIdsForPads,
+  setCaptureIntensity,
   setMacro,
   audibleEvents,
 } from "../src/core/performance.ts";
@@ -423,9 +426,10 @@ describe("capture, wander, sets", () => {
     assert.deepEqual(one.working.kick.gen2, project.working.kick.gen2);
     assert.deepEqual(one.working.kick.ratchet, project.working.kick.ratchet);
     assert.deepEqual(one.working.kick.sound, project.working.kick.sound);
-    const count = captureGenerator(project, "kick", "ratchet.count");
-    assert.notDeepEqual(count.working.kick.ratchet.count, project.working.kick.ratchet.count);
-    assert.deepEqual(count.working.kick.ratchet.rate, project.working.kick.ratchet.rate);
+    const hard = setCaptureIntensity(project, "hard");
+    const count = captureGenerator(hard, "kick", "ratchet.count");
+    assert.notDeepEqual(count.working.kick.ratchet.count, hard.working.kick.ratchet.count);
+    assert.deepEqual(count.working.kick.ratchet.rate, hard.working.kick.ratchet.rate);
     const pitch = captureGenerator(project, "kick", "sound.pitch");
     assert.notDeepEqual(pitch.working.kick.sound.pitch, project.working.kick.sound.pitch);
     assert.deepEqual(pitch.working.kick.sound.tone, project.working.kick.sound.tone);
@@ -433,6 +437,88 @@ describe("capture, wander, sets", () => {
     const locked = captureGenerator(pitch, "kick", "gen1");
     assert.equal(locked.captureNonce, pitch.captureNonce);
     assert.deepEqual(locked.working.kick.gen1, pitch.working.kick.gen1);
+  });
+
+  it("clears modulation but leaves value and cycle", () => {
+    let project = defaultProject();
+    project.working.kick.sound.pitch = modulated(0.6, 12, 7, 0.4);
+    project = setCaptureIntensity(project, "clear");
+    const cleared = captureGenerator(project, "kick", "sound.pitch");
+    assert.equal(cleared.working.kick.sound.pitch.value, 0.6);
+    assert.equal(cleared.working.kick.sound.pitch.cycle, 7);
+    assert.equal(cleared.working.kick.sound.pitch.pattern, 0);
+    assert.equal(cleared.working.kick.sound.pitch.amount, 0);
+    assert.deepEqual(cleared.working.kick.gen1, project.working.kick.gen1);
+  });
+
+  it("biases rerolled cycles toward 4 and keeps soft P/C/A rare", () => {
+    const hist = Array.from({ length: 9 }, () => 0);
+    for (let i = 0; i < 800; i++) hist[cycleBiased((i + 0.5) / 800)]++;
+    assert.ok(hist[4] > hist[1]);
+    assert.ok(hist[4] > hist[8]);
+    assert.ok(hist[4] >= hist[3]);
+    assert.ok(hist[4] >= hist[5]);
+
+    let project = defaultProject();
+    project.working.kick.sound.pitch = modulated(0.5, 10, 2, 0.3);
+    project = setCaptureIntensity(project, "soft");
+    let patternFlips = 0;
+    let cycleFlips = 0;
+    let amountFlips = 0;
+    for (let n = 0; n < 40; n++) {
+      project = { ...project, captureNonce: n, global: { ...project.global, seed: n + 1 } };
+      const next = captureGenerator(project, "kick", "sound.pitch");
+      if (next.working.kick.sound.pitch.pattern !== 10) patternFlips++;
+      if (next.working.kick.sound.pitch.cycle !== 2) cycleFlips++;
+      if (next.working.kick.sound.pitch.amount !== 0.3) amountFlips++;
+    }
+    assert.ok(patternFlips < 20);
+    assert.ok(cycleFlips < 20);
+    assert.ok(amountFlips < 20);
+
+    project = setCaptureIntensity(defaultProject(), "hard");
+    project.working.kick.sound.pitch = modulated(0.5, 10, 2, 0.3);
+    let hardFlips = 0;
+    for (let n = 0; n < 40; n++) {
+      project = { ...project, captureNonce: n, global: { ...project.global, seed: n + 3 } };
+      const next = captureGenerator(project, "kick", "sound.pitch");
+      if (
+        next.working.kick.sound.pitch.pattern !== 10 ||
+        next.working.kick.sound.pitch.cycle !== 2 ||
+        next.working.kick.sound.pitch.amount !== 0.3
+      ) {
+        hardFlips++;
+      }
+    }
+    assert.ok(hardFlips > 20);
+  });
+
+  it("captures only the paths of one page", () => {
+    let project = setCaptureIntensity(defaultProject(), "hard");
+    const before = clone(project.working.kick);
+    const paths = ["gen1.length", "gen1.hits", "gen1.rotate", "gen1.probability", "gen1.velocity.value"];
+    project = capturePaths(project, "kick", paths);
+    assert.notDeepEqual(project.working.kick.gen1, before.gen1);
+    assert.deepEqual(project.working.kick.gen2, before.gen2);
+    assert.deepEqual(project.working.kick.sound, before.sound);
+  });
+
+  it("nudges one euclid structure field on soft capture", () => {
+    let project = setCaptureIntensity(defaultProject(), "soft");
+    project.working.kick.gen1 = { length: 16, hits: 4, rotate: 2, probability: 0.8, velocity: modulated(0.7) };
+    const before = clone(project.working.kick.gen1);
+    project = captureGenerator(project, "kick", "gen1");
+    const after = project.working.kick.gen1;
+    const structChanged =
+      (after.length !== before.length ? 1 : 0) +
+      (after.hits !== before.hits ? 1 : 0) +
+      (after.rotate !== before.rotate ? 1 : 0) +
+      (after.probability !== before.probability ? 1 : 0);
+    assert.equal(structChanged, 1);
+    assert.ok(Math.abs(after.length - before.length) <= 2);
+    assert.ok(Math.abs(after.hits - before.hits) <= 2);
+    assert.ok(Math.abs(after.rotate - before.rotate) <= 2 || after.length !== before.length);
+    assert.ok(Math.abs(after.probability - before.probability) <= 0.12);
   });
 
   it("skips the previous wander target while another scene exists", () => {

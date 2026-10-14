@@ -219,6 +219,7 @@ export function defaultProject(): Project {
     morph: null,
     clipboardSceneId: null,
     captureNonce: 0,
+    captureIntensity: "medium",
   };
 }
 

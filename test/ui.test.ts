@@ -399,11 +399,11 @@ describe("surface", () => {
     state = reduce(state, { kind: "cc", data1: 88, data2: 127 });
     state = reduce(state, { kind: "note", data1: 19, data2: 127 });
     assert.equal(state.project.mute.perc, true);
-    const hits = state.project.working.kick.gen1.hits;
+    const beforeGen1 = clone(state.project.working.kick.gen1);
     state = reduce(state, { kind: "cc", data1: 52, data2: 127 });
-    assert.equal(state.project.working.kick.gen1.hits, hits);
+    assert.deepEqual(state.project.working.kick.gen1, beforeGen1);
     state = reduce(state, { kind: "cc", data1: 52, data2: 0 });
-    assert.notEqual(state.project.working.kick.gen1.hits, hits);
+    assert.notDeepEqual(state.project.working.kick.gen1, beforeGen1);
     state = reduce(state, { kind: "cc", data1: 40, data2: 127 });
     state = reduce({ ...state, tick: 100 }, { kind: "cc", data1: 40, data2: 0 });
     assert.deepEqual(state.project.bookmarks[0], { context: "kick", page: 0 });
@@ -459,13 +459,16 @@ describe("surface", () => {
 
     let count = session();
     const rate = count.project.working.kick.ratchet.rate;
+    const gen1 = clone(count.project.working.kick.gen1);
     count = reduce(count, { kind: "cc", data1: 14, data2: 1 });
     count = reduce(count, { kind: "cc", data1: 14, data2: 1 });
     count = reduce(count, { kind: "cc", data1: 52, data2: 127 });
+    count = reduce(count, { kind: "note", data1: 68 + 3, data2: 127 });
+    assert.equal(count.project.captureIntensity, "hard");
     count = reduce(count, { kind: "note", data1: 0, data2: 127 });
     assert.notDeepEqual(count.project.working.kick.ratchet.count, before.ratchet.count);
     assert.deepEqual(count.project.working.kick.ratchet.rate, rate);
-    assert.deepEqual(count.project.working.kick.gen1, before.gen1);
+    assert.deepEqual(count.project.working.kick.gen1, gen1);
   });
 
   it("rerolls the whole lane when Capture is released with Shift held", () => {
@@ -516,6 +519,70 @@ describe("surface", () => {
     state = reduce(state, { kind: "cc", data1: 52, data2: 0 });
     assert.notDeepEqual(state.project.working.kick.gen1, before.gen1);
     assert.deepEqual(state.project.working.kick.sound, before.sound);
+  });
+
+  it("shows Capture overlay pads and switches page when regenerating", () => {
+    let state = session();
+    state = reduce(state, { kind: "cc", data1: 52, data2: 127 });
+    assert.equal(state.ui.captureHeld, true);
+    const pads = padLeds(state.project, state.ui.mode, state.ui);
+    assert.equal(pads[24].color, 3);
+    assert.equal(pads[24].blink, true);
+    assert.equal(pads[0].color, 127);
+    assert.equal(pads[0].blink, false);
+    assert.equal(pads[2].blink, true);
+    assert.equal(pads[1].color, 8);
+    assert.equal(pads[3].color, 22);
+    assert.equal(pads[4].color, 0);
+    assert.equal(pads[8].color, 0);
+
+    const beforeGen2 = clone(state.project.working.kick.gen2);
+    const beforeSound = clone(state.project.working.kick.sound);
+    const beforeGen1 = clone(state.project.working.kick.gen1);
+    state = reduce(state, { kind: "note", data1: 68 + 25, data2: 127 });
+    assert.equal(state.ui.page, 1);
+    assert.equal(state.ui.captureAction, true);
+    assert.notDeepEqual(state.project.working.kick.gen2, beforeGen2);
+    assert.deepEqual(state.project.working.kick.gen1, beforeGen1);
+    assert.deepEqual(state.project.working.kick.sound, beforeSound);
+    const afterGen2 = clone(state.project.working.kick);
+    state = reduce(state, { kind: "cc", data1: 52, data2: 0 });
+    assert.deepEqual(state.project.working.kick, afterGen2);
+    assert.equal(state.ui.captureHeld, false);
+    assert.equal(state.ui.page, 1);
+
+    const gen1BeforeSwitch = clone(state.project.working.kick.gen1);
+    const gen2After = clone(state.project.working.kick.gen2);
+    state = reduce(state, { kind: "cc", data1: 52, data2: 127 });
+    state = reduce(state, { kind: "note", data1: 68 + 24, data2: 127 });
+    assert.equal(state.ui.page, 0);
+    assert.equal(state.ui.captureAction, true);
+    assert.notDeepEqual(state.project.working.kick.gen1, gen1BeforeSwitch);
+    assert.deepEqual(state.project.working.kick.gen2, gen2After);
+    assert.deepEqual(state.project.working.kick.sound, beforeSound);
+    const afterGen1 = clone(state.project.working.kick);
+    state = reduce(state, { kind: "cc", data1: 52, data2: 0 });
+    assert.deepEqual(state.project.working.kick, afterGen1);
+    assert.equal(state.ui.captureHeld, false);
+    assert.equal(state.ui.page, 0);
+
+    state = reduce(state, { kind: "cc", data1: 52, data2: 127 });
+    state = reduce(state, { kind: "note", data1: 68 + 0, data2: 127 });
+    assert.equal(state.project.captureIntensity, "clear");
+    assert.equal(state.ui.notice?.title, "CAPTURE");
+    assert.equal(state.ui.notice?.value, "CLEAR");
+    state = reduce(state, { kind: "cc", data1: 52, data2: 0 });
+
+    state.project.working.kick.sound.pitch = modulated(0.55, 9, 6, 0.4);
+    const soundBefore = clone(state.project.working.kick.sound);
+    for (let n = 0; n < 4; n++) state = reduce(state, { kind: "cc", data1: 14, data2: 1 });
+    state = reduce(state, { kind: "cc", data1: 52, data2: 127 });
+    state = reduce(state, { kind: "cc", data1: 52, data2: 0 });
+    assert.equal(state.project.working.kick.sound.pitch.value, 0.55);
+    assert.equal(state.project.working.kick.sound.pitch.pattern, 0);
+    assert.equal(state.project.working.kick.sound.pitch.amount, 0);
+    assert.equal(state.project.working.kick.sound.pitch.cycle, 6);
+    assert.notDeepEqual(state.project.working.kick.sound, soundBefore);
   });
 
   it("pastes a journal reference into the active set", () => {

@@ -4,20 +4,41 @@ import { hash01 } from "./hash.ts";
 import { applyMorph, retarget } from "./morph.ts";
 import { modulated } from "./modulate.ts";
 import {
+  CAPTURE_INTENSITIES,
   LANES,
   SET_CAPACITY,
   SOUND,
   WANDER_BARS,
+  type CaptureIntensity,
+  type ChordPlay,
   type EuclidGen,
   type LaneId,
   type Lanes,
+  type Modulated,
   type Project,
   type Scene,
   type WanderId,
 } from "./types.ts";
 
+export { CAPTURE_INTENSITIES };
+
 /** Bright palette indices 1–26 only — each has dim/dark partners at 63+2c / 64+2c. */
 const SCENE_COLORS = [1, 2, 3, 5, 7, 8, 9, 11, 14, 15, 16, 17, 20, 22, 23, 25];
+
+const EXPENSIVE_RATE: Record<Exclude<CaptureIntensity, "clear">, number> = {
+  soft: 0.15,
+  medium: 0.4,
+  hard: 0.75,
+};
+
+const VALUE_JITTER: Record<Exclude<CaptureIntensity, "clear">, number> = {
+  soft: 0.2,
+  medium: 0.45,
+  hard: 1,
+};
+
+/** Weights for cycle 1..8 — peak at 4. */
+const CYCLE_WEIGHTS = [1, 2, 3, 4, 3, 2, 1, 1];
 
 export function sceneColor(id: string): number {
   let hash = 2166136261;
@@ -197,43 +218,117 @@ export function sharedParamIds(): string[] {
 
 export type CaptureScope = "pattern" | "notes" | "sound" | "all";
 
+export function setCaptureIntensity(project: Project, intensity: CaptureIntensity): Project {
+  return { ...project, captureIntensity: intensity };
+}
+
 /** Reroll one page group, or the whole lane when scope is `all`. */
 export function captureLane(project: Project, lane: LaneId, scope: CaptureScope = "pattern"): Project {
   if (project.lock[lane]) return project;
   if (scope === "notes" && lane !== "bass" && lane !== "lead" && lane !== "chords") return project;
   if (scope === "pattern" && lane === "chords") return project;
+  const intensity = project.captureIntensity;
   const nonce = project.captureNonce + 1;
   const working = clone(project.working);
-  const roll = (...parts: (string | number)[]) => hash01(project.global.seed, "capture", nonce, lane, scope, ...parts);
+  const roll = (...parts: (string | number)[]) => hash01(project.global.seed, "capture", nonce, lane, scope, intensity, ...parts);
   if (scope === "all") {
-    if (lane !== "chords") randomizePattern(working, lane, roll);
-    if (lane === "bass" || lane === "lead" || lane === "chords") randomizeNotes(working, lane, roll);
-    randomizeSound(working[lane].sound, roll);
-  } else if (scope === "sound") randomizeSound(working[lane].sound, roll);
-  else if (scope === "notes") randomizeNotes(working, lane, roll);
-  else randomizePattern(working, lane, roll);
+    if (lane !== "chords") randomizePattern(working, lane, roll, intensity);
+    if (lane === "bass" || lane === "lead" || lane === "chords") randomizeNotes(working, lane, roll, intensity);
+    randomizeSound(working[lane].sound, roll, intensity);
+  } else if (scope === "sound") randomizeSound(working[lane].sound, roll, intensity);
+  else if (scope === "notes") randomizeNotes(working, lane, roll, intensity);
+  else randomizePattern(working, lane, roll, intensity);
   return { ...project, working, captureNonce: nonce };
 }
 
 /** Reroll one euclid (`gen1`), its velocity, or another 4-param modulator. */
 export function captureGenerator(project: Project, lane: LaneId, target: string): Project {
   if (project.lock[lane]) return project;
+  const intensity = project.captureIntensity;
   const working = clone(project.working);
   const node = readNode(working[lane], target);
   const nonce = project.captureNonce + 1;
-  const roll = (...parts: (string | number)[]) => hash01(project.global.seed, "capture", nonce, lane, target, ...parts);
+  const roll = (...parts: (string | number)[]) => hash01(project.global.seed, "capture", nonce, lane, target, intensity, ...parts);
   if (isEuclidGen(node)) {
-    Object.assign(node, randomEuclid(roll));
+    Object.assign(node, touchEuclid(node, roll, "", intensity));
     return { ...project, working, captureNonce: nonce };
   }
   if (isModulated(node)) {
-    node.value = roll("v");
-    node.pattern = Math.floor(roll("p") * 64);
-    node.cycle = 1 + Math.floor(roll("c") * 8);
-    node.amount = (roll("a") * 2 - 1) * 0.75;
+    Object.assign(node, touchMaybeExpensive(node, roll, target, intensity, isRatchetPath(target)));
     return { ...project, working, captureNonce: nonce };
   }
   return project;
+}
+
+/**
+ * Reroll only the parameters listed on one page (binding paths). Avoids importing pages.ts.
+ * Groups paths into euclid roots, modulators, play fields, and scalars.
+ */
+export function capturePaths(project: Project, lane: LaneId, paths: string[]): Project {
+  if (project.lock[lane]) return project;
+  if (!paths.length) return project;
+  const intensity = project.captureIntensity;
+  const working = clone(project.working);
+  const nonce = project.captureNonce + 1;
+  const roll = (...parts: (string | number)[]) => hash01(project.global.seed, "capture", nonce, lane, "page", intensity, ...parts);
+  const root = working[lane] as unknown as Record<string, unknown>;
+  const seen = new Set<string>();
+  for (const path of paths) {
+    const target = captureTarget(path);
+    if (!target || seen.has(target.key)) continue;
+    seen.add(target.key);
+    applyCaptureTarget(root, target, roll, intensity);
+  }
+  return { ...project, working, captureNonce: nonce };
+}
+
+type CaptureTarget =
+  | { kind: "euclid"; key: string; path: string }
+  | { kind: "modulated"; key: string; path: string }
+  | { kind: "play"; key: "play" }
+  | { kind: "scalar"; key: string; path: string };
+
+function captureTarget(path: string): CaptureTarget | null {
+  const euclid = /^(gen[12])\.(length|hits|rotate|probability|velocity(?:\.(?:value|pattern|cycle|amount))?)$/.exec(path);
+  if (euclid) return { kind: "euclid", key: euclid[1], path: euclid[1] };
+  const suffixes = [".value", ".pattern", ".cycle", ".amount"];
+  const suffix = suffixes.find((item) => path.endsWith(item));
+  if (suffix) {
+    const base = path.slice(0, -suffix.length);
+    return { kind: "modulated", key: base, path: base };
+  }
+  if (path.startsWith("play.")) return { kind: "play", key: "play" };
+  if (path === "follow") return { kind: "scalar", key: "follow", path: "follow" };
+  return null;
+}
+
+function applyCaptureTarget(
+  root: Record<string, unknown>,
+  target: CaptureTarget,
+  roll: (...parts: (string | number)[]) => number,
+  intensity: CaptureIntensity,
+): void {
+  if (target.kind === "euclid") {
+    const node = readNode(root, target.path);
+    if (isEuclidGen(node)) Object.assign(node, touchEuclid(node, roll, target.path, intensity));
+    return;
+  }
+  if (target.kind === "modulated") {
+    const node = readNode(root, target.path);
+    if (isModulated(node)) {
+      Object.assign(node, touchMaybeExpensive(node, roll, target.path, intensity, isRatchetPath(target.path)));
+    }
+    return;
+  }
+  if (target.kind === "play") {
+    const play = root.play;
+    if (play && typeof play === "object") {
+      root.play = touchPlay(play as ChordPlay, roll, intensity);
+    }
+    return;
+  }
+  if (intensity === "clear") return;
+  if (typeof root[target.path] === "number") root[target.path] = roll(target.path);
 }
 
 function readNode(root: unknown, path: string): unknown {
@@ -249,83 +344,192 @@ function isEuclidGen(value: unknown): value is EuclidGen {
   return !!value && typeof value === "object" && "hits" in value && "length" in value && "rotate" in value && "probability" in value && "velocity" in value;
 }
 
-function isModulated(value: unknown): value is { value: number; pattern: number; cycle: number; amount: number } {
-  return !!value && typeof value === "object" && "amount" in value && "pattern" in value && "cycle" in value;
+function isModulated(value: unknown): value is Modulated {
+  return !!value && typeof value === "object" && "amount" in value && "pattern" in value && "cycle" in value && "value" in value;
 }
 
-function randomEuclid(roll: (...parts: (string | number)[]) => number): EuclidGen {
-  const length = 4 + Math.floor(roll("len") * 13);
-  const hits = Math.floor(roll("hits") * (length + 1));
+/** Pick cycle 1..8 with weights peaking at 4. Exported for tests. */
+export function cycleBiased(roll: number): number {
+  const total = CYCLE_WEIGHTS.reduce((sum, w) => sum + w, 0);
+  let edge = Math.min(0.999999, Math.max(0, roll)) * total;
+  for (let i = 0; i < CYCLE_WEIGHTS.length; i++) {
+    edge -= CYCLE_WEIGHTS[i];
+    if (edge < 0) return i + 1;
+  }
+  return 8;
+}
+
+function expensiveChance(intensity: Exclude<CaptureIntensity, "clear">): number {
+  return EXPENSIVE_RATE[intensity];
+}
+
+function isRatchetPath(path: string): boolean {
+  return path === "ratchet.count" || path === "ratchet.rate" || path.startsWith("ratchet.");
+}
+
+/** Ratchet (and other gated modulators): whole touch is expensive, like euclid structure. */
+function touchMaybeExpensive(
+  current: Modulated,
+  roll: (...parts: (string | number)[]) => number,
+  prefix: string,
+  intensity: CaptureIntensity,
+  expensiveWhole: boolean,
+): Modulated {
+  if (intensity === "clear") return touchModulated(current, roll, prefix, intensity);
+  if (expensiveWhole && roll(prefix, "touch?") >= expensiveChance(intensity)) return current;
+  return touchModulated(current, roll, prefix, intensity);
+}
+
+function touchModulated(
+  current: Modulated,
+  roll: (...parts: (string | number)[]) => number,
+  prefix: string,
+  intensity: CaptureIntensity,
+): Modulated {
+  if (intensity === "clear") {
+    return { value: current.value, pattern: 0, cycle: current.cycle, amount: 0 };
+  }
+  const jitter = VALUE_JITTER[intensity];
+  const value =
+    intensity === "hard"
+      ? roll(prefix, "v")
+      : clamp01(current.value + (roll(prefix, "v") * 2 - 1) * jitter);
+  let pattern = current.pattern;
+  let cycle = current.cycle;
+  let amount = current.amount;
+  const rate = expensiveChance(intensity);
+  if (roll(prefix, "p?") < rate) pattern = Math.floor(roll(prefix, "p") * 64);
+  if (roll(prefix, "c?") < rate) cycle = cycleBiased(roll(prefix, "c"));
+  if (roll(prefix, "a?") < rate) amount = (roll(prefix, "a") * 2 - 1) * 0.75;
+  return modulated(value, pattern, cycle, amount);
+}
+
+/** Cheap pattern-gen step: nudge one of LEN/HIT/ROT/PRB by a small intensity-scaled amount. */
+function nudgeEuclid(
+  current: EuclidGen,
+  roll: (...parts: (string | number)[]) => number,
+  prefix: string,
+  intensity: Exclude<CaptureIntensity, "clear">,
+): EuclidGen {
+  const step = intensity === "soft" ? 1 : intensity === "medium" ? 2 : 3;
+  const probStep = intensity === "soft" ? 0.05 : intensity === "medium" ? 0.1 : 0.18;
+  let length = Math.max(0, Math.min(64, current.length));
+  let hits = Math.max(0, Math.min(length, current.hits));
+  let rotate = length > 0 ? ((current.rotate % length) + length) % length : 0;
+  let probability = clamp01(current.probability);
+  const which = Math.floor(roll(prefix, "which") * 4);
+  const sign = roll(prefix, "sign") < 0.5 ? -1 : 1;
+  if (which === 0) {
+    length = Math.max(0, Math.min(64, length + sign * (1 + Math.floor(roll(prefix, "len") * step))));
+  } else if (which === 1) {
+    hits = Math.max(0, Math.min(Math.max(length, 0), hits + sign * (1 + Math.floor(roll(prefix, "hits") * step))));
+  } else if (which === 2) {
+    if (length > 0) rotate = (((rotate + sign * (1 + Math.floor(roll(prefix, "rot") * step))) % length) + length) % length;
+  } else {
+    probability = clamp01(probability + sign * (probStep * (0.5 + roll(prefix, "prob"))));
+  }
+  if (length > 0) {
+    hits = Math.max(0, Math.min(length, hits));
+    rotate = rotate % length;
+  } else {
+    hits = 0;
+    rotate = 0;
+  }
+  return { length, hits, rotate, probability, velocity: current.velocity };
+}
+
+function touchEuclid(
+  current: EuclidGen,
+  roll: (...parts: (string | number)[]) => number,
+  prefix: string,
+  intensity: CaptureIntensity,
+): EuclidGen {
+  if (intensity === "clear") {
+    return {
+      ...current,
+      velocity: touchModulated(current.velocity, roll, `${prefix}.velocity`, intensity),
+    };
+  }
+  const nudged = nudgeEuclid(current, roll, prefix, intensity);
   return {
-    length,
-    hits,
-    rotate: Math.floor(roll("rot") * length),
-    probability: 0.35 + roll("prob") * 0.65,
-    velocity: modulated(
-      0.35 + roll("vel") * 0.65,
-      Math.floor(roll("vp") * 64),
-      1 + Math.floor(roll("vc") * 8),
-      (roll("va") * 2 - 1) * 0.75,
-    ),
+    ...nudged,
+    velocity: touchModulated(current.velocity, roll, `${prefix}.velocity`, intensity),
   };
 }
 
-function touch(roll: (...parts: (string | number)[]) => number, prefix: string) {
-  return modulated(
-    roll(prefix, "v"),
-    Math.floor(roll(prefix, "p") * 64),
-    1 + Math.floor(roll(prefix, "c") * 8),
-    (roll(prefix, "a") * 2 - 1) * 0.75,
-  );
+function touchPlay(current: ChordPlay, roll: (...parts: (string | number)[]) => number, intensity: CaptureIntensity): ChordPlay {
+  if (intensity === "clear") return { ...current };
+  const rate = expensiveChance(intensity);
+  const next = { ...current };
+  if (roll("play", "mode?") < rate) next.mode = Math.floor(roll("play", "mode") * 4);
+  if (roll("play", "rate?") < rate) next.rate = Math.floor(roll("play", "rate") * 6);
+  if (roll("play", "gate?") < rate) next.gate = roll("play", "gate");
+  if (roll("play", "oct?") < rate) next.octaves = 1 + Math.floor(roll("play", "oct") * 4);
+  if (roll("play", "spread?") < rate) next.spread = roll("play", "spread");
+  if (roll("play", "flow?") < rate) next.flow = roll("play", "flow");
+  if (roll("play", "strum?") < rate) next.strum = roll("play", "strum");
+  if (roll("play", "dir?") < rate) next.direction = Math.floor(roll("play", "dir") * 3);
+  return next;
 }
 
-function randomizePattern(lanes: Lanes, lane: LaneId, roll: (...parts: (string | number)[]) => number): void {
+function clamp01(value: number): number {
+  if (value < 0) return 0;
+  if (value > 1) return 1;
+  return value;
+}
+
+function randomizePattern(
+  lanes: Lanes,
+  lane: LaneId,
+  roll: (...parts: (string | number)[]) => number,
+  intensity: CaptureIntensity,
+): void {
   if (lane === "chords") return;
   const target = lanes[lane];
-  target.gen1 = randomEuclid((...parts) => roll("gen1", ...parts));
-  target.gen2 = randomEuclid((...parts) => roll("gen2", ...parts));
+  target.gen1 = touchEuclid(target.gen1, roll, "gen1", intensity);
+  target.gen2 = touchEuclid(target.gen2, roll, "gen2", intensity);
   if (lane === "bass" || lane === "lead") {
-    target.follow = roll("follow");
+    if (intensity !== "clear") target.follow = roll("follow");
   } else {
     const drum = lanes[lane];
-    drum.ratchet.count = touch(roll, "ratchet.count");
-    drum.ratchet.rate = touch(roll, "ratchet.rate");
+    drum.ratchet.count = touchMaybeExpensive(drum.ratchet.count, roll, "ratchet.count", intensity, true);
+    drum.ratchet.rate = touchMaybeExpensive(drum.ratchet.rate, roll, "ratchet.rate", intensity, true);
   }
 }
 
-function randomizeNotes(lanes: Lanes, lane: LaneId, roll: (...parts: (string | number)[]) => number): void {
+function randomizeNotes(
+  lanes: Lanes,
+  lane: LaneId,
+  roll: (...parts: (string | number)[]) => number,
+  intensity: CaptureIntensity,
+): void {
   if (lane === "bass" || lane === "lead") {
     const pitched = lanes[lane];
-    pitched.degree = touch(roll, "degree");
-    pitched.range = touch(roll, "range");
-    pitched.length = touch(roll, "length");
-    pitched.repeat = touch(roll, "repeat");
-    pitched.step = touch(roll, "step");
-    pitched.follow = roll("follow");
+    pitched.degree = touchModulated(pitched.degree, roll, "degree", intensity);
+    pitched.range = touchModulated(pitched.range, roll, "range", intensity);
+    pitched.length = touchModulated(pitched.length, roll, "length", intensity);
+    pitched.repeat = touchModulated(pitched.repeat, roll, "repeat", intensity);
+    pitched.step = touchModulated(pitched.step, roll, "step", intensity);
+    if (intensity !== "clear") pitched.follow = roll("follow");
     return;
   }
   if (lane !== "chords") return;
   const chords = lanes.chords;
-  chords.change = touch(roll, "change");
-  chords.length = touch(roll, "length");
-  chords.motion = touch(roll, "motion");
-  chords.variation = touch(roll, "variation");
-  chords.mood = touch(roll, "mood");
-  chords.tension = touch(roll, "tension");
-  chords.play = {
-    mode: Math.floor(roll("mode") * 4),
-    rate: Math.floor(roll("rate") * 6),
-    gate: roll("gate"),
-    octaves: 1 + Math.floor(roll("oct") * 4),
-    spread: roll("spread"),
-    flow: roll("flow"),
-    strum: roll("strum"),
-    direction: Math.floor(roll("dir") * 3),
-  };
+  chords.change = touchModulated(chords.change, roll, "change", intensity);
+  chords.length = touchModulated(chords.length, roll, "length", intensity);
+  chords.motion = touchModulated(chords.motion, roll, "motion", intensity);
+  chords.variation = touchModulated(chords.variation, roll, "variation", intensity);
+  chords.mood = touchModulated(chords.mood, roll, "mood", intensity);
+  chords.tension = touchModulated(chords.tension, roll, "tension", intensity);
+  chords.play = touchPlay(chords.play, roll, intensity);
 }
 
-function randomizeSound(sound: Record<string, ReturnType<typeof modulated>>, roll: (...parts: (string | number)[]) => number): void {
-  for (const id of Object.keys(sound)) sound[id] = touch(roll, id);
+function randomizeSound(
+  sound: Record<string, Modulated>,
+  roll: (...parts: (string | number)[]) => number,
+  intensity: CaptureIntensity,
+): void {
+  for (const id of Object.keys(sound)) sound[id] = touchModulated(sound[id], roll, id, intensity);
 }
 
 export function audibleEvents(project: Project, phraseLanes: Record<LaneId, { velocity: number; lane: LaneId }[]>): { lane: LaneId; velocity: number }[] {

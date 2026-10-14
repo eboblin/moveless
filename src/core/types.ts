@@ -121,6 +121,9 @@ export interface GlobalSettings {
 
 export type TransitionId = "now" | "fast" | "medium" | "slow";
 export type WanderId = "fast" | "medium" | "slow" | "glacial";
+/** Clear kills modulation; soft/medium/hard scale how often pattern/cycle/amount move. */
+export type CaptureIntensity = "clear" | "soft" | "medium" | "hard";
+export const CAPTURE_INTENSITIES: readonly CaptureIntensity[] = ["clear", "soft", "medium", "hard"];
 
 export const TRANSITION_BARS: Record<TransitionId, number> = {
   now: 0,
@@ -177,6 +180,8 @@ export interface Project {
   morph: MorphState | null;
   clipboardSceneId: string | null;
   captureNonce: number;
+  /** Capture overlay + plain Capture: clear modulation or soft/medium/hard reroll. */
+  captureIntensity: CaptureIntensity;
 }
 
 export interface HarmonicEvent {
