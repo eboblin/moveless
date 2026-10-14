@@ -8,18 +8,22 @@ import type { UiState } from "./state.ts";
 
 export const WIDTH = 128;
 export const HEIGHT = 64;
-/** Title at y=1 (5 px) + pager underline — no spare rows under the 4×5 face. */
-export const HEADER_H = 7;
 /** Typical advance for the bundled 4×5 face (cap body + 1 px gap). */
 export const CHAR_W = 5;
 export const FONT_H = 5;
 export const PARAM_COLS = 8;
 export const PARAM_COL_W = WIDTH / PARAM_COLS;
-/** Bottom strip packed: value → bar → name, 1 px pad under the name. */
-export const NAME_Y = HEIGHT - FONT_H - 1;
-export const BAR_Y = NAME_Y - 2;
-export const VALUE_Y = BAR_Y - FONT_H - 1;
-export const VIZ_H = VALUE_Y - HEADER_H - 1;
+/** Header: title, 1 px gap, pager, 1 px gap, then viz. */
+export const TITLE_Y = 1;
+export const PAGER_Y = TITLE_Y + FONT_H + 1;
+export const HEADER_H = PAGER_Y + 2;
+/** Bottom strip: value → 2 px → name → 2 px → meter → 1 px pad. */
+export const BAR_Y = HEIGHT - 2;
+export const NAME_Y = BAR_Y - FONT_H - 2;
+export const VALUE_Y = NAME_Y - FONT_H - 2;
+/** Viz zone ends with a separator, then 2 px gap above values. */
+export const VIZ_H = VALUE_Y - HEADER_H - 2;
+export const SEP_Y = HEADER_H + VIZ_H - 1;
 export const PARAM_H = HEIGHT - HEADER_H - VIZ_H;
 
 export interface Label {
@@ -56,7 +60,7 @@ export function renderScreen(project: Project, ui: UiState, tick: number, playin
   const notice = ui.notice && now < ui.notice.untilMs ? ui.notice : null;
   const focusState = !notice && ui.focus && (ui.focus.held || tick < ui.focus.untilTick) ? ui.focus : null;
   const focus = focusState?.label ?? null;
-  const header = focus ? fullName(focus) : laneHeader(project, context, page?.title ?? "");
+  const header = focus ? fullName(focus) : laneHeader(project, context, page);
   const vizLane: LaneId | null = context === "mix" || context === "global" ? null : context;
   const generator = vizLane && focusState?.generator ? focusState.generator : null;
   const mixer = !notice && context === "mix";
@@ -64,9 +68,7 @@ export function renderScreen(project: Project, ui: UiState, tick: number, playin
   const params = page ? page.bindings.map((binding) => binding?.label ?? "").filter(Boolean).join(" ") : "";
   const pixels = new Uint8Array(WIDTH * HEIGHT);
   drawPager(pixels, Math.min(pageIndex, Math.max(0, pages.length - 1)), pages.length);
-  if (!mixer) {
-    for (let x = 0; x < WIDTH; x++) set(pixels, x, HEADER_H + VIZ_H - 1, 1);
-  }
+  if (!mixer) drawParamSeparator(pixels);
   if (notice) fillViz(pixels);
   else if (mixer) drawMixer(pixels, project, focus);
   else if (generator) drawGenerator(pixels, project, context, generator, focusState?.showPattern ?? false, playing ? stepAt(project, tick) : -1);
@@ -169,17 +171,35 @@ function centered(text: string): number {
   return Math.max(0, Math.floor((WIDTH - text.length * CHAR_W) / 2));
 }
 
-function laneHeader(project: Project, context: ContextId, title: string): string {
-  const mute = context !== "mix" && context !== "global" && project.mute[context] ? "M" : " ";
-  const lock = context !== "mix" && context !== "global" && project.lock[context] ? "L" : " ";
-  return `${LANE_CODE[context]} [${mute}][${lock}] ${title}`;
+function laneTag(project: Project, context: ContextId): string {
+  let tag = LANE_CODE[context];
+  if (context !== "mix" && context !== "global") {
+    if (project.mute[context]) tag += "M";
+    if (project.lock[context]) tag += "L";
+  }
+  return tag;
+}
+
+function laneHeader(project: Project, context: ContextId, page: Page | undefined): string {
+  const tag = laneTag(project, context);
+  const [left, right] = page?.groups ?? [page?.title ?? null, null];
+  return [tag, left, right].filter(Boolean).join(" ");
+}
+
+/** Left-align `text` inside a horizontal half of the header (0 = left, 1 = right). */
+export function halfLeftX(half: 0 | 1): number {
+  return half * (WIDTH / 2) + 1;
+}
+
+/** Right-align `text` against the right edge of the screen. */
+export function rightEdgeX(text: string, textWidth = text.length * CHAR_W): number {
+  return Math.max(0, WIDTH - textWidth);
 }
 
 /** Header rule, one pixel tall. The current page is solid; the others are dotted, with a 1 px gap between pages. */
 function drawPager(pixels: Uint8Array, index: number, count: number): void {
-  const y = HEADER_H - 1;
   if (count <= 1) {
-    for (let x = 0; x < WIDTH; x++) set(pixels, x, y, 1);
+    for (let x = 0; x < WIDTH; x++) set(pixels, x, PAGER_Y, 1);
     return;
   }
   const gaps = count - 1;
@@ -189,10 +209,15 @@ function drawPager(pixels: Uint8Array, index: number, count: number): void {
   for (let i = 0; i < count; i++) {
     const width = edge(i + 1) - edge(i);
     for (let p = 0; p < width; p++) {
-      if (i === index || p % 2 === 0) set(pixels, x + p, y, 1);
+      if (i === index || p % 2 === 0) set(pixels, x + p, PAGER_Y, 1);
     }
     x += width + 1;
   }
+}
+
+/** Solid rule above the knob parameter strip. */
+function drawParamSeparator(pixels: Uint8Array): void {
+  for (let x = 0; x < WIDTH; x++) set(pixels, x, SEP_Y, 1);
 }
 
 function drawGenerator(pixels: Uint8Array, project: Project, context: ContextId, path: string, showPattern: boolean, playhead: number): void {
@@ -349,9 +374,16 @@ function drawLabels(
   page: Page | undefined,
   focus: string | null,
 ): Label[] {
-  const code = LANE_CODE[context];
-  const title = focus ? fullName(focus) : `${code} ${page?.title ?? ""}`.replace(/\s+/g, " ").trim();
-  const labels: Label[] = [{ x: 1, y: 1, text: title.slice(0, LINE_LIMIT) }];
+  const labels: Label[] = [];
+  const tag = laneTag(project, context);
+  labels.push({ x: rightEdgeX(tag), y: TITLE_Y, text: tag });
+  if (focus) {
+    labels.push({ x: 1, y: TITLE_Y, text: fullName(focus).slice(0, LINE_LIMIT) });
+  } else {
+    const [left, right] = page?.groups ?? [null, null];
+    if (left) labels.push({ x: halfLeftX(0), y: TITLE_Y, text: left });
+    if (right) labels.push({ x: halfLeftX(1), y: TITLE_Y, text: right });
+  }
   page?.bindings.forEach((binding, index) => {
     if (!binding || index >= PARAM_COLS) return;
     const shown = formatValue(readControl(project, context, binding.path), binding.integer);

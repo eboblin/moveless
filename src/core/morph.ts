@@ -44,7 +44,8 @@ export function applyMorph(project: Project, tick: number): Project {
   const t = morphProgress(project.morph, tick);
   const working = mergeLanes(project.morph.start, target.lanes, project.working, t, new Set(project.morph.punched), project.lock);
   const done = tick >= project.morph.originTick && t >= 1;
-  return { ...project, working, morph: done ? null : project.morph };
+  if (!done) return { ...project, working };
+  return { ...project, working, morph: null, activeSceneId: target.id, wanderPreviousTarget: target.id };
 }
 
 export function retarget(project: Project, scene: Scene, tick: number): Project {

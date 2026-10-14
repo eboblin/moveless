@@ -90,10 +90,8 @@ function onStep(session: Session, index: number, press: boolean): Session {
     }
     if (!press) {
       if (session.ui.heldLane !== lane) return session;
-      const started = session.ui.laneDownTick;
-      const tapped = started !== null && session.tick - started < HOLD_TICKS;
       const count = pageCount(lane);
-      const page = Math.min(session.ui.page, count - 1);
+      const page = Math.min(session.ui.heldPage ?? session.ui.page, count - 1);
       return {
         ...session,
         ui: {
@@ -101,8 +99,8 @@ function onStep(session: Session, index: number, press: boolean): Session {
           heldLane: null,
           heldPage: null,
           laneDownTick: null,
-          context: tapped ? lane : session.ui.context,
-          page: tapped ? page : session.ui.page,
+          context: lane,
+          page,
         },
       };
     }

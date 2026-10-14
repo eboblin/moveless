@@ -16,7 +16,8 @@ import {
   type WanderId,
 } from "./types.ts";
 
-const SCENE_COLORS = [1, 3, 5, 8, 9, 11, 14, 16, 17, 20, 22, 23, 25, 28, 32, 126];
+/** Bright palette indices 1–26 only — each has dim/dark partners at 63+2c / 64+2c. */
+const SCENE_COLORS = [1, 2, 3, 5, 7, 8, 9, 11, 14, 15, 16, 17, 20, 22, 23, 25];
 
 export function sceneColor(id: string): number {
   let hash = 2166136261;
@@ -38,6 +39,7 @@ export function record(project: Project): Project {
     ...project,
     nextSceneId: project.nextSceneId + 1,
     journal: [...project.journal, scene],
+    activeSceneId: id,
   };
 }
 

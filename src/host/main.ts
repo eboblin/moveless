@@ -4,7 +4,7 @@ import { advance } from "../core/performance.ts";
 import { phraseLoop, soundMotions } from "../dsp/schedule.ts";
 import { packPhraseBody } from "../dsp/voice.ts";
 import { reduce, type MidiMsg, type Session } from "../ui/input.ts";
-import { MENU_CC, menuLed, padLeds, stepLeds, trackLeds } from "../ui/leds.ts";
+import { MENU_CC, ledColorAt, menuLed, padLeds, stepLeds, trackLeds } from "../ui/leds.ts";
 import {
   CHAR_W,
   FONT_H,
@@ -131,9 +131,9 @@ function paint(): void {
     host.print?.(x, label.y, label.text, 0);
   }
   if (!host.move_midi_internal_send) return;
-  const blinkOn = Math.floor(session.tick / (PPQN / 2)) % 2 === 0;
+  const tick = session.tick;
   stepLeds(session.project, session.ui.context).forEach((led, index) => {
-    const color = led.blink && !blinkOn ? 0 : led.color;
+    const color = ledColorAt(led, tick, PPQN);
     if (sentSteps[index] === color) return;
     sentSteps[index] = color;
     host.move_midi_internal_send?.([0x09, 0x90, 16 + index, color]);
@@ -144,13 +144,13 @@ function paint(): void {
     host.move_midi_internal_send([0x0B, 0xB0, MENU_CC, menu]);
   }
   trackLeds(session.project, session.ui.context, session.ui.page).forEach((led, index) => {
-    const color = led.blink && !blinkOn ? 0 : led.color;
+    const color = ledColorAt(led, tick, PPQN);
     if (sentTracks[index] === color) return;
     sentTracks[index] = color;
     host.move_midi_internal_send?.([0x0B, 0xB0, TRACK_CC + index, color]);
   });
-  padLeds(session.project, session.ui.mode, session.ui).forEach((led, index) => {
-    const color = led.blink && !blinkOn ? 0 : led.color;
+  padLeds(session.project, session.ui.mode, session.ui, tick).forEach((led, index) => {
+    const color = ledColorAt(led, tick, PPQN);
     if (sentPads[index] === color) return;
     sentPads[index] = color;
     host.move_midi_internal_send?.([0x09, 0x90, 68 + index, color]);

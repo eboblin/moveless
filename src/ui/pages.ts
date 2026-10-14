@@ -13,6 +13,8 @@ export interface Binding {
 export interface Page {
   id: string;
   title: string;
+  /** Names for the left and right knob fours; shown right-aligned in each header half. */
+  groups: [string | null, string | null];
   bindings: (Binding | null)[];
 }
 
@@ -40,7 +42,12 @@ function vpca(path: string, label: string): Binding[] {
 }
 
 function pair(aPath: string, aLabel: string, bPath: string, bLabel: string): Page {
-  return { id: aPath, title: `${aLabel} ${bLabel}`, bindings: slots([...vpca(aPath, aLabel), ...vpca(bPath, bLabel)]) };
+  return {
+    id: aPath,
+    title: `${aLabel} ${bLabel}`,
+    groups: [aLabel, bLabel],
+    bindings: slots([...vpca(aPath, aLabel), ...vpca(bPath, bLabel)]),
+  };
 }
 
 function genPage(which: 1 | 2): Page {
@@ -49,6 +56,7 @@ function genPage(which: 1 | 2): Page {
   return {
     id: prefix,
     title: `GEN ${which}`,
+    groups: [`GEN ${which}`, "VEL"],
     bindings: slots([
       num(`${prefix}.length`, `${tag} LEN`, 0, 64, 1, true),
       num(`${prefix}.hits`, `${tag} HIT`, 0, 64, 1, true),
@@ -63,6 +71,7 @@ function pitchPage(): Page {
   return {
     id: "pitch",
     title: "PITCH",
+    groups: ["DEGREE", "RANGE"],
     bindings: slots([
       ...vpca("degree", "DEGREE"),
       num("range.value", "RANGE V", 0, 1, 0.01),
@@ -77,6 +86,7 @@ function lengthPage(): Page {
   return {
     id: "length",
     title: "LENGTH",
+    groups: ["LENGTH", null],
     bindings: slots(vpca("length", "LENGTH")),
   };
 }
@@ -95,6 +105,7 @@ function playPage(): Page {
   return {
     id: "play",
     title: "PLAY",
+    groups: ["PLAY", "FLOW"],
     bindings: slots([
       num("play.mode", "MODE", 0, 3, 1, true),
       num("play.rate", "RATE", 0, 5, 1, true),
@@ -134,6 +145,7 @@ export function mixPage(): Page {
   return {
     id: "mix",
     title: "MIXER",
+    groups: [null, null],
     bindings: slots([
       ...lanes.map((lane) => num(lane, LANE_CODE[lane], 0, 1, 0.01)),
       num("master", "MASTER", 0, 1, 0.01),
@@ -145,6 +157,7 @@ export function globalPages(): Page[] {
   const settings: Page = {
     id: "settings",
     title: "GLOBAL",
+    groups: ["TIME", "FORM"],
     bindings: slots([
       num("tempo", "TEMPO", 40, 240, 1, true),
       num("swing", "SWING", 0, 1, 0.01),
@@ -163,6 +176,7 @@ export function globalPages(): Page[] {
     macros.push({
       id: `macro-${i / 8}`,
       title: "MACRO",
+      groups: ["MACRO", null],
       bindings: slots(slice.map((id) => num(`macro.${id}`, id.toUpperCase(), -1, 1, 0.01))),
     });
   }

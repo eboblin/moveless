@@ -172,6 +172,8 @@ export interface Project {
   wander: WanderId | null;
   wanderPreviousTarget: string | null;
   wanderOriginTick: number;
+  /** Last scene that fully landed; source pad while a morph is running. */
+  activeSceneId: string | null;
   morph: MorphState | null;
   clipboardSceneId: string | null;
   captureNonce: number;

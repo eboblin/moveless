@@ -4,11 +4,11 @@ import { clone } from "../src/core/clone.ts";
 import { unitForIndex } from "../src/core/clock.ts";
 import { defaultProject } from "../src/core/defaults.ts";
 import { modulated } from "../src/core/modulate.ts";
-import { createSet, record } from "../src/core/performance.ts";
+import { createSet, launchScene, record } from "../src/core/performance.ts";
 import { generatePhrase } from "../src/core/phrase.ts";
 import { lanePages, pageCount, pageGroupColor } from "../src/ui/pages.ts";
-import { menuLed, padLeds, stepLed, stepLeds, trackLeds } from "../src/ui/leds.ts";
-import { BAR_Y, FONT_H, HEADER_H, HEIGHT, NAME_Y, PARAM_H, VALUE_Y, VIZ_H, pixel, renderScreen, type Screen } from "../src/ui/screen.ts";
+import { menuLed, padLeds, shadeColor, stepLed, stepLeds, trackLeds } from "../src/ui/leds.ts";
+import { BAR_Y, FONT_H, HEADER_H, HEIGHT, NAME_Y, PAGER_Y, PARAM_H, SEP_Y, TITLE_Y, VALUE_Y, VIZ_H, pixel, renderScreen, type Screen } from "../src/ui/screen.ts";
 import { defaultUi, openSetMode } from "../src/ui/state.ts";
 import { reduce, relDelta, type Session } from "../src/ui/input.ts";
 
@@ -23,6 +23,8 @@ describe("pages and leds", () => {
     assert.equal(pageCount("lead"), 9);
     assert.equal(pageCount("chords"), 8);
     assert.equal(lanePages("kick")[0].title, "GEN 1");
+    assert.deepEqual(lanePages("kick")[0].groups, ["GEN 1", "VEL"]);
+    assert.deepEqual(lanePages("kick")[2].groups, ["COUNT", "RATE"]);
     assert.equal(lanePages("kick")[1].title, "GEN 2");
     assert.equal(lanePages("kick")[0].bindings[3]?.label, "G1 PRB");
     assert.equal(lanePages("kick")[2].title.includes("COUNT"), true);
@@ -56,12 +58,18 @@ describe("pages and leds", () => {
     assert.equal(stepLed(project, "kick", "bass").blink, false);
   });
 
-  it("lights saved scene pads and blinks the newest", () => {
+  it("lights saved scene pads; active and morph target share beat blink, target shades", () => {
     const empty = padLeds(defaultProject(), "journal");
     assert.equal(empty.length, 32);
-    assert.ok(empty.every((item) => item.color === 0));
+    assert.equal(empty[0].color, 8);
+    assert.equal(empty[0].blink, true);
+    assert.ok(empty.slice(1).every((item) => item.color === 0));
+    const emptySet = padLeds(defaultProject(), "set");
+    assert.equal(emptySet[0].blink, true);
+    assert.equal(emptySet[0].color, 8);
     let project = record(defaultProject());
     project = record(project);
+    assert.equal(project.activeSceneId, "002");
     const journal = padLeds(project, "journal");
     assert.notEqual(journal[0].color, 0);
     assert.notEqual(journal[1].color, 0);
@@ -69,7 +77,27 @@ describe("pages and leds", () => {
     assert.equal(journal[0].blink, false);
     assert.equal(journal[1].blink, true);
     assert.equal(journal[2].color, 0);
-    project = { ...project, sets: [{ id: "set-1", name: "A", sceneIds: ["002"] }], activeSetId: "set-1" };
+    const targetColor = journal[0].color;
+    project = { ...project, transition: "fast" };
+    project = launchScene(project, "001", 0);
+    const start = padLeds(project, "journal", undefined, 0);
+    assert.equal(start[0].blink, true);
+    assert.equal(start[0].color, shadeColor(targetColor, 1 / 6));
+    assert.equal(start[1].blink, true);
+    const halfTick = (project.morph?.originTick ?? 0) + (project.morph?.durationTicks ?? 0) / 2;
+    const mid = padLeds(project, "journal", undefined, halfTick);
+    assert.equal(mid[0].color, shadeColor(targetColor, 0.5));
+    assert.equal(mid[0].blink, true);
+    assert.equal(mid[1].blink, true);
+    const endTick = (project.morph?.originTick ?? 0) + (project.morph?.durationTicks ?? 0);
+    const end = padLeds(project, "journal", undefined, endTick);
+    assert.equal(end[0].color, targetColor);
+    assert.equal(end[0].blink, true);
+    assert.equal(shadeColor(3, 0), 0);
+    assert.equal(shadeColor(3, 0.2), 70);
+    assert.equal(shadeColor(3, 0.5), 69);
+    assert.equal(shadeColor(3, 1), 3);
+    project = { ...project, sets: [{ id: "set-1", name: "A", sceneIds: ["002"] }], activeSetId: "set-1", morph: null };
     const bank = padLeds(project, "set");
     assert.equal(bank[0].color, journal[1].color);
     assert.equal(bank[0].blink, true);
@@ -96,7 +124,7 @@ describe("pages and leds", () => {
 });
 
 describe("surface", () => {
-  it("selects a lane on a short press and peeks without committing on a long one", () => {
+  it("selects a lane on release whether the press was short or long", () => {
     let state = session();
     state = reduce(state, { kind: "note", data1: 20, data2: 127 });
     assert.equal(state.ui.context, "kick");
@@ -105,7 +133,7 @@ describe("surface", () => {
     assert.equal(state.ui.context, "bass");
     state = reduce(state, { kind: "note", data1: 16, data2: 127 });
     state = reduce({ ...state, tick: state.tick + 200 }, { kind: "note", data1: 16, data2: 0 });
-    assert.equal(state.ui.context, "bass");
+    assert.equal(state.ui.context, "kick");
   });
 
   it("turns pages from the wheel and commits a peeked page", () => {
@@ -133,15 +161,18 @@ describe("surface", () => {
     assert.equal(state.ui.focus?.label, "G1 LEN");
     const screen = renderScreen(state.project, state.ui, 0);
     assert.equal(screen.header, "G1 LEN");
-    assert.equal(screen.labels[0].text, "G1 LEN");
+    assert.ok(screen.labels.some((label) => label.text === "G1 LEN" && label.y === TITLE_Y));
+    assert.ok(screen.labels.some((label) => label.text === "KCK" && label.y === TITLE_Y && !label.invert));
     const marked = screen.labels.filter((label) => label.invert);
     assert.ok(marked.some((label) => label.text === "15"));
     assert.ok(marked.some((label) => label.text === "LEN"));
     assert.equal(HEADER_H + VIZ_H + PARAM_H, 64);
-    assert.equal(pixel(screen, 0, HEADER_H - 1), 1);
-    assert.equal(pixel(screen, 14, HEADER_H - 1), 1);
-    assert.equal(pixel(screen, 16, HEADER_H - 1), 1);
-    assert.equal(pixel(screen, 17, HEADER_H - 1), 0);
+    assert.equal(PAGER_Y, TITLE_Y + FONT_H + 1);
+    assert.equal(HEADER_H, PAGER_Y + 2);
+    assert.equal(pixel(screen, 0, PAGER_Y), 1);
+    assert.equal(pixel(screen, 14, PAGER_Y), 1);
+    assert.equal(pixel(screen, 16, PAGER_Y), 1);
+    assert.equal(pixel(screen, 17, PAGER_Y), 0);
     assert.equal(pixel(screen, 0, HEADER_H), 0);
     assert.equal(pixel(screen, 0, HEADER_H + VIZ_H - 2), 0);
     assert.ok(columnSpan(screen, 0) > 0);
@@ -228,19 +259,31 @@ describe("surface", () => {
 
   it("draws eight parameter columns and leaves transport out of the header", () => {
     const screen = renderScreen(defaultProject(), defaultUi(), 0, true);
-    assert.equal(screen.labels[0].text.includes("PLAY"), false);
-    assert.equal(screen.labels[0].text.includes("STOP"), false);
-    assert.match(screen.labels[0].text, /^KCK /);
-    assert.equal(screen.labels[0].text.includes("JRN"), false);
-    assert.equal(screen.labels[0].text.includes("SET"), false);
+    const lane = screen.labels.find((label) => label.text === "KCK" && label.y === TITLE_Y);
+    assert.ok(lane);
+    assert.equal(lane?.invert, undefined);
+    assert.ok((lane?.x ?? 0) > 100);
+    assert.equal(screen.labels.some((label) => label.text === "GEN 1" && label.y === TITLE_Y), true);
+    assert.equal(screen.labels.some((label) => label.text === "VEL" && label.y === TITLE_Y), true);
+    assert.equal(screen.labels.some((label) => label.text.includes("PLAY") && label.y === TITLE_Y), false);
+    assert.equal(screen.labels.some((label) => label.text.includes("JRN")), false);
+    assert.equal(screen.labels.some((label) => label.text.includes("SET")), false);
+    const genX = screen.labels.find((label) => label.text === "GEN 1")?.x ?? -1;
+    const velX = screen.labels.find((label) => label.text === "VEL")?.x ?? -1;
+    assert.equal(genX, 1);
+    assert.equal(velX, 65);
     const names = screen.labels.filter((label) => label.y === NAME_Y);
     assert.deepEqual(names.map((label) => label.text), ["LEN", "HIT", "ROT", "PRB", "V", "P", "C", "A"]);
     const values = screen.labels.filter((label) => label.y === VALUE_Y);
     assert.equal(values.length, 8);
-    assert.equal(NAME_Y, BAR_Y + 2);
-    assert.equal(NAME_Y + FONT_H + 1, HEIGHT);
-    assert.ok(BAR_Y > VALUE_Y);
-    // Default gen1 length=16/64 → quarter bar in column 0 (inner width 14).
+    assert.equal(BAR_Y, HEIGHT - 2);
+    assert.equal(NAME_Y, BAR_Y - FONT_H - 2);
+    assert.equal(VALUE_Y, NAME_Y - FONT_H - 2);
+    assert.equal(SEP_Y, VALUE_Y - 3);
+    assert.equal(pixel(screen, 0, SEP_Y), 1);
+    assert.equal(pixel(screen, 63, SEP_Y), 1);
+    assert.equal(pixel(screen, 127, SEP_Y), 1);
+    // Default gen1 length=16/64 → quarter bar in column 0 (inner width 14), under the name labels.
     assert.equal(pixel(screen, 1, BAR_Y), 1);
     assert.equal(pixel(screen, 1 + 3, BAR_Y), 1);
     assert.equal(pixel(screen, 1 + 4, BAR_Y), 0);
@@ -262,11 +305,11 @@ describe("surface", () => {
     assert.ok(columnSpan(screen, 1) <= VIZ_H / 2);
     assert.equal(pixel(screen, 60, HEADER_H), 0);
     const turned = renderScreen(defaultProject(), { ...defaultUi(), page: 2 }, 0);
-    assert.equal(pixel(turned, 1, HEADER_H - 1), 0);
-    assert.equal(pixel(turned, 36, HEADER_H - 1), 1);
-    assert.equal(pixel(turned, 37, HEADER_H - 1), 1);
+    assert.equal(pixel(turned, 1, PAGER_Y), 0);
+    assert.equal(pixel(turned, 36, PAGER_Y), 1);
+    assert.equal(pixel(turned, 37, PAGER_Y), 1);
     const mix = renderScreen(defaultProject(), { ...defaultUi(), context: "mix" }, 0);
-    assert.equal(pixel(mix, 15, HEADER_H - 1), 1);
+    assert.equal(pixel(mix, 15, PAGER_Y), 1);
     assert.equal(mix.viz, "mixer");
     assert.ok(mix.labels.some((label) => label.text === "KCK" && label.y === HEADER_H + 1));
     const bassProject = defaultProject();

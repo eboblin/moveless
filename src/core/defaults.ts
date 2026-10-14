@@ -215,6 +215,7 @@ export function defaultProject(): Project {
     wander: null,
     wanderPreviousTarget: null,
     wanderOriginTick: 0,
+    activeSceneId: null,
     morph: null,
     clipboardSceneId: null,
     captureNonce: 0,

@@ -198,6 +198,7 @@ describe("morph, journal, macros", () => {
     assert.equal(half.working.kick.ratchet.count.pattern, 10);
     const done = applyMorph(project, 4 * 192);
     assert.equal(done.morph, null);
+    assert.equal(done.activeSceneId, "002");
     assert.equal(done.working.kick.gen1.velocity.value, 1);
   });
 

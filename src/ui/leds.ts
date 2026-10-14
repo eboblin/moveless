@@ -1,3 +1,4 @@
+import { morphProgress } from "../core/morph.ts";
 import { sceneColor, journalPadIds, setPadIds } from "../core/performance.ts";
 import { LANE_CODE, type ContextId, type LaneId, type Project, type TransitionId, type WanderId } from "../core/types.ts";
 import { pageCount, pageGroupColor } from "./pages.ts";
@@ -8,6 +9,8 @@ export const LED = {
   yellow: 8,
   purple: 22,
   lock: 125,
+  /** Unsaved working state when journal/set has no scenes yet. */
+  working: 8,
 } as const;
 
 export type LedFamily = "red" | "yellow" | "purple" | "lock" | "off";
@@ -80,26 +83,52 @@ export interface PadSurface {
   page?: number;
 }
 
-/** Occupied scene pads use that scene's color. The newest one blinks. Wheel-touch replaces the grid with pages, Transition and Wander. */
-export function padLeds(project: Project, mode: "journal" | "set", surface?: PadSurface): Led[] {
+/**
+ * Playing and morph-target pads share the same beat-locked blink. Target also shades
+ * dark→dim→bright by morph progress. An empty journal/set still shows pad 0 as the
+ * current working scene. Wheel-touch replaces the grid with pages, Transition and Wander.
+ */
+export function padLeds(project: Project, mode: "journal" | "set", surface?: PadSurface, tick = 0): Led[] {
   const context = surface?.context ?? "kick";
   const page = surface?.page ?? 0;
   if (surface?.wheelTouch) return wheelPadLeds(project, context, page);
-  const scenes = scenePadLeds(project, mode);
+  const scenes = scenePadLeds(project, mode, tick);
   if (surface?.heldLane) return pageOverlay(scenes, surface.heldLane, surface.heldLane === context ? page : -1);
   return scenes;
 }
 
-function scenePadLeds(project: Project, mode: "journal" | "set"): Led[] {
+/**
+ * Move palette colours 1–26 have dim/dark partners at 63+2c / 64+2c.
+ * amount 0 = off; (0,1/3) = dark; [1/3,2/3) = dim; [2/3,1] = bright.
+ */
+export function shadeColor(color: number, amount: number): number {
+  if (amount <= 0) return 0;
+  if (color < 1 || color > 26) return amount >= 1 ? color : 0;
+  if (amount < 1 / 3) return 64 + 2 * color;
+  if (amount < 2 / 3) return 63 + 2 * color;
+  return color;
+}
+
+function scenePadLeds(project: Project, mode: "journal" | "set", tick: number): Led[] {
   const ids = mode === "set" ? setPadIds(project) : journalPadIds(project);
-  let newest = -1;
-  ids.forEach((id, index) => {
-    if (id) newest = index;
-  });
-  return ids.map((id, index) => {
+  if (ids.every((id) => id === null)) {
+    return ids.map((_, index) => (index === 0 ? { family: "yellow", color: LED.working, blink: true } : led("off", false)));
+  }
+  const morph = project.morph;
+  const targetId = morph?.targetId ?? null;
+  const activeId = project.activeSceneId;
+  const progress = morph ? morphProgress(morph, tick) : 0;
+  // Armed target shows at least dark so the press is visible before the morph starts.
+  const targetAmount = morph ? Math.max(progress, 1 / 6) : 0;
+  return ids.map((id) => {
     if (!id) return led("off", false);
     const scene = project.journal.find((item) => item.id === id);
-    return { family: "yellow", color: scene?.color ?? sceneColor(id), blink: index === newest };
+    const color = scene?.color ?? sceneColor(id);
+    if (targetId && id === targetId) {
+      return { family: "yellow", color: shadeColor(color, targetAmount), blink: true };
+    }
+    if (id === activeId) return { family: "yellow", color, blink: true };
+    return { family: "yellow", color, blink: false };
   });
 }
 
@@ -133,6 +162,17 @@ export const MENU_CC = 50;
 
 export function ledLabel(project: Project, context: ContextId): string {
   return LANE_CODE[context];
+}
+
+/** Half-period in ticks for beat-locked blink (full on/off cycle = 1 quarter note). */
+export function blinkHalfPeriod(ppqn: number): number {
+  return ppqn / 2;
+}
+
+export function ledColorAt(led: Led, tick: number, ppqn: number): number {
+  if (!led.blink) return led.color;
+  const on = Math.floor(tick / blinkHalfPeriod(ppqn)) % 2 === 0;
+  return on ? led.color : 0;
 }
 
 function led(family: LedFamily, blink: boolean): Led {
