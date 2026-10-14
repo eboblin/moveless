@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "test": "node --experimental-strip-types --test test/core.test.ts test/ui.test.ts test/dsp.test.ts",
+    "test": "node --experimental-strip-types --test test/core.test.ts test/ui.test.ts test/dsp.test.ts test/persist.test.ts",
     "typecheck": "tsc --noEmit",
     "bench": "node scripts/bench.ts",
     "build": "esbuild src/host/main.ts --bundle --format=esm --platform=neutral --target=es2022 --outfile=ui.js",

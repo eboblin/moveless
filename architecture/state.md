@@ -1,8 +1,10 @@
 # Состояние
 
-Код: `src/core/types.ts`, `src/core/defaults.ts`, `src/core/phrase.ts`.
+Код: `src/core/types.ts`, `src/core/defaults.ts`, `src/core/phrase.ts`, `src/core/persist.ts`.
 
 Числа в сцене нормализованы. Подписи экрана (`P13`, `1/16`, `Snap`) живут в UI.
+
+Пока проект один: целиком пишется в `/data/UserData/schwung/ptnmove/project.json` (вне каталога модуля, чтобы deploy не затирал). Сохранение — `onUnload` и debounce ~2 с после изменений; `init` поднимает файл или defaults. Morph и `wanderOriginTick` на диск не живут (сбрасываются); context/page/mode UI восстанавливаются.
 
 ## Коробки
 

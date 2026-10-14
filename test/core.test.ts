@@ -18,6 +18,8 @@ import {
   launchScene,
   pickWanderCandidate,
   record,
+  removeSceneFromJournal,
+  removeSceneFromSet,
   sceneColor,
   sceneIdsForPads,
   setCaptureIntensity,
@@ -527,6 +529,33 @@ describe("capture, wander, sets", () => {
       assert.notEqual(pickWanderCandidate(ids, "002", 1, salt), "002");
     }
     assert.equal(pickWanderCandidate(["002"], "002", 1, 4), "002");
+  });
+
+  it("removes a journal scene and strips every set link", () => {
+    let project = record(defaultProject());
+    project = record(project);
+    project = createSet(project, "A");
+    project = addSceneToSet(project, "set-1", "001");
+    project = createSet(project, "B");
+    project = addSceneToSet(project, "set-2", "001");
+    project = addSceneToSet(project, "set-2", "002");
+    project = { ...project, clipboardSceneId: "001", activeSceneId: "001", wanderPreviousTarget: "001" };
+    project = removeSceneFromJournal(project, "001");
+    assert.deepEqual(
+      project.journal.map((scene) => scene.id),
+      ["002"],
+    );
+    assert.deepEqual(project.sets[0].sceneIds, []);
+    assert.deepEqual(project.sets[1].sceneIds, ["002"]);
+    assert.equal(project.clipboardSceneId, null);
+    assert.equal(project.activeSceneId, null);
+    assert.equal(project.wanderPreviousTarget, null);
+    const onlySet = removeSceneFromSet(
+      { ...defaultProject(), sets: [{ id: "set-1", name: "A", sceneIds: ["001", "002"] }], activeSetId: "set-1", journal: project.journal },
+      "set-1",
+      "002",
+    );
+    assert.deepEqual(onlySet.sets[0].sceneIds, ["001"]);
   });
 
   it("fills pads from the journal until a set has scenes, and stops at 32", () => {

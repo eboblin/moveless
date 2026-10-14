@@ -1,6 +1,7 @@
 import { PPQN, SAMPLE_RATE } from "../core/clock.ts";
 import { defaultProject } from "../core/defaults.ts";
 import { advance } from "../core/performance.ts";
+import { loadStoredProject, saveStoredProject, type HostFiles, type StoredUi } from "../core/persist.ts";
 import { phraseLoop, soundMotions } from "../dsp/schedule.ts";
 import { packPhraseBody } from "../dsp/voice.ts";
 import { reduce, type MidiMsg, type Session } from "../ui/input.ts";
@@ -30,16 +31,43 @@ interface HostGlobals {
   move_midi_internal_send?: (packet: number[]) => void;
   host_module_set_param?: (key: string, value: string) => void;
   shadow_set_param?: (slot: number, key: string, value: string) => void;
+  host_ensure_dir?: (path: string) => boolean | void;
+  host_file_exists?: (path: string) => boolean;
+  host_read_file?: (path: string) => string | null;
+  host_write_file?: (path: string, content: string) => boolean;
 }
 
 /** Schwung 4×5 param-page face — shorter than the host’s default 5×7. */
 const MODULE_FONT = "/data/UserData/schwung/modules/overtake/ptnmove/font.png";
+const AUTOSAVE_MS = 2000;
 
-function boot(): Session {
-  return { project: defaultProject(), ui: defaultUi(), tick: 0, playing: true };
+function hostFiles(): HostFiles {
+  const host = globalThis as HostGlobals;
+  return {
+    ensure_dir: host.host_ensure_dir?.bind(host),
+    file_exists: host.host_file_exists?.bind(host),
+    read_file: host.host_read_file?.bind(host),
+    write_file: host.host_write_file?.bind(host),
+  };
 }
 
-let session = boot();
+function uiSlice(session: Session): StoredUi {
+  return { context: session.ui.context, page: session.ui.page, mode: session.ui.mode };
+}
+
+function boot(): Session {
+  const stored = loadStoredProject(hostFiles());
+  if (!stored) return { project: defaultProject(), ui: defaultUi(), tick: 0, playing: true };
+  return {
+    project: stored.project,
+    ui: { ...defaultUi(), context: stored.ui.context, page: stored.ui.page, mode: stored.ui.mode },
+    tick: 0,
+    playing: true,
+  };
+}
+
+/** Placeholder until `init()` loads from disk (or defaults). */
+let session: Session = { project: defaultProject(), ui: defaultUi(), tick: 0, playing: true };
 let voiceOn = false;
 let clockMs = 0;
 let sentMs = 0;
@@ -48,6 +76,27 @@ let phraseBody = "";
 let phraseSent = "";
 let voiceStep = -1;
 let voiceMorph = false;
+let projectDirty = false;
+let dirtySinceMs = 0;
+
+function markDirty(before: Project): void {
+  if (session.project === before) return;
+  projectDirty = true;
+  dirtySinceMs = Date.now();
+}
+
+function flushSave(): void {
+  if (!projectDirty) return;
+  if (saveStoredProject(session.project, uiSlice(session), hostFiles())) {
+    projectDirty = false;
+  }
+}
+
+function maybeAutosave(): void {
+  if (!projectDirty) return;
+  if (Date.now() - dirtySinceMs < AUTOSAVE_MS) return;
+  flushSave();
+}
 
 function sendBlock(value: string): void {
   const host = globalThis as HostGlobals;
@@ -168,7 +217,9 @@ function advanceClock(): void {
     const samplesPerTick = (SAMPLE_RATE * 60) / (session.project.global.tempo * 192);
     session = { ...session, tick: session.tick + (dt / 1000) * SAMPLE_RATE / samplesPerTick };
   }
+  const before = session.project;
   session = { ...session, project: advance(session.project, session.tick) };
+  markDirty(before);
   syncVoice(starting);
 }
 
@@ -182,6 +233,8 @@ export function init(): void {
   voiceMorph = false;
   clockMs = Date.now();
   sentMs = 0;
+  projectDirty = false;
+  dirtySinceMs = 0;
   sentSteps = [];
   sentPads = [];
   sentTracks = [];
@@ -194,6 +247,7 @@ export function init(): void {
 
 export function tick(): void {
   advanceClock();
+  maybeAutosave();
   paint();
 }
 
@@ -203,16 +257,32 @@ export function onMidiMessageInternal(data: number[]): void {
   const kind: MidiMsg["kind"] = hi === 0x90 || hi === 0x80 ? "note" : "cc";
   const data2 = hi === 0x80 ? 0 : (data[2] ?? 0);
   const before = session.project;
+  const beforeUi = session.ui;
   session = reduce(session, { kind, data1: data[1] ?? 0, data2 });
+  markDirty(before);
+  if (
+    session.ui.context !== beforeUi.context ||
+    session.ui.page !== beforeUi.page ||
+    session.ui.mode !== beforeUi.mode
+  ) {
+    projectDirty = true;
+    dirtySinceMs = Date.now();
+  }
   if (session.project !== before) syncVoice(false);
   paint();
+}
+
+export function onUnload(): void {
+  flushSave();
 }
 
 const root = globalThis as HostGlobals & {
   init?: () => void;
   tick?: () => void;
   onMidiMessageInternal?: (data: number[]) => void;
+  onUnload?: () => void;
 };
 root.init = init;
 root.tick = tick;
 root.onMidiMessageInternal = onMidiMessageInternal;
+root.onUnload = onUnload;

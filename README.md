@@ -70,7 +70,7 @@ A locked lane is left as it is. A knob turned during the morph keeps the value y
 
 **Wander** picks the next scene by itself and uses the current Transition. The intervals are 2, 8, 16, and 32 bars. Press the active rate again to turn Wander off. It reads the active Set, or the Journal when that Set is empty.
 
-**Copy** puts the newest Journal scene on the clipboard. Hold Copy and press a pad in Set mode to add that scene to the active Set. The Journal scene stays. **Delete** plus a scene pad removes the reference. **Delete** plus **Down** deletes the Set itself. **Up** and **Down** move between Sets.
+**Copy** puts the newest Journal scene on the clipboard. Hold Copy and press a pad in Set mode to add that scene to the active Set. The Journal scene stays. **Delete** plus a scene pad always deletes that pattern: in Set it drops the reference from the active Set; in Journal it removes the scene and every Set link to it. **Delete** plus **Down** deletes the Set itself. **Up** and **Down** move between Sets.
 
 ## Other controls
 
@@ -90,5 +90,7 @@ npm run deploy
 ```
 
 `deploy` builds `ui.js`, cross-compiles `dsp.so` when the voice changed, and installs the module through Schwung Manager at `http://move.local:7700/`. Open **overtake → ptnmove** on Move. If the module has already run since boot, restart Move before a new `dsp.so` is heard. Reopening the module is enough for a UI-only change.
+
+The single project (journal, sets, working, prefs) is stored at `/data/UserData/schwung/ptnmove/project.json` and restored on open.
 
 Design notes live in `architecture/`. `architecture/initial.md` is a historical brainstorm and is not rewritten.

@@ -8,6 +8,7 @@ import {
   launchScene,
   pasteClipboard,
   record,
+  removeSceneFromJournal,
   removeSceneFromSet,
   journalPadIds,
   setCaptureIntensity,
@@ -16,7 +17,7 @@ import {
   toggleLock,
   toggleMute,
 } from "../core/performance.ts";
-import { CAPTURE_INTENSITIES, type CaptureIntensity, type LaneId, type TransitionId, type WanderId } from "../core/types.ts";
+import { CAPTURE_INTENSITIES, type CaptureIntensity, type LaneId, type Project, type TransitionId, type WanderId } from "../core/types.ts";
 import { writeControl } from "./controls.ts";
 import { pageCount, pageGroup, pagesFor } from "./pages.ts";
 import { applyBookmark, focusHoldTicks, HOLD_MS, HOLD_TICKS, type Notice, type UiState } from "./state.ts";
@@ -154,10 +155,14 @@ function onPad(session: Session, index: number, press: boolean): Session {
     };
   }
   const pads = session.ui.mode === "set" ? setPadIds(session.project) : journalPadIds(session.project);
-  if (session.ui.mode === "set" && session.ui.deleteHeld) {
+  if (session.ui.deleteHeld) {
     const id = pads[index];
-    if (!id || !session.project.activeSetId) return session;
-    return { ...session, project: removeSceneFromSet(session.project, session.project.activeSetId, id) };
+    if (!id) return session;
+    if (session.ui.mode === "set") {
+      if (!session.project.activeSetId) return session;
+      return { ...session, project: removeSceneFromSet(session.project, session.project.activeSetId, id) };
+    }
+    return { ...session, project: removeSceneFromJournal(session.project, id) };
   }
   if (session.ui.mode === "set" && session.ui.copyHeld) {
     return { ...session, project: pasteClipboard(session.project) };

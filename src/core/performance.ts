@@ -184,6 +184,23 @@ export function removeSceneFromSet(project: Project, setId: string, sceneId: str
   };
 }
 
+/** Drop a scene from the journal and strip every set reference to it. */
+export function removeSceneFromJournal(project: Project, sceneId: string): Project {
+  if (!project.journal.some((scene) => scene.id === sceneId)) return project;
+  return {
+    ...project,
+    journal: project.journal.filter((scene) => scene.id !== sceneId),
+    sets: project.sets.map((set) => ({
+      ...set,
+      sceneIds: set.sceneIds.filter((id) => id !== sceneId),
+    })),
+    clipboardSceneId: project.clipboardSceneId === sceneId ? null : project.clipboardSceneId,
+    activeSceneId: project.activeSceneId === sceneId ? null : project.activeSceneId,
+    wanderPreviousTarget: project.wanderPreviousTarget === sceneId ? null : project.wanderPreviousTarget,
+    morph: project.morph?.targetId === sceneId ? null : project.morph,
+  };
+}
+
 export function deleteSet(project: Project, setId: string): Project {
   const sets = project.sets.filter((set) => set.id !== setId);
   const activeSetId = project.activeSetId === setId ? (sets[0]?.id ?? null) : project.activeSetId;
@@ -489,12 +506,12 @@ function randomizePattern(
   target.gen1 = touchEuclid(target.gen1, roll, "gen1", intensity);
   target.gen2 = touchEuclid(target.gen2, roll, "gen2", intensity);
   if (lane === "bass" || lane === "lead") {
-    if (intensity !== "clear") target.follow = roll("follow");
-  } else {
-    const drum = lanes[lane];
-    drum.ratchet.count = touchMaybeExpensive(drum.ratchet.count, roll, "ratchet.count", intensity, true);
-    drum.ratchet.rate = touchMaybeExpensive(drum.ratchet.rate, roll, "ratchet.rate", intensity, true);
+    if (intensity !== "clear") lanes[lane].follow = roll("follow");
+    return;
   }
+  const drum = lanes[lane];
+  drum.ratchet.count = touchMaybeExpensive(drum.ratchet.count, roll, "ratchet.count", intensity, true);
+  drum.ratchet.rate = touchMaybeExpensive(drum.ratchet.rate, roll, "ratchet.rate", intensity, true);
 }
 
 function randomizeNotes(

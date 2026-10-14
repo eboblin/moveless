@@ -643,6 +643,24 @@ describe("surface", () => {
     assert.equal(state.project.sets.length, 1);
     assert.equal(state.project.activeSetId, "set-1");
   });
+
+  it("Delete plus pad removes a set link or a journal scene", () => {
+    let project = record(defaultProject());
+    project = record(project);
+    project = createSet(project, "A");
+    project = { ...project, sets: [{ id: "set-1", name: "A", sceneIds: ["001", "002"] }], activeSetId: "set-1" };
+    let state: Session = { project, ui: { ...defaultUi(), mode: "set" }, tick: 0, playing: false };
+    state = reduce(state, { kind: "cc", data1: 119, data2: 127 });
+    state = reduce(state, { kind: "note", data1: 68, data2: 127 });
+    assert.deepEqual(state.project.sets[0].sceneIds, ["002"]);
+    assert.equal(state.project.journal.length, 2);
+
+    state = { ...state, ui: { ...state.ui, mode: "journal", deleteHeld: true } };
+    state = reduce(state, { kind: "note", data1: 68, data2: 127 });
+    assert.equal(state.project.journal.length, 1);
+    assert.equal(state.project.journal[0].id, "002");
+    assert.deepEqual(state.project.sets[0].sceneIds, ["002"]);
+  });
 });
 
 function columnSpan(screen: Screen, x: number): number {
