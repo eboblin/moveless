@@ -18,7 +18,16 @@ export function readControl(project: Project, context: ContextId, path: string):
 export function writeControl(project: Project, context: ContextId, binding: Binding, delta: number): Project {
   if (delta === 0) return project;
   const current = readControl(project, context, binding.path);
-  let value = current + delta * binding.step;
+  return storeControl(project, context, binding, current + delta * binding.step);
+}
+
+/** Put the knob on 0, or on the nearest edge when 0 is outside its range. */
+export function resetControl(project: Project, context: ContextId, binding: Binding): Project {
+  return storeControl(project, context, binding, 0);
+}
+
+function storeControl(project: Project, context: ContextId, binding: Binding, raw: number): Project {
+  let value = raw;
   if (value < binding.min) value = binding.min;
   if (value > binding.max) value = binding.max;
   if (binding.integer) value = Math.round(value);

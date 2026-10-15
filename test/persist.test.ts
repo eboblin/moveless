@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { defaultProject } from "../src/core/defaults.ts";
-import { record, setCaptureIntensity } from "../src/core/performance.ts";
+import { record, setCaptureDepth, setCaptureIntensity, setCaptureScope } from "../src/core/performance.ts";
 import {
   PROJECT_PATH,
   loadStoredProject,
@@ -29,7 +29,7 @@ describe("project persist", () => {
   it("round-trips journal, sets, working and capture intensity", () => {
     let project = defaultProject();
     project = record(project);
-    project = setCaptureIntensity(project, "hard");
+    project = setCaptureDepth(setCaptureScope(setCaptureIntensity(project, "hard"), "lane"), "generators");
     project.working.kick.gen1.hits = 7;
     project = { ...project, sets: [{ id: "set-1", name: "A", sceneIds: ["001"] }], activeSetId: "set-1" };
     const ui = { context: "bass" as const, page: 2, mode: "set" as const };
@@ -41,6 +41,8 @@ describe("project persist", () => {
     assert.equal(parsed.project.sets[0].sceneIds[0], "001");
     assert.equal(parsed.project.working.kick.gen1.hits, 7);
     assert.equal(parsed.project.captureIntensity, "hard");
+    assert.equal(parsed.project.captureScope, "lane");
+    assert.equal(parsed.project.captureDepth, "generators");
     assert.equal(parsed.ui.context, "bass");
     assert.equal(parsed.ui.page, 2);
     assert.equal(parsed.ui.mode, "set");
@@ -76,6 +78,8 @@ describe("project persist", () => {
     const parsed = parseStored(partial);
     assert.ok(parsed);
     assert.equal(parsed.project.captureIntensity, "soft");
+    assert.equal(parsed.project.captureScope, "group");
+    assert.equal(parsed.project.captureDepth, "all");
     assert.equal(parsed.project.global.tempo, 99);
     assert.equal(parsed.project.global.bar, defaultProject().global.bar);
     assert.ok(parsed.project.working.kick);

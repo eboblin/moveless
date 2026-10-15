@@ -2,6 +2,7 @@ import {
   captureLane,
   captureGenerator,
   capturePaths,
+  captureSurface,
   copyScene,
   cycleSet,
   deleteSet,
@@ -11,14 +12,16 @@ import {
   removeSceneFromJournal,
   removeSceneFromSet,
   journalPadIds,
+  setCaptureDepth,
   setCaptureIntensity,
+  setCaptureScope,
   setPadIds,
   setWander,
   toggleLock,
   toggleMute,
 } from "../core/performance.ts";
-import { CAPTURE_INTENSITIES, type CaptureIntensity, type LaneId, type Project, type TransitionId, type WanderId } from "../core/types.ts";
-import { writeControl } from "./controls.ts";
+import { CAPTURE_DEPTHS, CAPTURE_INTENSITIES, CAPTURE_SCOPES, type LaneId, type Project, type TransitionId, type WanderId } from "../core/types.ts";
+import { resetControl, writeControl } from "./controls.ts";
 import { pageCount, pageGroup, pagesFor } from "./pages.ts";
 import { applyBookmark, focusHoldTicks, HOLD_MS, HOLD_TICKS, type Notice, type UiState } from "./state.ts";
 
@@ -124,7 +127,7 @@ function onPad(session: Session, index: number, press: boolean): Session {
   const second = row === 2;
   const bottom = row === 0;
   if (session.ui.captureHeld) {
-    return onCapturePad(session, row, col, top, second, bottom);
+    return onCapturePad(session, row, col);
   }
   if (session.ui.heldLane && (top || second)) {
     const page = top ? col : 8 + col;
@@ -173,34 +176,22 @@ function onPad(session: Session, index: number, press: boolean): Session {
   return { ...session, project: launchScene(session.project, sceneId, session.tick) };
 }
 
-/** Capture overlay: page pads reroll and switch page; cols 0–3 set intensity. */
-function onCapturePad(session: Session, row: number, col: number, top: boolean, second: boolean, bottom: boolean): Session {
-  if (bottom && col < CAPTURE_INTENSITIES.length) {
-    const intensity = CAPTURE_INTENSITIES[col] as CaptureIntensity;
-    return {
-      ...session,
-      project: setCaptureIntensity(session.project, intensity),
-      ui: { ...session.ui, notice: modeNotice("CAPTURE", intensity.toUpperCase()) },
-    };
+/** Capture overlay: depth, scope, and intensity. Any press blocks the release reroll. */
+function onCapturePad(session: Session, row: number, col: number): Session {
+  if (row === 0 && col < CAPTURE_INTENSITIES.length) {
+    return markCapture(session, setCaptureIntensity(session.project, CAPTURE_INTENSITIES[col]));
   }
-  if (!top && !second) return session;
-  const page = top ? col : 8 + col;
-  const lane = session.ui.heldLane ?? session.ui.context;
-  if (lane === "mix" || lane === "global" || lane === "perf") return session;
-  const pages = pagesFor(lane);
-  if (page >= pages.length) return session;
-  const paths = pages[page].bindings.filter((binding): binding is NonNullable<typeof binding> => !!binding).map((binding) => binding.path);
-  return {
-    ...session,
-    project: capturePaths(session.project, lane, paths),
-    ui: {
-      ...session.ui,
-      context: lane,
-      page,
-      heldPage: session.ui.heldLane ? page : session.ui.heldPage,
-      captureAction: true,
-    },
-  };
+  if (row === 1 && col < CAPTURE_SCOPES.length) {
+    return markCapture(session, setCaptureScope(session.project, CAPTURE_SCOPES[col]));
+  }
+  if (row === 2 && col < CAPTURE_DEPTHS.length) {
+    return markCapture(session, setCaptureDepth(session.project, CAPTURE_DEPTHS[col]));
+  }
+  return session;
+}
+
+function markCapture(session: Session, project: Project): Session {
+  return { ...session, project, ui: { ...session.ui, captureAction: true } };
 }
 
 const NOTICE_MS = 500;
@@ -240,7 +231,9 @@ function touchEncoder(session: Session, index: number, press: boolean): Session 
     const captured = captureFromEncoder(session, binding.path, true);
     if (captured) return captured;
   }
-  return { ...session, ui: { ...session.ui, focus: focusFor(session, binding, true) } };
+  const ui = { ...session.ui, focus: focusFor(session, binding, true) };
+  if (!session.ui.shiftHeld) return { ...session, ui };
+  return { ...session, project: resetControl(session.project, session.ui.context, binding), ui };
 }
 
 function turnEncoder(session: Session, index: number, value: number): Session {
@@ -261,10 +254,24 @@ function turnEncoder(session: Session, index: number, value: number): Session {
 
 /** Reroll one generator as soon as its encoder is touched or turned while Capture is held. */
 function captureFromEncoder(session: Session, path: string, held: boolean): Session | null {
+  const lane = session.ui.heldLane ?? session.ui.context;
+  if (lane === "global") return null;
+  if (lane === "mix" || lane === "perf") {
+    const focusBinding = pagesFor(lane)
+      .flatMap((page) => page.bindings)
+      .find((item) => item?.path === path) ?? { path, label: path };
+    return {
+      ...session,
+      project: captureSurface(session.project, lane, [path]),
+      ui: {
+        ...session.ui,
+        captureGenerator: path,
+        focus: focusFor(session, focusBinding, held),
+      },
+    };
+  }
   const target = generatorTarget(path);
   if (!target) return null;
-  const lane = session.ui.heldLane ?? session.ui.context;
-  if (lane === "mix" || lane === "global" || lane === "perf") return null;
   const focusBinding = pagesFor(session.ui.context)
     .flatMap((page) => page.bindings)
     .find((item) => item?.path === path) ?? { path, label: target };
@@ -317,19 +324,40 @@ function onCapture(session: Session, press: boolean): Session {
   const page = Math.min(rawPage, Math.max(0, pageCount(lane) - 1));
   const already = session.ui.captureGenerator || session.ui.captureAction;
   let project = session.project;
-  // Encoder or page pad already acted; release only group-rerolls when neither did.
-  if (lane !== "mix" && lane !== "global" && lane !== "perf" && !already) {
-    if (session.ui.shiftHeld) project = captureLane(project, lane, "all");
-    else {
-      const scope = pageGroup(lane, page);
-      project = captureLane(project, lane, scope === "sound" || scope === "notes" ? scope : "pattern");
-    }
+  if (!already && (lane === "mix" || lane === "perf")) {
+    project = captureSurface(project, lane, surfacePaths(lane, project.captureScope, page));
+  } else if (lane !== "mix" && lane !== "global" && lane !== "perf" && !already) {
+    project = rerollCapture(project, lane, page);
   }
   return {
     ...session,
     project,
     ui: { ...session.ui, captureHeld: false, captureGenerator: null, captureAction: false },
   };
+}
+
+function surfacePaths(context: "mix" | "perf", scope: Project["captureScope"], page: number): string[] {
+  const pages = pagesFor(context);
+  const ofPage = (index: number) =>
+    (pages[Math.min(index, Math.max(0, pages.length - 1))]?.bindings ?? [])
+      .filter((binding): binding is NonNullable<typeof binding> => !!binding)
+      .map((binding) => binding.path);
+  if (scope === "page") return ofPage(page);
+  return pages.flatMap((_, index) => ofPage(index));
+}
+
+function rerollCapture(project: Project, lane: LaneId, page: number): Project {
+  if (project.captureScope === "lane") return captureLane(project, lane, "all");
+  if (project.captureScope === "page") {
+    const pages = pagesFor(lane);
+    const current = pages[Math.min(page, Math.max(0, pages.length - 1))];
+    const paths = (current?.bindings ?? [])
+      .filter((binding): binding is NonNullable<typeof binding> => !!binding)
+      .map((binding) => binding.path);
+    return capturePaths(project, lane, paths);
+  }
+  const scope = pageGroup(lane, page);
+  return captureLane(project, lane, scope === "sound" || scope === "notes" ? scope : "pattern");
 }
 
 function onCopy(session: Session, press: boolean): Session {

@@ -13,8 +13,8 @@ import {
   captureLane,
   captureGenerator,
   capturePaths,
+  captureSurface,
   createSet,
-  cycleBiased,
   launchScene,
   pickWanderCandidate,
   record,
@@ -22,6 +22,7 @@ import {
   removeSceneFromSet,
   sceneColor,
   sceneIdsForPads,
+  setCaptureDepth,
   setCaptureIntensity,
   setMacro,
   audibleEvents,
@@ -42,6 +43,22 @@ function bar(project: Project, bars = 1): Project {
   return next;
 }
 
+function modulatedCycles(value: unknown, out: number[] = []): number[] {
+  if (!value || typeof value !== "object") return out;
+  const record = value as Record<string, unknown>;
+  if (
+    typeof record.cycle === "number" &&
+    typeof record.value === "number" &&
+    typeof record.pattern === "number" &&
+    typeof record.amount === "number"
+  ) {
+    out.push(record.cycle);
+    return out;
+  }
+  for (const child of Object.values(record)) modulatedCycles(child, out);
+  return out;
+}
+
 describe("motif and clock", () => {
   it("keeps every motif inside -1..1", () => {
     for (let id = 0; id < MOTIF_COUNT; id++) {
@@ -59,14 +76,50 @@ describe("motif and clock", () => {
 });
 
 describe("euclid generator", () => {
+  it("scatters generator homes across hits 2..4 and rotate 0..15", () => {
+    const lanes = defaultProject().working;
+    const gens = (["kick", "snare", "hat", "perc", "bass", "lead"] as const).flatMap((id) => [
+      lanes[id].gen1,
+      lanes[id].gen2,
+    ]);
+    for (const gen of gens) {
+      assert.equal(gen.length, 16);
+      assert.equal(gen.probability, 1);
+      assert.ok(gen.hits >= 2 && gen.hits <= 4);
+      assert.ok(gen.rotate >= 0 && gen.rotate <= 15);
+    }
+    assert.ok(new Set(gens.map((gen) => `${gen.hits}:${gen.rotate}`)).size > 1);
+  });
+
+  it("parks repeat count and rate at zero on every lane", () => {
+    const lanes = defaultProject().working;
+    for (const id of ["kick", "snare", "hat", "perc"] as const) {
+      assert.equal(lanes[id].ratchet.count.value, 0);
+      assert.equal(lanes[id].ratchet.rate.value, 0);
+    }
+    assert.equal(lanes.bass.repeat.value, 0);
+    assert.equal(lanes.lead.repeat.value, 0);
+    assert.equal(lanes.chords.rate.value, 0);
+  });
+
+  it("scatters every VPCA cycle across 4, 8 and 16", () => {
+    const cycles = modulatedCycles(defaultProject().working);
+    assert.ok(cycles.length > 10);
+    for (const cycle of cycles) assert.ok(cycle === 4 || cycle === 8 || cycle === 16);
+    assert.ok(new Set(cycles).size === 3);
+  });
+
   it("places a four-on-the-floor kick on every fourth sixteenth", () => {
     const project = bar(defaultProject());
+    project.working.kick.gen1 = { ...project.working.kick.gen1, length: 16, hits: 4, rotate: 0, probability: 1 };
+    project.working.kick.gen2.hits = 0;
     const line = textPreview(project).split("\n")[0];
     assert.equal(line, "KCK x---x---x---x---");
   });
 
   it("unions a second generator without stacking two events on one step", () => {
     const project = bar(defaultProject());
+    project.working.kick.gen1 = { ...project.working.kick.gen1, length: 16, hits: 4, rotate: 0, probability: 1 };
     project.working.kick.gen2 = { ...project.working.kick.gen2, length: 16, hits: 2, rotate: 2 };
     const steps = [...new Set(generatePhrase(project).lanes.kick.map((event) => event.step))];
     assert.deepEqual(steps, [0, 2, 4, 8, 10, 12]);
@@ -149,6 +202,8 @@ describe("euclid generator", () => {
 
   it("expands ratchet counts inside one source event", () => {
     const project = bar(defaultProject());
+    project.working.kick.gen1 = { ...project.working.kick.gen1, length: 16, hits: 4, rotate: 0, probability: 1 };
+    project.working.kick.gen2.hits = 0;
     project.working.kick.ratchet.count = modulated(0.4);
     project.working.kick.ratchet.rate = modulated(unitForIndex(1, 6));
     const ticks = generatePhrase(project).lanes.kick.filter((event) => event.step === 0).map((event) => event.tick);
@@ -157,6 +212,8 @@ describe("euclid generator", () => {
 
   it("reads a modulator at the note time rather than the note count", () => {
     const project = bar(defaultProject());
+    project.working.kick.gen1 = { ...project.working.kick.gen1, length: 16, hits: 4, rotate: 0, probability: 1 };
+    project.working.kick.gen2.hits = 0;
     project.working.kick.sound.pitch = modulated(0.5, 0, 16, 1);
     const kicks = generatePhrase(project).lanes.kick;
     const at = (step: number) => kicks.find((event) => event.step === step)?.sound.pitch;
@@ -166,6 +223,7 @@ describe("euclid generator", () => {
 
   it("delays odd sixteenths with swing and keeps block offsets in range", () => {
     const project = bar(defaultProject());
+    project.working.kick.gen1 = { ...project.working.kick.gen1, length: 16, hits: 4, rotate: 0, probability: 1 };
     project.working.kick.gen2 = { ...project.working.kick.gen2, length: 16, hits: 8, rotate: 1 };
     project.global.swing = 1;
     const kick = generatePhrase(project).lanes.kick;
@@ -397,6 +455,7 @@ describe("morph, journal, macros", () => {
     let project = defaultProject();
     project.working.kick.gen1.hits = 1;
     project.working.kick.gen1.rotate = 0;
+    project.working.kick.gen2.hits = 0;
     project.working.kick.sound.decay.value = 0;
     project.working.kick.sound.decay.amount = 0;
     project = record(project);
@@ -528,6 +587,8 @@ function kickSig(phrase: ReturnType<typeof generatePhrase>): Array<[number, numb
 describe("harmony", () => {
   it("publishes chord context that bass can follow, including when chords are muted", () => {
     const project = bar(defaultProject());
+    project.working.bass.gen1 = { ...project.working.bass.gen1, length: 16, hits: 2, rotate: 0, probability: 1 };
+    project.working.bass.gen2.hits = 0;
     project.working.bass.degree = modulated(0.5 + 1 / 14);
     project.working.bass.range = modulated(1);
     project.working.bass.follow = 1;
@@ -681,6 +742,8 @@ describe("harmony", () => {
 
   it("walks repeats along the scale", () => {
     const project = bar(defaultProject());
+    project.working.bass.gen1 = { ...project.working.bass.gen1, length: 16, hits: 2, rotate: 0, probability: 1 };
+    project.working.bass.gen2.hits = 0;
     project.working.bass.repeat = modulated(0.4);
     project.working.bass.step = modulated(1);
     project.working.bass.follow = 0;
@@ -733,6 +796,63 @@ describe("capture, wander, sets", () => {
     assert.notDeepEqual(allBass.working.bass.sound, beforeBass.sound);
   });
 
+  it("leaves values, follow and chord scalars when depth is generators", () => {
+    const bass = setCaptureDepth(setCaptureIntensity(defaultProject(), "hard"), "generators");
+    const before = clone(bass.working.bass);
+    const notes = captureLane(bass, "bass", "notes");
+    assert.equal(notes.working.bass.degree.value, before.degree.value);
+    assert.equal(notes.working.bass.follow, before.follow);
+    assert.notDeepEqual(notes.working.bass.degree, before.degree);
+    const cleared = captureLane(setCaptureIntensity(bass, "clear"), "bass", "notes");
+    assert.equal(cleared.working.bass.degree.value, before.degree.value);
+    assert.equal(cleared.working.bass.degree.pattern, 0);
+    assert.equal(cleared.working.bass.degree.cycle, 0);
+    assert.equal(cleared.working.bass.degree.amount, 0);
+    assert.equal(cleared.working.bass.follow, before.follow);
+
+    const chords = setCaptureDepth(setCaptureIntensity(defaultProject(), "hard"), "generators");
+    const chordNotes = captureLane(chords, "chords", "notes");
+    assert.equal(chordNotes.working.chords.start, chords.working.chords.start);
+    assert.equal(chordNotes.working.chords.count, chords.working.chords.count);
+  });
+
+  it("moves values and euclid shape but leaves pattern cycle amount when depth is values", () => {
+    const bass = setCaptureDepth(setCaptureIntensity(defaultProject(), "hard"), "values");
+    bass.working.bass.degree = modulated(0.4, 9, 6, 0.3);
+    bass.working.bass.gen1.velocity = modulated(0.7, 4, 5, 0.2);
+    const before = clone(bass.working.bass);
+    const notes = captureLane(bass, "bass", "notes");
+    assert.notEqual(notes.working.bass.degree.value, before.degree.value);
+    assert.equal(notes.working.bass.degree.pattern, before.degree.pattern);
+    assert.equal(notes.working.bass.degree.cycle, before.degree.cycle);
+    assert.equal(notes.working.bass.degree.amount, before.degree.amount);
+    assert.notEqual(notes.working.bass.follow, before.follow);
+
+    const pattern = captureLane(bass, "bass", "pattern");
+    const shaped =
+      pattern.working.bass.gen1.length !== before.gen1.length ||
+      pattern.working.bass.gen1.hits !== before.gen1.hits ||
+      pattern.working.bass.gen1.rotate !== before.gen1.rotate ||
+      pattern.working.bass.gen1.probability !== before.gen1.probability;
+    assert.equal(shaped, true);
+    assert.equal(pattern.working.bass.gen1.velocity.pattern, before.gen1.velocity.pattern);
+    assert.equal(pattern.working.bass.gen1.velocity.cycle, before.gen1.velocity.cycle);
+    assert.equal(pattern.working.bass.gen1.velocity.amount, before.gen1.velocity.amount);
+    assert.notEqual(pattern.working.bass.gen1.velocity.value, before.gen1.velocity.value);
+
+    const cleared = captureLane(setCaptureIntensity(bass, "clear"), "bass", "all");
+    assert.equal(cleared.working.bass.degree.value, 0);
+    assert.equal(cleared.working.bass.degree.pattern, 9);
+    assert.equal(cleared.working.bass.degree.cycle, 6);
+    assert.equal(cleared.working.bass.degree.amount, 0.3);
+    assert.equal(cleared.working.bass.follow, 0);
+    assert.equal(cleared.working.bass.gen1.length, 0);
+    assert.equal(cleared.working.bass.gen1.velocity.value, 0);
+    assert.equal(cleared.working.bass.gen1.velocity.pattern, 4);
+    assert.equal(cleared.working.bass.gen1.velocity.cycle, 5);
+    assert.equal(cleared.working.bass.gen1.velocity.amount, 0.2);
+  });
+
   it("rerolls one generator and leaves the rest of the lane", () => {
     const project = defaultProject();
     const one = captureGenerator(project, "kick", "gen1");
@@ -753,58 +873,98 @@ describe("capture, wander, sets", () => {
     assert.deepEqual(locked.working.kick.gen1, pitch.working.kick.gen1);
   });
 
-  it("clears modulation but leaves value and cycle", () => {
+  it("zeros every field on delete when depth is all, and only cycle pattern amount for generators", () => {
     let project = defaultProject();
     project.working.kick.sound.pitch = modulated(0.6, 12, 7, 0.4);
+    project.working.kick.gen1.velocity = modulated(0.7, 4, 5, 0.3);
     project = setCaptureIntensity(project, "clear");
-    const cleared = captureGenerator(project, "kick", "sound.pitch");
-    assert.equal(cleared.working.kick.sound.pitch.value, 0.6);
-    assert.equal(cleared.working.kick.sound.pitch.cycle, 7);
+    const cleared = captureLane(project, "kick", "all");
+    assert.equal(cleared.working.kick.sound.pitch.value, 0);
     assert.equal(cleared.working.kick.sound.pitch.pattern, 0);
+    assert.equal(cleared.working.kick.sound.pitch.cycle, 0);
     assert.equal(cleared.working.kick.sound.pitch.amount, 0);
-    assert.deepEqual(cleared.working.kick.gen1, project.working.kick.gen1);
+    assert.equal(cleared.working.kick.gen1.length, 0);
+    assert.equal(cleared.working.kick.gen1.hits, 0);
+    assert.equal(cleared.working.kick.gen1.rotate, 0);
+    assert.equal(cleared.working.kick.gen1.probability, 0);
+    assert.equal(cleared.working.kick.gen1.velocity.value, 0);
+    assert.equal(cleared.working.kick.gen1.velocity.cycle, 0);
+
+    const generators = setCaptureDepth(project, "generators");
+    const shape = generators.working.kick.gen1.length;
+    const partial = captureLane(generators, "kick", "all");
+    assert.equal(partial.working.kick.gen1.length, shape);
+    assert.equal(partial.working.kick.gen1.velocity.value, 0.7);
+    assert.equal(partial.working.kick.gen1.velocity.pattern, 0);
+    assert.equal(partial.working.kick.gen1.velocity.cycle, 0);
+    assert.equal(partial.working.kick.gen1.velocity.amount, 0);
+    assert.equal(partial.working.kick.sound.pitch.value, 0.6);
+    assert.equal(partial.working.kick.sound.pitch.pattern, 0);
+    assert.equal(partial.working.kick.sound.pitch.cycle, 0);
+    assert.equal(partial.working.kick.sound.pitch.amount, 0);
   });
 
-  it("biases rerolled cycles toward 4 and keeps soft P/C/A rare", () => {
-    const hist = Array.from({ length: 9 }, () => 0);
-    for (let i = 0; i < 800; i++) hist[cycleBiased((i + 0.5) / 800)]++;
-    assert.ok(hist[4] > hist[1]);
-    assert.ok(hist[4] > hist[8]);
-    assert.ok(hist[4] >= hist[3]);
-    assert.ok(hist[4] >= hist[5]);
-
-    let project = defaultProject();
-    project.working.kick.sound.pitch = modulated(0.5, 10, 2, 0.3);
-    project = setCaptureIntensity(project, "soft");
-    let patternFlips = 0;
-    let cycleFlips = 0;
-    let amountFlips = 0;
-    for (let n = 0; n < 40; n++) {
-      project = { ...project, captureNonce: n, global: { ...project.global, seed: n + 1 } };
-      const next = captureGenerator(project, "kick", "sound.pitch");
-      if (next.working.kick.sound.pitch.pattern !== 10) patternFlips++;
-      if (next.working.kick.sound.pitch.cycle !== 2) cycleFlips++;
-      if (next.working.kick.sound.pitch.amount !== 0.3) amountFlips++;
+  it("moves an ordinary value farther than an expensive repeat count", () => {
+    const soft = setCaptureIntensity(defaultProject(), "soft");
+    let countTravel = 0;
+    let noiseTravel = 0;
+    for (let seed = 1; seed <= 40; seed++) {
+      const project = {
+        ...soft,
+        global: { ...soft.global, seed },
+        captureNonce: seed,
+      };
+      project.working.kick.ratchet.count = modulated(1, 0, 4, 0);
+      project.working.kick.sound.noise = modulated(1, 0, 4, 0);
+      const counted = capturePaths(project, "kick", ["ratchet.count.value"]);
+      const noised = capturePaths(project, "kick", ["sound.noise.value"]);
+      countTravel += Math.abs(counted.working.kick.ratchet.count.value - 1);
+      noiseTravel += Math.abs(noised.working.kick.sound.noise.value - 1);
     }
-    assert.ok(patternFlips < 20);
-    assert.ok(cycleFlips < 20);
-    assert.ok(amountFlips < 20);
+    assert.ok(noiseTravel > countTravel);
+  });
 
-    project = setCaptureIntensity(defaultProject(), "hard");
-    project.working.kick.sound.pitch = modulated(0.5, 10, 2, 0.3);
-    let hardFlips = 0;
-    for (let n = 0; n < 40; n++) {
-      project = { ...project, captureNonce: n, global: { ...project.global, seed: n + 3 } };
-      const next = captureGenerator(project, "kick", "sound.pitch");
-      if (
-        next.working.kick.sound.pitch.pattern !== 10 ||
-        next.working.kick.sound.pitch.cycle !== 2 ||
-        next.working.kick.sound.pitch.amount !== 0.3
-      ) {
-        hardFlips++;
+  it("moves a light pattern farther than a heavy pitch, and toward home farther than away", () => {
+    const soft = setCaptureIntensity(defaultProject(), "soft");
+    let pitchTravel = 0;
+    let patternTravel = 0;
+    for (let seed = 1; seed <= 40; seed++) {
+      const project = {
+        ...soft,
+        global: { ...soft.global, seed },
+        captureNonce: seed,
+      };
+      project.working.kick.sound.pitch = modulated(0.9, 48, 1, 0);
+      const pitched = capturePaths(project, "kick", ["sound.pitch.value"]);
+      const patterned = capturePaths(project, "kick", ["sound.pitch.pattern"]);
+      pitchTravel += Math.abs(pitched.working.kick.sound.pitch.value - 0.9);
+      patternTravel += Math.abs(patterned.working.kick.sound.pitch.pattern - 48) / 63;
+    }
+    assert.ok(patternTravel > pitchTravel);
+
+    let toward = 0;
+    let away = 0;
+    let towardN = 0;
+    let awayN = 0;
+    for (let seed = 1; seed <= 80; seed++) {
+      const project = {
+        ...soft,
+        global: { ...soft.global, seed },
+        captureNonce: seed,
+      };
+      project.working.kick.sound.pitch = modulated(0.9, 0, 1, 0);
+      const next = capturePaths(project, "kick", ["sound.pitch.value"]).working.kick.sound.pitch.value;
+      const delta = next - 0.9;
+      if (delta < -1e-9) {
+        toward += -delta;
+        towardN += 1;
+      } else if (delta > 1e-9) {
+        away += delta;
+        awayN += 1;
       }
     }
-    assert.ok(hardFlips > 20);
+    assert.ok(towardN > 0 && awayN > 0);
+    assert.ok(toward / towardN > away / awayN);
   });
 
   it("captures only the paths of one page", () => {
@@ -817,22 +977,46 @@ describe("capture, wander, sets", () => {
     assert.deepEqual(project.working.kick.sound, before.sound);
   });
 
-  it("nudges one euclid structure field on soft capture", () => {
-    let project = setCaptureIntensity(defaultProject(), "soft");
-    project.working.kick.gen1 = { length: 16, hits: 4, rotate: 2, probability: 0.8, velocity: modulated(0.7) };
-    const before = clone(project.working.kick.gen1);
-    project = captureGenerator(project, "kick", "gen1");
-    const after = project.working.kick.gen1;
-    const structChanged =
-      (after.length !== before.length ? 1 : 0) +
-      (after.hits !== before.hits ? 1 : 0) +
-      (after.rotate !== before.rotate ? 1 : 0) +
-      (after.probability !== before.probability ? 1 : 0);
-    assert.equal(structChanged, 1);
-    assert.ok(Math.abs(after.length - before.length) <= 2);
-    assert.ok(Math.abs(after.hits - before.hits) <= 2);
-    assert.ok(Math.abs(after.rotate - before.rotate) <= 2 || after.length !== before.length);
-    assert.ok(Math.abs(after.probability - before.probability) <= 0.12);
+  it("parks mixer channels at 100 and captures or zeros them", () => {
+    const fresh = defaultProject();
+    for (const id of ["kick", "snare", "hat", "perc", "bass", "lead", "chords", "master"] as const) {
+      assert.equal(fresh.mixer[id], 1);
+    }
+    const project = setCaptureIntensity(fresh, "hard");
+    project.mixer = { ...project.mixer, kick: 0.2, master: 0.2 };
+    const moved = captureSurface(project, "mix", ["kick"]);
+    assert.notEqual(moved.mixer.kick, 0.2);
+    assert.equal(moved.mixer.master, 0.2);
+    const held = captureSurface(setCaptureDepth(project, "generators"), "mix", ["kick"]);
+    assert.equal(held.mixer.kick, 0.2);
+    const cleared = captureSurface(setCaptureIntensity(project, "clear"), "mix", ["kick", "master"]);
+    assert.equal(cleared.mixer.kick, 0);
+    assert.equal(cleared.mixer.master, 0);
+    assert.equal(cleared.mixer.snare, 1);
+  });
+
+  it("captures one perf page and zeros a macro on delete", () => {
+    const project = setCaptureIntensity(defaultProject(), "hard");
+    project.macros = { probability: 0.8, cutoff: 0.8 };
+    const page = captureSurface(project, "perf", ["macro.probability", "macro.repeat", "macro.step", "macro.velocity", "macro.length", "macro.gate", "macro.rate", "macro.decay"]);
+    assert.notEqual(page.macros.probability, 0.8);
+    assert.equal(page.macros.cutoff, 0.8);
+    const held = captureSurface(setCaptureDepth(project, "generators"), "perf", ["macro.probability"]);
+    assert.equal(held.macros.probability, 0.8);
+    const cleared = captureSurface(setCaptureIntensity(project, "clear"), "perf", ["macro.cutoff"]);
+    assert.equal(cleared.macros.cutoff, 0);
+    assert.equal(cleared.macros.probability, 0.8);
+  });
+
+  it("spends a fresh budget on every page of a lane", () => {
+    const project = setCaptureIntensity(defaultProject(), "soft");
+    const lane = captureLane(project, "kick", "all");
+    const page = capturePaths(project, "kick", ["gen1.length", "gen1.hits", "gen1.rotate", "gen1.probability", "gen1.velocity.value", "gen1.velocity.pattern", "gen1.velocity.cycle", "gen1.velocity.amount"]);
+    assert.notDeepEqual(lane.working.kick.sound, project.working.kick.sound);
+    assert.deepEqual(page.working.kick.sound, project.working.kick.sound);
+    assert.notDeepEqual(lane.working.kick.gen2, project.working.kick.gen2);
+    assert.deepEqual(page.working.kick.gen2, project.working.kick.gen2);
+    assert.ok(lane.captureNonce > page.captureNonce);
   });
 
   it("skips the previous wander target while another scene exists", () => {

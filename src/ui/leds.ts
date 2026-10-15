@@ -1,9 +1,10 @@
 import { morphProgress } from "../core/morph.ts";
 import { sceneColor, journalPadIds, setPadIds } from "../core/performance.ts";
 import {
+  CAPTURE_DEPTHS,
   CAPTURE_INTENSITIES,
+  CAPTURE_SCOPES,
   LANE_CODE,
-  type CaptureIntensity,
   type ContextId,
   type LaneId,
   type Project,
@@ -24,12 +25,8 @@ export const LED = {
   working: 8,
 } as const;
 
-/** Soft / medium / hard pad colours on the Capture overlay (clear uses red). */
-const CAPTURE_MODE_COLOR: Record<Exclude<CaptureIntensity, "clear">, number> = {
-  soft: LED.yellow,
-  medium: 14,
-  hard: LED.purple,
-};
+/** How bright the shared yellow intensity pads read: low, med, high. */
+const INTENSITY_SHADE = { soft: 0.2, medium: 0.5, hard: 1 } as const;
 
 export type LedFamily = "red" | "yellow" | "purple" | "lock" | "off";
 
@@ -113,26 +110,29 @@ export interface PadSurface {
 export function padLeds(project: Project, mode: "journal" | "set", surface?: PadSurface, tick = 0): Led[] {
   const context = surface?.context ?? "kick";
   const page = surface?.page ?? 0;
-  if (surface?.captureHeld) {
-    const lane = surface.heldLane ?? context;
-    return capturePadLeds(project, lane, surface.heldLane === context || !surface.heldLane ? page : -1);
-  }
+  if (surface?.captureHeld) return capturePadLeds(project);
   if (surface?.wheelTouch) return wheelPadLeds(project, context, page);
   const scenes = scenePadLeds(project, mode, tick);
   if (surface?.heldLane) return pageOverlay(scenes, surface.heldLane, surface.heldLane === context ? page : -1);
   return scenes;
 }
 
-/** Top rows = lane pages; bottom cols 0–3 = clear / soft / medium / hard. */
-function capturePadLeds(project: Project, context: ContextId, page: number): Led[] {
-  const out = pageOverlay(Array.from({ length: 32 }, () => led("off", false)), context, page);
+/** Bottom: delete + low/med/high. Row above: lane/group/page. Row above that: all/generators/values. Top row stays off. */
+function capturePadLeds(project: Project): Led[] {
+  const out = Array.from({ length: 32 }, () => led("off", false));
   CAPTURE_INTENSITIES.forEach((id, col) => {
     const selected = project.captureIntensity === id;
     if (id === "clear") {
       out[col] = { family: "red", color: LED.red, blink: selected };
       return;
     }
-    out[col] = { family: "yellow", color: CAPTURE_MODE_COLOR[id], blink: selected };
+    out[col] = { family: "yellow", color: shadeColor(LED.yellow, INTENSITY_SHADE[id]), blink: selected };
+  });
+  CAPTURE_SCOPES.forEach((id, col) => {
+    out[8 + col] = { family: "yellow", color: 3, blink: project.captureScope === id };
+  });
+  CAPTURE_DEPTHS.forEach((id, col) => {
+    out[16 + col] = { family: "purple", color: LED.purple, blink: project.captureDepth === id };
   });
   return out;
 }

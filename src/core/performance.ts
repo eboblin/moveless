@@ -1,14 +1,17 @@
 import { ticksPerBar } from "./clock.ts";
 import { clone } from "./clone.ts";
+import { defaultProject } from "./defaults.ts";
 import { hash01 } from "./hash.ts";
 import { applyMorph, retarget } from "./morph.ts";
-import { modulated } from "./modulate.ts";
 import {
   CAPTURE_INTENSITIES,
   LANES,
   SET_CAPACITY,
+  SOUND,
   WANDER_BARS,
+  type CaptureDepth,
   type CaptureIntensity,
+  type CaptureScope,
   type EuclidGen,
   type LaneId,
   type Lanes,
@@ -22,21 +25,6 @@ export { CAPTURE_INTENSITIES };
 
 /** Bright palette indices 1–26 only — each has dim/dark partners at 63+2c / 64+2c. */
 const SCENE_COLORS = [1, 2, 3, 5, 7, 8, 9, 11, 14, 15, 16, 17, 20, 22, 23, 25];
-
-const EXPENSIVE_RATE: Record<Exclude<CaptureIntensity, "clear">, number> = {
-  soft: 0.15,
-  medium: 0.4,
-  hard: 0.75,
-};
-
-const VALUE_JITTER: Record<Exclude<CaptureIntensity, "clear">, number> = {
-  soft: 0.2,
-  medium: 0.45,
-  hard: 1,
-};
-
-/** Weights for cycle 1..8 — peak at 4. */
-const CYCLE_WEIGHTS = [1, 2, 3, 4, 3, 2, 1, 1];
 
 export function sceneColor(id: string): number {
   let hash = 2166136261;
@@ -219,68 +207,345 @@ function clampMixer(value: number): number {
   return value;
 }
 
-export type CaptureScope = "pattern" | "notes" | "sound" | "all";
+type LaneCapture = "pattern" | "notes" | "sound" | "all";
 
 export function setCaptureIntensity(project: Project, intensity: CaptureIntensity): Project {
   return { ...project, captureIntensity: intensity };
 }
 
-/** Reroll one page group, or the whole lane when scope is `all`. */
-export function captureLane(project: Project, lane: LaneId, scope: CaptureScope = "pattern"): Project {
+export function setCaptureScope(project: Project, scope: CaptureScope): Project {
+  return { ...project, captureScope: scope };
+}
+
+export function setCaptureDepth(project: Project, depth: CaptureDepth): Project {
+  return { ...project, captureDepth: depth };
+}
+
+function movesValues(depth: CaptureDepth): boolean {
+  return depth !== "generators";
+}
+
+function movesShape(depth: CaptureDepth): boolean {
+  return depth !== "values";
+}
+
+/** One full-scale step toward home costs `weight`. A step away costs three times that. */
+const PAGE_BUDGET: Record<Exclude<CaptureIntensity, "clear">, number> = {
+  soft: 1,
+  medium: 2.5,
+  hard: 6,
+};
+
+/** Largest share of the page budget a single knob may spend. */
+const BUDGET_CAP: Record<Exclude<CaptureIntensity, "clear">, number> = {
+  soft: 1,
+  medium: 0.5,
+  hard: 1 / 3,
+};
+
+const AWAY_COST = 3;
+const TOWARD_CHANCE = 0.75;
+const HEAVY_SOUND = new Set(["pitch", "cutoff", "tone", "decay", "snap"]);
+
+function depthAllows(path: string, depth: CaptureDepth): boolean {
+  const shape = path.endsWith(".pattern") || path.endsWith(".cycle") || path.endsWith(".amount");
+  if (depth === "generators") return shape;
+  if (depth === "values") return !shape;
+  return true;
+}
+
+function weightFor(path: string): number {
+  if (path === "ratchet.count.value" || path === "repeat.value" || path === "ratchet.rate.value" || path === "rate.value") return 8;
+  if (path.endsWith(".pattern")) return 1;
+  if (path.endsWith(".amount")) return 1.2;
+  if (path.endsWith(".cycle")) return 1.5;
+  if (path.endsWith(".rotate")) return 2;
+  if (path.endsWith(".probability")) return 3;
+  if (path.endsWith(".hits")) return 5;
+  if (path.startsWith("gen") && path.endsWith(".length")) return 6;
+  if (path === "follow") return 6;
+  if (path === "start" || path === "count" || path === "motion" || path === "length") return 6;
+  if (path === "mood" || path === "tension" || path === "spread" || path === "flow") return 3;
+  if (path === "variation" || path === "way" || path === "direction" || path === "octaves") return 4;
+  if (path.endsWith(".value")) {
+    const id = path.split(".").at(-2) ?? "";
+    return HEAVY_SOUND.has(id) ? 8 : 4;
+  }
+  return 4;
+}
+
+interface KnobSpec {
+  min: number;
+  max: number;
+  step: number;
+  integer: boolean;
+}
+
+function knobSpec(path: string): KnobSpec | null {
+  if (path.endsWith(".value")) return { min: 0, max: 1, step: 0.01, integer: false };
+  if (path.endsWith(".pattern")) return { min: 0, max: 63, step: 1, integer: true };
+  if (path.endsWith(".cycle")) return { min: 1, max: 64, step: 1, integer: true };
+  if (path.endsWith(".amount")) return { min: -1, max: 1, step: 0.01, integer: false };
+  if (path.startsWith("gen") && (path.endsWith(".length") || path.endsWith(".hits") || path.endsWith(".rotate"))) {
+    return { min: 0, max: 64, step: 1, integer: true };
+  }
+  if (path.endsWith(".probability")) return { min: 0, max: 1, step: 0.01, integer: false };
+  if (path === "follow") return { min: 0, max: 1, step: 0.01, integer: false };
+  if (path.startsWith("macro.")) return { min: -1, max: 1, step: 0.01, integer: false };
+  if (path === "master" || (LANES as readonly string[]).includes(path)) return { min: 0, max: 1, step: 0.01, integer: false };
+  const chord = CHORD_RANGE[path];
+  if (!chord) return null;
+  const [min, max, integer] = chord;
+  return { min, max, step: integer ? 1 : 0.01, integer };
+}
+
+function vpcaPaths(base: string): string[] {
+  return [`${base}.value`, `${base}.pattern`, `${base}.cycle`, `${base}.amount`];
+}
+
+function genPagePaths(which: 1 | 2): string[] {
+  const prefix = `gen${which}`;
+  return [`${prefix}.length`, `${prefix}.hits`, `${prefix}.rotate`, `${prefix}.probability`, ...vpcaPaths(`${prefix}.velocity`)];
+}
+
+function soundPagePaths(lane: LaneId): string[][] {
+  const ids = SOUND[lane];
+  const pages: string[][] = [];
+  for (let i = 0; i < ids.length; i += 2) {
+    const paths = vpcaPaths(`sound.${ids[i]}`);
+    if (ids[i + 1]) paths.push(...vpcaPaths(`sound.${ids[i + 1]}`));
+    pages.push(paths);
+  }
+  return pages;
+}
+
+function patternPages(lane: LaneId): string[][] {
+  if (lane === "chords") return [];
+  const pages = [genPagePaths(1), genPagePaths(2)];
+  if (lane === "bass" || lane === "lead") pages.push([...vpcaPaths("repeat"), ...vpcaPaths("step")]);
+  else pages.push([...vpcaPaths("ratchet.count"), ...vpcaPaths("ratchet.rate")]);
+  return pages;
+}
+
+function notePages(lane: LaneId): string[][] {
+  if (lane === "bass" || lane === "lead") {
+    return [[...vpcaPaths("degree"), "range.value", "range.amount", "follow"], vpcaPaths("length")];
+  }
+  if (lane !== "chords") return [];
+  return [
+    ["start", "count", "length", "motion", "variation", "mood", "tension", "way"],
+    [...vpcaPaths("rate"), ...vpcaPaths("gate")],
+    ["spread", "flow", "octaves", "direction"],
+  ];
+}
+
+function scopePages(lane: LaneId, scope: LaneCapture): string[][] {
+  if (scope === "sound") return soundPagePaths(lane);
+  if (scope === "notes") return notePages(lane);
+  if (scope === "pattern") return patternPages(lane);
+  return [...patternPages(lane), ...notePages(lane), ...soundPagePaths(lane)];
+}
+
+function generatorFields(target: string): string[] {
+  if (target === "gen1" || target === "gen2") return genPagePaths(target === "gen1" ? 1 : 2);
+  return vpcaPaths(target);
+}
+
+/** Spend one page budget on these knobs. Delete does not come here. */
+function spendPage(project: Project, lane: LaneId, paths: string[], tag: string): Project {
+  const depth = project.captureDepth;
+  const intensity = project.captureIntensity;
+  if (intensity === "clear") return project;
+  const eligible = paths.filter((path) => depthAllows(path, depth) && knobSpec(path));
+  if (!eligible.length) return project;
+  const nonce = project.captureNonce + 1;
+  const working = clone(project.working);
+  const roll = (...parts: (string | number)[]) =>
+    hash01(project.global.seed, "capture", nonce, lane, tag, intensity, depth, ...parts);
+  applyBudget(working[lane], defaultProject().working[lane], eligible, roll, PAGE_BUDGET[intensity], BUDGET_CAP[intensity]);
+  return { ...project, working, captureNonce: nonce };
+}
+
+function applyBudget(
+  root: unknown,
+  homes: unknown,
+  paths: string[],
+  roll: (...parts: (string | number)[]) => number,
+  budget: number,
+  capFraction: number,
+): void {
+  const ordered = paths
+    .map((path) => ({ path, rank: roll("ord", path) }))
+    .sort((a, b) => a.rank - b.rank || (a.path < b.path ? -1 : 1));
+  let left = budget;
+  const cap = budget * capFraction;
+  for (const { path } of ordered) {
+    if (left <= 1e-9) break;
+    const spec = knobSpec(path);
+    const current = readNumber(root, path);
+    const home = readNumber(homes, path);
+    if (!spec || current === null || home === null) continue;
+    const span = spec.max - spec.min;
+    if (span <= 0) continue;
+    const unit = (current - spec.min) / span;
+    const homeUnit = (home - spec.min) / span;
+    const towardRoom = Math.abs(unit - homeUnit);
+    const atHome = towardRoom <= 1e-9;
+    const wantToward = !atHome && roll("dir", path) < TOWARD_CHANCE;
+    let targetUnit = homeUnit;
+    if (!wantToward) {
+      const lowRoom = unit;
+      const highRoom = 1 - unit;
+      if (atHome) {
+        if (lowRoom <= 1e-9) targetUnit = 1;
+        else if (highRoom <= 1e-9) targetUnit = 0;
+        else targetUnit = roll("side", path) < 0.5 ? 0 : 1;
+      } else {
+        targetUnit = unit < homeUnit ? 0 : 1;
+      }
+    }
+    const room = Math.abs(targetUnit - unit);
+    if (room <= 1e-9) continue;
+    const costPerUnit = weightFor(path) * (wantToward ? 1 : AWAY_COST);
+    const affordable = Math.min(room, left / costPerUnit, cap / costPerUnit);
+    const stepUnits = affordable * roll("frac", path);
+    if (stepUnits * span + 1e-12 < spec.step) continue;
+    const sign = targetUnit >= unit ? 1 : -1;
+    let next = current + sign * stepUnits * span;
+    if (spec.integer) next = Math.round(next);
+    if (next < spec.min) next = spec.min;
+    if (next > spec.max) next = spec.max;
+    const traveled = Math.abs(next - current) / span;
+    if (traveled * span + 1e-12 < spec.step) continue;
+    writeNumber(root, path, next);
+    left -= traveled * costPerUnit;
+  }
+}
+
+function readNumber(root: unknown, path: string): number | null {
+  const value = readNode(root, path);
+  return typeof value === "number" ? value : null;
+}
+
+function writeNumber(root: unknown, path: string, value: number): void {
+  const parts = path.split(".");
+  let current = root;
+  for (let i = 0; i < parts.length - 1; i++) {
+    if (current === null || typeof current !== "object") return;
+    current = (current as Record<string, unknown>)[parts[i]];
+  }
+  if (current === null || typeof current !== "object") return;
+  (current as Record<string, unknown>)[parts[parts.length - 1]] = value;
+}
+
+/** Reroll one page group, or the whole lane when scope is `all`. Each page spends its own budget. */
+export function captureLane(project: Project, lane: LaneId, scope: LaneCapture = "pattern"): Project {
   if (project.lock[lane]) return project;
   if (scope === "notes" && lane !== "bass" && lane !== "lead" && lane !== "chords") return project;
   if (scope === "pattern" && lane === "chords") return project;
+  if (project.captureIntensity === "clear") return clearLane(project, lane, scope);
+  let next = project;
+  scopePages(lane, scope).forEach((paths, index) => {
+    next = spendPage(next, lane, paths, `${scope}:${index}`);
+  });
+  return next;
+}
+
+function clearLane(project: Project, lane: LaneId, scope: LaneCapture): Project {
   const intensity = project.captureIntensity;
+  const depth = project.captureDepth;
   const nonce = project.captureNonce + 1;
   const working = clone(project.working);
-  const roll = (...parts: (string | number)[]) => hash01(project.global.seed, "capture", nonce, lane, scope, intensity, ...parts);
+  const roll = (...parts: (string | number)[]) =>
+    hash01(project.global.seed, "capture", nonce, lane, scope, intensity, depth, ...parts);
   if (scope === "all") {
-    if (lane !== "chords") randomizePattern(working, lane, roll, intensity);
-    if (lane === "bass" || lane === "lead" || lane === "chords") randomizeNotes(working, lane, roll, intensity);
-    randomizeSound(working[lane].sound, roll, intensity);
-  } else if (scope === "sound") randomizeSound(working[lane].sound, roll, intensity);
-  else if (scope === "notes") randomizeNotes(working, lane, roll, intensity);
-  else randomizePattern(working, lane, roll, intensity);
+    if (lane !== "chords") randomizePattern(working, lane, roll, intensity, depth);
+    if (lane === "bass" || lane === "lead" || lane === "chords") randomizeNotes(working, lane, roll, intensity, depth);
+    randomizeSound(working[lane].sound, roll, intensity, depth);
+  } else if (scope === "sound") randomizeSound(working[lane].sound, roll, intensity, depth);
+  else if (scope === "notes") randomizeNotes(working, lane, roll, intensity, depth);
+  else randomizePattern(working, lane, roll, intensity, depth);
   return { ...project, working, captureNonce: nonce };
+}
+
+/** Reroll mixer faders or perf macros. Homes: mixer channel 1 (shown as 100), macro 0. */
+export function captureSurface(project: Project, kind: "mix" | "perf", paths: string[]): Project {
+  const depth = project.captureDepth;
+  const eligible = [...new Set(paths)].filter((path) => depthAllows(path, depth) && knobSpec(path));
+  if (!eligible.length) return project;
+  const intensity = project.captureIntensity;
+  const nonce = project.captureNonce + 1;
+  if (intensity === "clear") {
+    if (kind === "mix") {
+      const mixer = { ...project.mixer };
+      for (const path of eligible) mixer[path as LaneId | "master"] = 0;
+      return { ...project, mixer, captureNonce: nonce };
+    }
+    const macros = { ...project.macros };
+    for (const path of eligible) macros[path.slice("macro.".length)] = 0;
+    return { ...project, macros, captureNonce: nonce };
+  }
+  const roll = (...parts: (string | number)[]) =>
+    hash01(project.global.seed, "capture", nonce, kind, intensity, depth, ...parts);
+  const budget = PAGE_BUDGET[intensity];
+  const cap = BUDGET_CAP[intensity];
+  if (kind === "mix") {
+    const mixer = { ...project.mixer };
+    const homes: Record<string, number> = {};
+    for (const id of [...LANES, "master"] as const) homes[id] = 1;
+    applyBudget(mixer, homes, eligible, roll, budget, cap);
+    return { ...project, mixer, captureNonce: nonce };
+  }
+  const macros = { ...project.macros };
+  const homes = { macro: {} as Record<string, number> };
+  for (const path of eligible) {
+    const key = path.slice("macro.".length);
+    if (!(key in macros)) macros[key] = 0;
+    homes.macro[key] = 0;
+  }
+  applyBudget({ macro: macros }, homes, eligible, roll, budget, cap);
+  return { ...project, macros, captureNonce: nonce };
 }
 
 /** Reroll one euclid (`gen1`), its velocity, or another 4-param modulator. */
 export function captureGenerator(project: Project, lane: LaneId, target: string): Project {
   if (project.lock[lane]) return project;
+  const node = readNode(project.working[lane], target);
+  if (!isEuclidGen(node) && !isModulated(node)) return project;
+  if (project.captureIntensity !== "clear") return spendPage(project, lane, generatorFields(target), target);
   const intensity = project.captureIntensity;
+  const depth = project.captureDepth;
   const working = clone(project.working);
-  const node = readNode(working[lane], target);
+  const live = readNode(working[lane], target);
   const nonce = project.captureNonce + 1;
-  const roll = (...parts: (string | number)[]) => hash01(project.global.seed, "capture", nonce, lane, target, intensity, ...parts);
-  if (isEuclidGen(node)) {
-    Object.assign(node, touchEuclid(node, roll, "", intensity));
-    return { ...project, working, captureNonce: nonce };
-  }
-  if (isModulated(node)) {
-    Object.assign(node, touchMaybeExpensive(node, roll, target, intensity, isRatchetPath(target)));
-    return { ...project, working, captureNonce: nonce };
-  }
-  return project;
+  const roll = (...parts: (string | number)[]) =>
+    hash01(project.global.seed, "capture", nonce, lane, target, intensity, depth, ...parts);
+  if (isEuclidGen(live)) Object.assign(live, touchEuclid(live, roll, "", intensity, depth));
+  else if (isModulated(live)) Object.assign(live, touchMaybeExpensive(live, roll, target, intensity, isRatchetPath(target), depth));
+  return { ...project, working, captureNonce: nonce };
 }
 
 /**
  * Reroll only the parameters listed on one page (binding paths). Avoids importing pages.ts.
- * Groups paths into euclid roots, modulators, and scalars.
+ * Non-clear spends one page budget across the knobs. Clear still zeros the grouped targets.
  */
 export function capturePaths(project: Project, lane: LaneId, paths: string[]): Project {
   if (project.lock[lane]) return project;
   if (!paths.length) return project;
+  if (project.captureIntensity !== "clear") return spendPage(project, lane, paths, paths.join(","));
   const intensity = project.captureIntensity;
+  const depth = project.captureDepth;
   const working = clone(project.working);
   const nonce = project.captureNonce + 1;
-  const roll = (...parts: (string | number)[]) => hash01(project.global.seed, "capture", nonce, lane, "page", intensity, ...parts);
+  const roll = (...parts: (string | number)[]) =>
+    hash01(project.global.seed, "capture", nonce, lane, "page", intensity, depth, ...parts);
   const root = working[lane] as unknown as Record<string, unknown>;
   const seen = new Set<string>();
   for (const path of paths) {
     const target = captureTarget(path);
     if (!target || seen.has(target.key)) continue;
     seen.add(target.key);
-    applyCaptureTarget(root, target, roll, intensity);
+    applyCaptureTarget(root, target, roll, intensity, depth);
   }
   return { ...project, working, captureNonce: nonce };
 }
@@ -332,24 +597,28 @@ function applyCaptureTarget(
   target: CaptureTarget,
   roll: (...parts: (string | number)[]) => number,
   intensity: CaptureIntensity,
+  depth: CaptureDepth,
 ): void {
   if (target.kind === "euclid") {
     const node = readNode(root, target.path);
-    if (isEuclidGen(node)) Object.assign(node, touchEuclid(node, roll, target.path, intensity));
+    if (isEuclidGen(node)) Object.assign(node, touchEuclid(node, roll, target.path, intensity, depth));
     return;
   }
   if (target.kind === "modulated") {
     const node = readNode(root, target.path);
     if (isModulated(node)) {
-      Object.assign(node, touchMaybeExpensive(node, roll, target.path, intensity, isRatchetPath(target.path)));
+      Object.assign(node, touchMaybeExpensive(node, roll, target.path, intensity, isRatchetPath(target.path), depth));
     }
     return;
   }
-  if (intensity === "clear") return;
-  if (typeof root[target.path] === "number") {
-    const unit = roll(target.path);
-    root[target.path] = target.path in CHORD_RANGE ? rollChordScalar(target.path, unit) : unit;
+  if (!movesValues(depth)) return;
+  if (typeof root[target.path] !== "number") return;
+  if (intensity === "clear") {
+    root[target.path] = 0;
+    return;
   }
+  const unit = roll(target.path);
+  root[target.path] = target.path in CHORD_RANGE ? rollChordScalar(target.path, unit) : unit;
 }
 
 function readNode(root: unknown, path: string): unknown {
@@ -369,21 +638,6 @@ function isModulated(value: unknown): value is Modulated {
   return !!value && typeof value === "object" && "amount" in value && "pattern" in value && "cycle" in value && "value" in value;
 }
 
-/** Pick cycle 1..8 with weights peaking at 4. Exported for tests. */
-export function cycleBiased(roll: number): number {
-  const total = CYCLE_WEIGHTS.reduce((sum, w) => sum + w, 0);
-  let edge = Math.min(0.999999, Math.max(0, roll)) * total;
-  for (let i = 0; i < CYCLE_WEIGHTS.length; i++) {
-    edge -= CYCLE_WEIGHTS[i];
-    if (edge < 0) return i + 1;
-  }
-  return 8;
-}
-
-function expensiveChance(intensity: Exclude<CaptureIntensity, "clear">): number {
-  return EXPENSIVE_RATE[intensity];
-}
-
 function isRatchetPath(path: string): boolean {
   return path === "ratchet.count" || path === "ratchet.rate" || path.startsWith("ratchet.");
 }
@@ -394,87 +648,48 @@ function touchMaybeExpensive(
   roll: (...parts: (string | number)[]) => number,
   prefix: string,
   intensity: CaptureIntensity,
-  expensiveWhole: boolean,
+  _expensiveWhole: boolean,
+  depth: CaptureDepth,
 ): Modulated {
-  if (intensity === "clear") return touchModulated(current, roll, prefix, intensity);
-  if (expensiveWhole && roll(prefix, "touch?") >= expensiveChance(intensity)) return current;
-  return touchModulated(current, roll, prefix, intensity);
+  return touchModulated(current, roll, prefix, intensity, depth);
 }
 
 function touchModulated(
   current: Modulated,
-  roll: (...parts: (string | number)[]) => number,
-  prefix: string,
+  _roll: (...parts: (string | number)[]) => number,
+  _prefix: string,
   intensity: CaptureIntensity,
+  depth: CaptureDepth,
 ): Modulated {
-  if (intensity === "clear") {
-    return { value: current.value, pattern: 0, cycle: current.cycle, amount: 0 };
-  }
-  const jitter = VALUE_JITTER[intensity];
-  const value =
-    intensity === "hard"
-      ? roll(prefix, "v")
-      : clamp01(current.value + (roll(prefix, "v") * 2 - 1) * jitter);
-  let pattern = current.pattern;
-  let cycle = current.cycle;
-  let amount = current.amount;
-  const rate = expensiveChance(intensity);
-  if (roll(prefix, "p?") < rate) pattern = Math.floor(roll(prefix, "p") * 64);
-  if (roll(prefix, "c?") < rate) cycle = cycleBiased(roll(prefix, "c"));
-  if (roll(prefix, "a?") < rate) amount = (roll(prefix, "a") * 2 - 1) * 0.75;
-  return modulated(value, pattern, cycle, amount);
+  if (intensity === "clear") return clearedModulated(current, depth);
+  return current;
 }
 
-/** Cheap pattern-gen step: nudge one of LEN/HIT/ROT/PRB by a small intensity-scaled amount. */
-function nudgeEuclid(
-  current: EuclidGen,
-  roll: (...parts: (string | number)[]) => number,
-  prefix: string,
-  intensity: Exclude<CaptureIntensity, "clear">,
-): EuclidGen {
-  const step = intensity === "soft" ? 1 : intensity === "medium" ? 2 : 3;
-  const probStep = intensity === "soft" ? 0.05 : intensity === "medium" ? 0.1 : 0.18;
-  let length = Math.max(0, Math.min(64, current.length));
-  let hits = Math.max(0, Math.min(length, current.hits));
-  let rotate = length > 0 ? ((current.rotate % length) + length) % length : 0;
-  let probability = clamp01(current.probability);
-  const which = Math.floor(roll(prefix, "which") * 4);
-  const sign = roll(prefix, "sign") < 0.5 ? -1 : 1;
-  if (which === 0) {
-    length = Math.max(0, Math.min(64, length + sign * (1 + Math.floor(roll(prefix, "len") * step))));
-  } else if (which === 1) {
-    hits = Math.max(0, Math.min(Math.max(length, 0), hits + sign * (1 + Math.floor(roll(prefix, "hits") * step))));
-  } else if (which === 2) {
-    if (length > 0) rotate = (((rotate + sign * (1 + Math.floor(roll(prefix, "rot") * step))) % length) + length) % length;
-  } else {
-    probability = clamp01(probability + sign * (probStep * (0.5 + roll(prefix, "prob"))));
-  }
-  if (length > 0) {
-    hits = Math.max(0, Math.min(length, hits));
-    rotate = rotate % length;
-  } else {
-    hits = 0;
-    rotate = 0;
-  }
-  return { length, hits, rotate, probability, velocity: current.velocity };
+function clearedModulated(current: Modulated, depth: CaptureDepth): Modulated {
+  const shape = movesShape(depth);
+  return {
+    value: movesValues(depth) ? 0 : current.value,
+    pattern: shape ? 0 : current.pattern,
+    cycle: shape ? 0 : current.cycle,
+    amount: shape ? 0 : current.amount,
+  };
 }
 
 function touchEuclid(
   current: EuclidGen,
-  roll: (...parts: (string | number)[]) => number,
-  prefix: string,
+  _roll: (...parts: (string | number)[]) => number,
+  _prefix: string,
   intensity: CaptureIntensity,
+  depth: CaptureDepth,
 ): EuclidGen {
-  if (intensity === "clear") {
-    return {
-      ...current,
-      velocity: touchModulated(current.velocity, roll, `${prefix}.velocity`, intensity),
-    };
-  }
-  const nudged = nudgeEuclid(current, roll, prefix, intensity);
+  const values = movesValues(depth);
+  if (intensity !== "clear") return current;
   return {
-    ...nudged,
-    velocity: touchModulated(current.velocity, roll, `${prefix}.velocity`, intensity),
+    length: values ? 0 : current.length,
+    hits: values ? 0 : current.hits,
+    rotate: values ? 0 : current.rotate,
+    probability: values ? 0 : current.probability,
+    velocity: clearedModulated(current.velocity, depth),
   };
 }
 
@@ -489,21 +704,22 @@ function randomizePattern(
   lane: LaneId,
   roll: (...parts: (string | number)[]) => number,
   intensity: CaptureIntensity,
+  depth: CaptureDepth,
 ): void {
   if (lane === "chords") return;
   const target = lanes[lane];
-  target.gen1 = touchEuclid(target.gen1, roll, "gen1", intensity);
-  target.gen2 = touchEuclid(target.gen2, roll, "gen2", intensity);
+  target.gen1 = touchEuclid(target.gen1, roll, "gen1", intensity, depth);
+  target.gen2 = touchEuclid(target.gen2, roll, "gen2", intensity, depth);
   if (lane === "bass" || lane === "lead") {
     const pitched = lanes[lane];
-    pitched.repeat = touchModulated(pitched.repeat, roll, "repeat", intensity);
-    pitched.step = touchModulated(pitched.step, roll, "step", intensity);
-    if (intensity !== "clear") pitched.follow = roll("follow");
+    pitched.repeat = touchModulated(pitched.repeat, roll, "repeat", intensity, depth);
+    pitched.step = touchModulated(pitched.step, roll, "step", intensity, depth);
+    if (movesValues(depth)) pitched.follow = intensity === "clear" ? 0 : roll("follow");
     return;
   }
   const drum = lanes[lane];
-  drum.ratchet.count = touchMaybeExpensive(drum.ratchet.count, roll, "ratchet.count", intensity, true);
-  drum.ratchet.rate = touchMaybeExpensive(drum.ratchet.rate, roll, "ratchet.rate", intensity, true);
+  drum.ratchet.count = touchMaybeExpensive(drum.ratchet.count, roll, "ratchet.count", intensity, true, depth);
+  drum.ratchet.rate = touchMaybeExpensive(drum.ratchet.rate, roll, "ratchet.rate", intensity, true, depth);
 }
 
 function randomizeNotes(
@@ -511,30 +727,34 @@ function randomizeNotes(
   lane: LaneId,
   roll: (...parts: (string | number)[]) => number,
   intensity: CaptureIntensity,
+  depth: CaptureDepth,
 ): void {
   if (lane === "bass" || lane === "lead") {
     const pitched = lanes[lane];
-    pitched.degree = touchModulated(pitched.degree, roll, "degree", intensity);
-    pitched.range = touchModulated(pitched.range, roll, "range", intensity);
-    pitched.length = touchModulated(pitched.length, roll, "length", intensity);
-    if (intensity !== "clear") pitched.follow = roll("follow");
+    pitched.degree = touchModulated(pitched.degree, roll, "degree", intensity, depth);
+    pitched.range = touchModulated(pitched.range, roll, "range", intensity, depth);
+    pitched.length = touchModulated(pitched.length, roll, "length", intensity, depth);
+    if (movesValues(depth)) pitched.follow = intensity === "clear" ? 0 : roll("follow");
     return;
   }
   if (lane !== "chords") return;
   const chords = lanes.chords;
-  chords.rate = touchModulated(chords.rate, roll, "rate", intensity);
-  chords.gate = touchModulated(chords.gate, roll, "gate", intensity);
-  if (intensity === "clear") return;
+  chords.rate = touchModulated(chords.rate, roll, "rate", intensity, depth);
+  chords.gate = touchModulated(chords.gate, roll, "gate", intensity, depth);
+  if (!movesValues(depth)) return;
   const plain = chords as unknown as Record<string, number>;
-  for (const key of Object.keys(CHORD_RANGE)) plain[key] = rollChordScalar(key, roll(key));
+  for (const key of Object.keys(CHORD_RANGE)) {
+    plain[key] = intensity === "clear" ? 0 : rollChordScalar(key, roll(key));
+  }
 }
 
 function randomizeSound(
   sound: Record<string, Modulated>,
   roll: (...parts: (string | number)[]) => number,
   intensity: CaptureIntensity,
+  depth: CaptureDepth,
 ): void {
-  for (const id of Object.keys(sound)) sound[id] = touchModulated(sound[id], roll, id, intensity);
+  for (const id of Object.keys(sound)) sound[id] = touchModulated(sound[id], roll, id, intensity, depth);
 }
 
 export function audibleEvents(project: Project, phraseLanes: Record<LaneId, { velocity: number; lane: LaneId }[]>): { lane: LaneId; velocity: number }[] {

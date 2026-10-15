@@ -38,6 +38,8 @@ describe("dsp adapter", () => {
 
   it("schedules the downbeat kick inside the first audio block", () => {
     const project = defaultProject();
+    project.working.kick.gen1 = { ...project.working.kick.gen1, length: 16, hits: 4, rotate: 0, probability: 1 };
+    project.working.kick.gen2.hits = 0;
     const block = eventsInBlock(project, 0);
     const kick = block.filter((event) => event.lane === "kick");
     assert.ok(kick.length >= 1);
@@ -76,6 +78,8 @@ describe("dsp adapter", () => {
 
   it("loops the phrase on the audio clock and spaces cycle 4 by a quarter note", () => {
     const project = defaultProject();
+    project.working.kick.gen1 = { ...project.working.kick.gen1, length: 16, hits: 4, rotate: 0, probability: 1 };
+    project.working.kick.gen2.hits = 0;
     const hits = phraseLoop(project);
     const kicks = hits.filter((event) => event.lane === "kick").map((event) => event.sample);
     const quarter = tickToSample(4 * SIXTEENTH_TICKS, project.global.tempo);
@@ -168,6 +172,8 @@ describe("dsp adapter", () => {
     const project = defaultProject();
     for (const lane of ["kick", "snare", "hat", "perc", "lead", "chords"] as const) project.mute[lane] = true;
     const engine = createEngine();
+    project.working.bass.gen1 = { ...project.working.bass.gen1, length: 16, hits: 2, rotate: 0, probability: 1 };
+    project.working.bass.gen2.hits = 0;
     loadPhrase(engine, phraseLoop(project), project.global.tempo, true, soundMotions(project));
     let peak = 0;
     for (let i = 0; i < 80; i++) {

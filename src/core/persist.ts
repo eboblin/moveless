@@ -1,10 +1,14 @@
 import { defaultProject } from "./defaults.ts";
 import { clone } from "./clone.ts";
 import {
+  CAPTURE_DEPTHS,
   CAPTURE_INTENSITIES,
+  CAPTURE_SCOPES,
   LANES,
   SCALE_IDS,
+  type CaptureDepth,
   type CaptureIntensity,
+  type CaptureScope,
   type ChordLane,
   type ContextId,
   type Lanes,
@@ -137,6 +141,8 @@ function mergeProject(raw: Record<string, unknown>): Project {
         : base.clipboardSceneId,
     captureNonce: Math.max(0, asInt(raw.captureNonce, base.captureNonce)),
     captureIntensity: asIntensity(raw.captureIntensity) ?? base.captureIntensity,
+    captureScope: asScope(raw.captureScope) ?? base.captureScope,
+    captureDepth: asDepth(raw.captureDepth) ?? base.captureDepth,
   };
 }
 
@@ -245,4 +251,12 @@ function asIntensity(value: unknown): CaptureIntensity | null {
   return typeof value === "string" && (CAPTURE_INTENSITIES as readonly string[]).includes(value)
     ? (value as CaptureIntensity)
     : null;
+}
+
+function asScope(value: unknown): CaptureScope | null {
+  return typeof value === "string" && (CAPTURE_SCOPES as readonly string[]).includes(value) ? (value as CaptureScope) : null;
+}
+
+function asDepth(value: unknown): CaptureDepth | null {
+  return typeof value === "string" && (CAPTURE_DEPTHS as readonly string[]).includes(value) ? (value as CaptureDepth) : null;
 }

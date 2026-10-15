@@ -128,6 +128,12 @@ export type WanderId = "fast" | "medium" | "slow" | "glacial";
 /** Clear kills modulation; soft/medium/hard scale how often pattern/cycle/amount move. */
 export type CaptureIntensity = "clear" | "soft" | "medium" | "hard";
 export const CAPTURE_INTENSITIES: readonly CaptureIntensity[] = ["clear", "soft", "medium", "hard"];
+/** Capture overlay: whole lane, the page's group, or only the page's knobs. */
+export type CaptureScope = "lane" | "group" | "page";
+export const CAPTURE_SCOPES: readonly CaptureScope[] = ["lane", "group", "page"];
+/** `all` moves everything. `generators` only pattern/cycle/amount. `values` skips those three. */
+export type CaptureDepth = "all" | "generators" | "values";
+export const CAPTURE_DEPTHS: readonly CaptureDepth[] = ["all", "generators", "values"];
 
 export const TRANSITION_BARS: Record<TransitionId, number> = {
   now: 0,
@@ -188,6 +194,10 @@ export interface Project {
   captureNonce: number;
   /** Capture overlay + plain Capture: clear modulation or soft/medium/hard reroll. */
   captureIntensity: CaptureIntensity;
+  /** What a bare Capture release rerolls. Survives the hold. */
+  captureScope: CaptureScope;
+  /** Whether that reroll also moves numeric values. */
+  captureDepth: CaptureDepth;
 }
 
 export interface HarmonicEvent {

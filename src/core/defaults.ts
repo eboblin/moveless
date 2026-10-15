@@ -1,3 +1,4 @@
+import { hash01 } from "./hash.ts";
 import { modulated } from "./modulate.ts";
 import { MOTIF_BANK_VERSION } from "./motif.ts";
 import {
@@ -15,14 +16,31 @@ import {
   type GlobalSettings,
 } from "./types.ts";
 
-function euclid(length: number, hits: number, rotate = 0, velocity = 0.85): EuclidGen {
+const CYCLE_CHOICES = [4, 8, 16] as const;
+
+function homeCycle(key: string): number {
+  return CYCLE_CHOICES[Math.floor(hash01("default-cycle", key) * CYCLE_CHOICES.length)] ?? 4;
+}
+
+function home(key: string, value: number) {
+  return modulated(value, 0, homeCycle(key), 0);
+}
+
+function euclid(length: number, hits: number, rotate: number, velocity: number, cycleKey: string): EuclidGen {
   return {
     length,
     hits,
     rotate,
     probability: 1,
-    velocity: modulated(velocity),
+    velocity: home(cycleKey, velocity),
   };
+}
+
+/** Stable scatter: hits 2..4, rotate 0..15. Same lane and generator always land on the same pair. */
+function scatteredGen(lane: string, which: 1 | 2, velocity: number): EuclidGen {
+  const hits = 2 + Math.floor(hash01("default-gen", lane, which, "hits") * 3);
+  const rotate = Math.floor(hash01("default-gen", lane, which, "rotate") * 16);
+  return euclid(16, hits, rotate, velocity, `${lane}.gen${which}.velocity`);
 }
 
 /**
@@ -106,36 +124,36 @@ function sound(lane: LaneId): Record<string, ReturnType<typeof modulated>> {
   const ids = SOUND[lane];
   const values = SOUND_VALUE[lane];
   const out: Record<string, ReturnType<typeof modulated>> = {};
-  for (const id of ids) out[id] = modulated(values[id] ?? 0.5);
+  for (const id of ids) out[id] = home(`${lane}.${id}`, values[id] ?? 0.5);
   return out;
 }
 
-const DRUM_PRIMARY: Record<DrumId, EuclidGen> = {
-  kick: euclid(16, 4, 0, 1),
-  snare: euclid(16, 2, 4, 1),
-  hat: euclid(16, 8, 0, 0.75),
-  perc: euclid(16, 3, 1, 0.7),
+const DRUM_VELOCITY: Record<DrumId, number> = {
+  kick: 1,
+  snare: 1,
+  hat: 0.75,
+  perc: 0.7,
 };
 
 function drum(id: DrumId): DrumLane {
   return {
-    gen1: { ...DRUM_PRIMARY[id], velocity: { ...DRUM_PRIMARY[id].velocity } },
-    gen2: euclid(16, 0, 0, 0.55),
-    ratchet: { count: modulated(0), rate: modulated(1 / 6) },
+    gen1: scatteredGen(id, 1, DRUM_VELOCITY[id]),
+    gen2: scatteredGen(id, 2, 0.55),
+    ratchet: { count: home(`${id}.ratchet.count`, 0), rate: home(`${id}.ratchet.rate`, 0) },
     sound: sound(id),
   };
 }
 
-function pitched(lane: "bass" | "lead", follow: number, hits: number, octaveBias: number): PitchedLane {
+function pitched(lane: "bass" | "lead", follow: number, octaveBias: number): PitchedLane {
   return {
-    gen1: euclid(16, hits, 0, 0.8),
-    gen2: euclid(16, 0, 0, 0.55),
+    gen1: scatteredGen(lane, 1, 0.8),
+    gen2: scatteredGen(lane, 2, 0.55),
     follow,
-    degree: modulated(0.5),
-    range: modulated(octaveBias),
-    length: modulated(lane === "bass" ? 0.55 : 0.35),
-    repeat: modulated(0),
-    step: modulated(0.5),
+    degree: home(`${lane}.degree`, 0.5),
+    range: home(`${lane}.range`, octaveBias),
+    length: home(`${lane}.length`, lane === "bass" ? 0.55 : 0.35),
+    repeat: home(`${lane}.repeat`, 0),
+    step: home(`${lane}.step`, 0.5),
     sound: sound(lane),
   };
 }
@@ -154,8 +172,8 @@ function chords(): ChordLane {
     flow: 0.5,
     octaves: 1,
     direction: 0,
-    rate: modulated(0),
-    gate: modulated(0.7),
+    rate: home("chords.rate", 0),
+    gate: home("chords.gate", 0.7),
     sound: sound("chords"),
   };
 }
@@ -174,8 +192,8 @@ export function defaultGlobal(): GlobalSettings {
 }
 
 export function defaultLanes(): Lanes {
-  const bass = pitched("bass", 1, 2, 0.45);
-  const lead = pitched("lead", 0.65, 1, 0.55);
+  const bass = pitched("bass", 1, 0.45);
+  const lead = pitched("lead", 0.65, 0.55);
   return {
     kick: drum("kick"),
     snare: drum("snare"),
@@ -190,11 +208,11 @@ export function defaultLanes(): Lanes {
 export function defaultProject(): Project {
   const mute = {} as Project["mute"];
   const lock = {} as Project["lock"];
-  const mixer = { master: 0.8 } as Project["mixer"];
+  const mixer = { master: 1 } as Project["mixer"];
   for (const lane of LANES) {
     mute[lane] = false;
     lock[lane] = false;
-    mixer[lane] = 0.75;
+    mixer[lane] = 1;
   }
   return {
     motifBankVersion: MOTIF_BANK_VERSION,
@@ -218,6 +236,8 @@ export function defaultProject(): Project {
     clipboardSceneId: null,
     captureNonce: 0,
     captureIntensity: "medium",
+    captureScope: "group",
+    captureDepth: "all",
   };
 }
 

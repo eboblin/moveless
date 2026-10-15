@@ -14,6 +14,7 @@ import {
   HEADER_H,
   HEIGHT,
   PARAM_COL_W,
+  WIDTH,
   VIZ_H,
   cellTextX,
   renderScreen,
@@ -185,7 +186,11 @@ function paint(): void {
       continue;
     }
     const height = host.get_font_height?.() || FONT_H;
-    host.fill_rect?.(x, label.y, width, height, 1);
+    const x0 = Math.max(0, x - 1);
+    const y0 = Math.max(0, label.y - 1);
+    const x1 = Math.min(WIDTH, x + width + 1);
+    const y1 = Math.min(HEIGHT, label.y + height + 1);
+    host.fill_rect?.(x0, y0, x1 - x0, y1 - y0, 1);
     host.print?.(x, label.y, label.text, 0);
   }
   if (!host.move_midi_internal_send) return;

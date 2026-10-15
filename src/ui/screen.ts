@@ -2,7 +2,7 @@ import { SIXTEENTH_TICKS } from "../core/clock.ts";
 import { chordSymbol, degreeNumeral } from "../core/harmony.ts";
 import { chordFigure, directionLabel, generatePhrase, laneSteps } from "../core/phrase.ts";
 import { evalModulated } from "../core/modulate.ts";
-import { LANE_CODE, type ContextId, type HarmonicEvent, type LaneId, type Project, type TimedEvent } from "../core/types.ts";
+import { LANE_CODE, type CaptureDepth, type CaptureIntensity, type CaptureScope, type ContextId, type HarmonicEvent, type LaneId, type Project, type TimedEvent } from "../core/types.ts";
 import { DIGIT_H, displayAmount, type BigAmount } from "./digits.ts";
 import { readControl } from "./controls.ts";
 import { pagesFor, type Page } from "./pages.ts";
@@ -62,30 +62,32 @@ export function renderScreen(project: Project, ui: UiState, tick: number, playin
   const pageIndex = peek ? ui.heldPage ?? ui.page : ui.page;
   const pages = pagesFor(context === "mix" || context === "global" ? context : context);
   const page = pages[Math.min(pageIndex, pages.length - 1)];
-  const notice = ui.notice && now < ui.notice.untilMs ? ui.notice : null;
-  const focusState = !notice && ui.focus && (ui.focus.held || tick < ui.focus.untilTick) ? ui.focus : null;
+  const capture = ui.captureHeld;
+  const notice = !capture && ui.notice && now < ui.notice.untilMs ? ui.notice : null;
+  const focusState = !notice && !capture && ui.focus && (ui.focus.held || tick < ui.focus.untilTick) ? ui.focus : null;
   const focus = focusState?.label ?? null;
   const header = figureHeader(project, context, focus) ?? (focus ? fullName(focus) : laneHeader(project, context, page));
   const vizLane: LaneId | null = context === "mix" || context === "global" || context === "perf" ? null : context;
   const generator = vizLane && focusState?.generator ? focusState.generator : null;
-  const mixer = !notice && context === "mix";
-  const viz = notice ? "notice" : mixer ? "mixer" : generator ? "generator" : vizLane ? "phrase" : "none";
+  const mixer = !notice && !capture && context === "mix";
+  const viz = capture ? "capture" : notice ? "notice" : mixer ? "mixer" : generator ? "generator" : vizLane ? "phrase" : "none";
   const params = page ? page.bindings.map((binding) => binding?.label ?? "").filter(Boolean).join(" ") : "";
   const pixels = new Uint8Array(WIDTH * HEIGHT);
   drawPager(pixels, Math.min(pageIndex, Math.max(0, pages.length - 1)), pages.length);
   if (!mixer) drawParamSeparator(pixels);
-  const chordRoll = vizLane === "chords" && page?.id !== "prog";
+  const chordRoll = vizLane === "chords" && page?.id !== "prog" && !capture;
   if (notice) fillViz(pixels);
   else if (mixer) drawMixer(pixels, project, focus);
   else if (generator) drawGenerator(pixels, project, context, generator, focusState?.showPattern ?? false, playing ? stepAt(project, tick) : -1);
   else if (chordRoll) drawChordRoll(pixels, project, playing ? stepAt(project, tick) : -1);
-  else if (vizLane === "chords") drawChordBars(pixels, project, playing ? stepAt(project, tick) : -1);
-  else if (vizLane) drawPhrase(pixels, project, vizLane, playing ? stepAt(project, tick) : -1);
+  else if (!capture && vizLane === "chords") drawChordBars(pixels, project, playing ? stepAt(project, tick) : -1);
+  else if (!capture && vizLane) drawPhrase(pixels, project, vizLane, playing ? stepAt(project, tick) : -1);
   const labels = mixer
     ? [{ x: 1, y: 1, text: header.slice(0, LINE_LIMIT) }, ...mixerChannelLabels(project, focus)]
     : drawLabels(project, context, page, focus);
-  if (vizLane === "chords" && !notice && !generator && !chordRoll) labels.push(...chordNameLabels(project));
+  if (vizLane === "chords" && !notice && !capture && !generator && !chordRoll) labels.push(...chordNameLabels(project));
   if (notice) labels.push(...noticeLabels(notice.title, notice.value));
+  if (capture) labels.push(...captureMenuLabels(project));
   const digits = mixer || !page ? [] : paramDigits(project, context, page, focus);
   return { header, viz, params, pixels, labels, digits };
 }
@@ -168,6 +170,31 @@ function mixerChannelLabels(project: Project, focus: string | null): Label[] {
     });
   }
   return labels;
+}
+
+const DEPTH_WORD: Record<CaptureDepth, string> = { all: "ALL", generators: "GENERATORS", values: "VALUES" };
+const SCOPE_WORD: Record<CaptureScope, string> = { lane: "LANE", group: "GROUP", page: "PAGE" };
+const INTENSITY_WORD: Record<CaptureIntensity, string> = { clear: "DELETE", soft: "LOW", medium: "MED", hard: "HIGH" };
+
+function captureMenuLabels(project: Project): Label[] {
+  const step = FONT_H + 4;
+  const y0 = HEADER_H + 4;
+  return [
+    ...menuLine(["ALL", "GENERATORS", "VALUES"], DEPTH_WORD[project.captureDepth], y0),
+    ...menuLine(["LANE", "GROUP", "PAGE"], SCOPE_WORD[project.captureScope], y0 + step),
+    ...menuLine(["DELETE", "LOW", "MED", "HIGH"], INTENSITY_WORD[project.captureIntensity], y0 + step * 2),
+  ];
+}
+
+function menuLine(words: string[], current: string, y: number): Label[] {
+  const gap = CHAR_W;
+  const total = words.reduce((sum, word) => sum + word.length * CHAR_W, 0) + (words.length - 1) * gap;
+  let x = Math.max(0, Math.floor((WIDTH - total) / 2));
+  return words.map((word) => {
+    const label = { x, y, text: word, invert: word === current };
+    x += word.length * CHAR_W + gap;
+    return label;
+  });
 }
 
 function noticeLabels(title: string, value: string): Label[] {
