@@ -66,7 +66,7 @@ export function renderScreen(project: Project, ui: UiState, tick: number, playin
   const focusState = !notice && ui.focus && (ui.focus.held || tick < ui.focus.untilTick) ? ui.focus : null;
   const focus = focusState?.label ?? null;
   const header = figureHeader(project, context, focus) ?? (focus ? fullName(focus) : laneHeader(project, context, page));
-  const vizLane: LaneId | null = context === "mix" || context === "global" ? null : context;
+  const vizLane: LaneId | null = context === "mix" || context === "global" || context === "perf" ? null : context;
   const generator = vizLane && focusState?.generator ? focusState.generator : null;
   const mixer = !notice && context === "mix";
   const viz = notice ? "notice" : mixer ? "mixer" : generator ? "generator" : vizLane ? "phrase" : "none";
@@ -183,7 +183,7 @@ function centered(text: string): number {
 
 function laneTag(project: Project, context: ContextId): string {
   let tag = LANE_CODE[context];
-  if (context !== "mix" && context !== "global") {
+  if (context !== "mix" && context !== "global" && context !== "perf") {
     if (project.mute[context]) tag += "M";
     if (project.lock[context]) tag += "L";
   }
@@ -236,7 +236,7 @@ function drawGenerator(pixels: Uint8Array, project: Project, context: ContextId,
   const cycle = Math.max(1, Math.round(readControl(project, context, `${path}.cycle`)));
   const stored = readControl(project, context, `${path}.amount`);
   const amount = showPattern && stored === 0 ? 1 : stored;
-  const lane: LaneId = context === "mix" || context === "global" ? "kick" : context;
+  const lane: LaneId = context === "mix" || context === "global" || context === "perf" ? "kick" : context;
   const steps = Math.max(1, laneSteps(project.working, lane, project.global));
   const shown = { value, pattern, cycle, amount };
   const yTop = HEADER_H;

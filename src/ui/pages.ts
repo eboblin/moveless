@@ -1,4 +1,3 @@
-import { sharedParamIds } from "../core/performance.ts";
 import { LANE_CODE, SCALE_IDS, SOUND, type ContextId, type LaneId } from "../core/types.ts";
 
 export interface Binding {
@@ -151,7 +150,7 @@ export function lanePages(lane: LaneId): Page[] {
     genPage(1),
     genPage(2),
     ...(pitched
-      ? [pitchPage(), lengthPage(), pair("repeat", "REPEAT", "step", "STEP")]
+      ? [pair("repeat", "REPEAT", "step", "STEP"), pitchPage(), lengthPage()]
       : [pair("ratchet.count", "COUNT", "ratchet.rate", "RATE")]),
     ...soundPages(SOUND[lane]),
   ];
@@ -171,38 +170,63 @@ export function mixPage(): Page {
 }
 
 export function globalPages(): Page[] {
-  const settings: Page = {
-    id: "settings",
-    title: "GLOBAL",
-    groups: ["TIME", "FORM"],
-    bindings: slots([
-      num("tempo", "TEMPO", 40, 240, 1, true),
-      num("swing", "SWING", 0, 1, 0.01),
-      num("root", "ROOT", 0, 11, 1, true),
-      num("scale", "SCALE", 0, SCALE_IDS.length - 1, 1, true),
-      num("transpose", "TRANS", -24, 24, 1, true),
-      num("bar", "BAR", 1, 16, 1, true),
-      num("phrase", "PHRASE", 1, 64, 1, true),
-      num("seed", "SEED", 0, 999, 1, true),
-    ]),
+  return [
+    {
+      id: "settings",
+      title: "GLOBAL",
+      groups: ["TIME", "FORM"],
+      bindings: slots([
+        num("tempo", "TEMPO", 40, 240, 1, true),
+        num("swing", "SWING", 0, 1, 0.01),
+        num("root", "ROOT", 0, 11, 1, true),
+        num("scale", "SCALE", 0, SCALE_IDS.length - 1, 1, true),
+        num("transpose", "TRANS", -24, 24, 1, true),
+        num("bar", "BAR", 1, 16, 1, true),
+        num("phrase", "PHRASE", 1, 64, 1, true),
+        num("seed", "SEED", 0, 999, 1, true),
+      ]),
+    },
+  ];
+}
+
+function macroPage(id: string, title: string, knobs: readonly [string, string][]): Page {
+  return {
+    id,
+    title,
+    groups: [title, null],
+    bindings: slots(knobs.map(([key, label]) => num(`macro.${key}`, label, -1, 1, 0.01))),
   };
-  const ids = sharedParamIds();
-  const macros: Page[] = [];
-  for (let i = 0; i < ids.length; i += 8) {
-    const slice = ids.slice(i, i + 8);
-    macros.push({
-      id: `macro-${i / 8}`,
-      title: "MACRO",
-      groups: ["MACRO", null],
-      bindings: slots(slice.map((id) => num(`macro.${id}`, id.toUpperCase(), -1, 1, 0.01))),
-    });
-  }
-  return [settings, ...macros];
+}
+
+export function perfPages(): Page[] {
+  return [
+    macroPage("play", "PLAY", [
+      ["probability", "DENS"],
+      ["repeat", "REP"],
+      ["step", "STEP"],
+      ["velocity", "VEL"],
+      ["length", "LEN"],
+      ["gate", "GATE"],
+      ["rate", "RATE"],
+      ["decay", "DECAY"],
+    ]),
+    macroPage("tone", "TONE", [
+      ["cutoff", "CUT"],
+      ["resonance", "RES"],
+      ["drive", "DRV"],
+      ["noise", "NSE"],
+      ["attack", "ATK"],
+      ["shape", "SHAPE"],
+      ["detune", "DET"],
+      ["tone", "TONE"],
+    ]),
+  ];
 }
 
 export function pagesFor(context: ContextId): Page[] {
   if (context === "mix") return [mixPage()];
   if (context === "global") return globalPages();
+  if (context === "perf") return perfPages();
   return lanePages(context);
 }
 
@@ -224,10 +248,11 @@ export const PAGE_GROUP_COLOR: Record<PageGroup, number> = {
 
 export function pageGroup(context: ContextId, index: number): PageGroup {
   if (context === "mix") return "mix";
-  if (context === "global") return index === 0 ? "global" : "macro";
+  if (context === "global") return "global";
+  if (context === "perf") return "macro";
   if (context === "chords") return index < 3 ? "notes" : "sound";
   if (context === "bass" || context === "lead") {
-    if (index < 2) return "pattern";
+    if (index < 3) return "pattern";
     if (index < 5) return "notes";
     return "sound";
   }

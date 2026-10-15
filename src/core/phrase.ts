@@ -128,10 +128,10 @@ function place(step: number, extraTicks: number, global: GlobalSettings, lane: L
 }
 
 function drumEvents(lane: DrumLane, id: LaneId, global: GlobalSettings, macros: Record<string, number>, steps: number): TimedEvent[] {
-  const hits = generateHits(lane.gen1, lane.gen2, steps, global.seed, id, macro(macros, "velocity"));
+  const hits = generateHits(lane.gen1, lane.gen2, steps, global.seed, id, macro(macros, "velocity"), macro(macros, "probability"));
   const out: TimedEvent[] = [];
   hits.forEach((hit) => {
-    const count = countFromUnit(evalModulated(withMacro(lane.ratchet.count, macro(macros, "count")), hit.step));
+    const count = countFromUnit(evalModulated(withMacro(lane.ratchet.count, macro(macros, "count") + macro(macros, "repeat")), hit.step));
     const rate = rateFromUnit(evalModulated(withMacro(lane.ratchet.rate, macro(macros, "rate")), hit.step));
     for (let i = 0; i < count; i++) {
       const step = hit.step + (i * rate.ticks) / SIXTEENTH_TICKS;
@@ -150,7 +150,7 @@ function pitchedEvents(
   harmony: HarmonicEvent[],
   steps: number,
 ): TimedEvent[] {
-  const hits = generateHits(lane.gen1, lane.gen2, steps, global.seed, id, macro(macros, "velocity"));
+  const hits = generateHits(lane.gen1, lane.gen2, steps, global.seed, id, macro(macros, "velocity"), macro(macros, "probability"));
   const scale = scaleOf(global.scale);
   const rootPc = mod(global.root + global.transpose, 12);
   const octave = id === "bass" ? BASS_OCTAVE : LEAD_OCTAVE;

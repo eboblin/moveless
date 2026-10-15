@@ -42,6 +42,7 @@ export function generateHits(
   seed: number,
   lane: LaneId,
   velocityMacro = 0,
+  probabilityMacro = 0,
 ): Hit[] {
   // Span may exceed a single Euclidean ring — rings tile via step % length so
   // pitched lanes can cover the full chord phrase.
@@ -59,7 +60,7 @@ export function generateHits(
       const pattern = rotatePattern(euclidPattern(h, length), gen.rotate);
       const local = ((step % length) + length) % length;
       if (!pattern[local]) continue;
-      const probability = clamp01(gen.probability);
+      const probability = clamp01(gen.probability + probabilityMacro);
       if (probability <= 0) continue;
       if (probability < 1 && hash01(seed, lane, which, "prob", step) >= probability) continue;
       fired.push(which);

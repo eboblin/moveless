@@ -6,6 +6,7 @@ import type { Binding } from "./pages.ts";
 
 export function readControl(project: Project, context: ContextId, path: string): number {
   if (context === "mix") return project.mixer[path as LaneId | "master"];
+  if (context === "perf") return project.macros[path.startsWith("macro.") ? path.slice(6) : path] ?? 0;
   if (context === "global") {
     if (path.startsWith("macro.")) return project.macros[path.slice(6)] ?? 0;
     if (path === "scale") return SCALE_IDS.indexOf(project.global.scale);
@@ -22,6 +23,7 @@ export function writeControl(project: Project, context: ContextId, binding: Bind
   if (value > binding.max) value = binding.max;
   if (binding.integer) value = Math.round(value);
   if (context === "mix") return setMixer(project, binding.path as LaneId | "master", value);
+  if (context === "perf") return setMacro(project, binding.path.startsWith("macro.") ? binding.path.slice(6) : binding.path, value);
   if (context === "global") {
     if (binding.path.startsWith("macro.")) return setMacro(project, binding.path.slice(6), value);
     if (binding.path === "scale") {

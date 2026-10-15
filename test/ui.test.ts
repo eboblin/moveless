@@ -6,8 +6,8 @@ import { defaultProject } from "../src/core/defaults.ts";
 import { modulated } from "../src/core/modulate.ts";
 import { createSet, launchScene, record } from "../src/core/performance.ts";
 import { generatePhrase } from "../src/core/phrase.ts";
-import { lanePages, pageCount, pageGroupColor } from "../src/ui/pages.ts";
-import { menuLed, padLeds, shadeColor, stepLed, stepLeds, trackLeds } from "../src/ui/leds.ts";
+import { lanePages, pageCount, pageGroup, pageGroupColor, pagesFor } from "../src/ui/pages.ts";
+import { LED, blinkHalfPeriod, ledColorAt, menuLed, padLeds, shadeColor, stepLed, stepLeds, trackLeds } from "../src/ui/leds.ts";
 import { DIGIT_H, displayAmount, plotAmount } from "../src/ui/digits.ts";
 import { DIGIT_Y, FONT_H, HEADER_H, HEIGHT, NAME_Y, PAGER_Y, PARAM_COL_W, PARAM_H, SEP_Y, TITLE_Y, VALUE_Y, VIZ_H, pixel, renderScreen, type Screen } from "../src/ui/screen.ts";
 import { defaultUi, openSetMode } from "../src/ui/state.ts";
@@ -29,9 +29,23 @@ describe("pages and leds", () => {
     assert.equal(lanePages("kick")[1].title, "GEN 2");
     assert.equal(lanePages("kick")[0].bindings[3]?.label, "G1 PRB");
     assert.equal(lanePages("kick")[2].title.includes("COUNT"), true);
-    assert.equal(lanePages("bass")[2].bindings[0]?.label, "DEGREE V");
-    assert.equal(lanePages("bass")[2].bindings[6]?.label, "FOLLOW");
+    assert.equal(lanePages("bass")[2].bindings[0]?.label, "REPEAT V");
+    assert.equal(lanePages("bass")[2].groups[1], "STEP");
+    assert.equal(lanePages("bass")[3].bindings[0]?.label, "DEGREE V");
+    assert.equal(lanePages("bass")[3].bindings[6]?.label, "FOLLOW");
+    assert.equal(pageGroup("bass", 2), "pattern");
+    assert.equal(pageGroupColor("bass", 2), pageGroupColor("bass", 0));
+    assert.equal(pageGroup("bass", 3), "notes");
+    assert.equal(pageGroup("lead", 2), "pattern");
     assert.equal(lanePages("kick")[0].bindings[4]?.label, "G1 VEL V");
+    assert.equal(pageCount("global"), 1);
+    assert.equal(pagesFor("global").some((page) => page.title === "MACRO"), false);
+    assert.equal(pageCount("perf"), 2);
+    assert.equal(pagesFor("perf")[0].bindings[0]?.label, "DENS");
+    assert.equal(pagesFor("perf")[0].bindings[1]?.label, "REP");
+    assert.equal(pagesFor("perf")[1].bindings[0]?.label, "CUT");
+    assert.equal(pageGroup("perf", 0), "macro");
+    assert.equal(pageGroup("perf", 1), "macro");
   });
 
   it("follows the lane lamp rules", () => {
@@ -42,6 +56,9 @@ describe("pages and leds", () => {
     assert.equal(stepLed(project, "bass", "bass").blink, true);
     assert.equal(stepLeds(project, "global")[8].family, "purple");
     assert.equal(stepLeds(project, "global")[8].blink, true);
+    assert.equal(stepLeds(project, "perf")[9].family, "purple");
+    assert.equal(stepLeds(project, "perf")[9].blink, true);
+    assert.equal(stepLeds(project, "global")[9].blink, false);
     project.lock.lead = true;
     assert.equal(stepLed(project, "kick", "lead").family, "lock");
     assert.equal(stepLed(project, "kick", "lead").blink, false);
@@ -77,6 +94,10 @@ describe("pages and leds", () => {
     assert.notEqual(journal[0].color, journal[1].color);
     assert.equal(journal[0].blink, false);
     assert.equal(journal[1].blink, true);
+    assert.equal(journal[1].blinkTo, LED.white);
+    assert.equal(ledColorAt(journal[1], 0, 192), journal[1].color);
+    assert.equal(ledColorAt(journal[1], blinkHalfPeriod(192), 192), LED.white);
+    assert.equal(empty[0].blinkTo, LED.white);
     assert.equal(journal[2].color, 0);
     const targetColor = journal[0].color;
     project = { ...project, transition: "fast" };
@@ -85,6 +106,8 @@ describe("pages and leds", () => {
     assert.equal(start[0].blink, true);
     assert.equal(start[0].color, shadeColor(targetColor, 1 / 6));
     assert.equal(start[1].blink, true);
+    assert.equal(start[1].blinkTo, LED.white);
+    assert.equal(start[0].blinkTo, undefined);
     const halfTick = (project.morph?.originTick ?? 0) + (project.morph?.durationTicks ?? 0) / 2;
     const mid = padLeds(project, "journal", undefined, halfTick);
     assert.equal(mid[0].color, shadeColor(targetColor, 0.5));
@@ -125,6 +148,17 @@ describe("pages and leds", () => {
 });
 
 describe("surface", () => {
+  it("opens perf fx from the purple step after global", () => {
+    let state = session();
+    const before = clone(state.project.working.kick);
+    state = reduce(state, { kind: "note", data1: 25, data2: 127 });
+    assert.equal(state.ui.context, "perf");
+    assert.equal(state.ui.page, 0);
+    state = reduce(state, { kind: "cc", data1: 52, data2: 127 });
+    state = reduce(state, { kind: "cc", data1: 52, data2: 0 });
+    assert.deepEqual(state.project.working.kick, before);
+  });
+
   it("selects a lane on release whether the press was short or long", () => {
     let state = session();
     state = reduce(state, { kind: "note", data1: 20, data2: 127 });

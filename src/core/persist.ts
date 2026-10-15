@@ -37,7 +37,7 @@ export interface HostFiles {
   write_file?: (path: string, content: string) => boolean;
 }
 
-const CONTEXTS: readonly ContextId[] = [...LANES, "mix", "global"];
+const CONTEXTS: readonly ContextId[] = [...LANES, "mix", "global", "perf"];
 const TRANSITIONS: readonly TransitionId[] = ["now", "fast", "medium", "slow"];
 const WANDERS: readonly WanderId[] = ["fast", "medium", "slow", "glacial"];
 

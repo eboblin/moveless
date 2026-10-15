@@ -2,7 +2,7 @@ export const LANES = ["kick", "snare", "hat", "perc", "bass", "lead", "chords"] 
 export type LaneId = (typeof LANES)[number];
 export type DrumId = "kick" | "snare" | "hat" | "perc";
 export type PitchedId = "bass" | "lead";
-export type AuxId = "mix" | "global";
+export type AuxId = "mix" | "global" | "perf";
 export type ContextId = LaneId | AuxId;
 
 export const DRUMS: readonly DrumId[] = ["kick", "snare", "hat", "perc"];
@@ -18,6 +18,7 @@ export const LANE_CODE: Record<LaneId | AuxId, string> = {
   chords: "CHD",
   mix: "MIX",
   global: "GLB",
+  perf: "PFX",
 };
 
 export type ModPatternId = number;

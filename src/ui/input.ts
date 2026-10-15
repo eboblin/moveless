@@ -112,6 +112,7 @@ function onStep(session: Session, index: number, press: boolean): Session {
   if (!press) return session;
   if (index === 7) return { ...session, ui: { ...session.ui, context: "mix", page: 0, heldLane: null } };
   if (index === 8) return { ...session, ui: { ...session.ui, context: "global", page: 0, heldLane: null } };
+  if (index === 9) return { ...session, ui: { ...session.ui, context: "perf", page: 0, heldLane: null } };
   return session;
 }
 
@@ -185,7 +186,7 @@ function onCapturePad(session: Session, row: number, col: number, top: boolean, 
   if (!top && !second) return session;
   const page = top ? col : 8 + col;
   const lane = session.ui.heldLane ?? session.ui.context;
-  if (lane === "mix" || lane === "global") return session;
+  if (lane === "mix" || lane === "global" || lane === "perf") return session;
   const pages = pagesFor(lane);
   if (page >= pages.length) return session;
   const paths = pages[page].bindings.filter((binding): binding is NonNullable<typeof binding> => !!binding).map((binding) => binding.path);
@@ -263,7 +264,7 @@ function captureFromEncoder(session: Session, path: string, held: boolean): Sess
   const target = generatorTarget(path);
   if (!target) return null;
   const lane = session.ui.heldLane ?? session.ui.context;
-  if (lane === "mix" || lane === "global") return null;
+  if (lane === "mix" || lane === "global" || lane === "perf") return null;
   const focusBinding = pagesFor(session.ui.context)
     .flatMap((page) => page.bindings)
     .find((item) => item?.path === path) ?? { path, label: target };
@@ -317,7 +318,7 @@ function onCapture(session: Session, press: boolean): Session {
   const already = session.ui.captureGenerator || session.ui.captureAction;
   let project = session.project;
   // Encoder or page pad already acted; release only group-rerolls when neither did.
-  if (lane !== "mix" && lane !== "global" && !already) {
+  if (lane !== "mix" && lane !== "global" && lane !== "perf" && !already) {
     if (session.ui.shiftHeld) project = captureLane(project, lane, "all");
     else {
       const scope = pageGroup(lane, page);

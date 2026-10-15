@@ -18,6 +18,8 @@ export const LED = {
   yellow: 8,
   purple: 22,
   lock: 125,
+  /** Move RGB palette. Same index Push calls WHITE_MIDI_VALUE. */
+  white: 122,
   /** Unsaved working state when journal/set has no scenes yet. */
   working: 8,
 } as const;
@@ -35,6 +37,8 @@ export interface Led {
   family: LedFamily;
   color: number;
   blink: boolean;
+  /** Second phase of a blink. Omitted means off. */
+  blinkTo?: number;
 }
 
 const COLOR: Record<LedFamily, number> = {
@@ -70,6 +74,7 @@ export function stepLeds(project: Project, context: ContextId): Led[] {
   const out = lanes.map((lane) => stepLed(project, context, lane));
   out.push(auxLed(context === "mix"));
   out.push(auxLed(context === "global"));
+  out.push(auxLed(context === "perf"));
   while (out.length < 16) out.push(led("off", false));
   return out;
 }
@@ -147,7 +152,7 @@ export function shadeColor(color: number, amount: number): number {
 function scenePadLeds(project: Project, mode: "journal" | "set", tick: number): Led[] {
   const ids = mode === "set" ? setPadIds(project) : journalPadIds(project);
   if (ids.every((id) => id === null)) {
-    return ids.map((_, index) => (index === 0 ? { family: "yellow", color: LED.working, blink: true } : led("off", false)));
+    return ids.map((_, index) => (index === 0 ? currentSceneLed(LED.working) : led("off", false)));
   }
   const morph = project.morph;
   const targetId = morph?.targetId ?? null;
@@ -162,7 +167,7 @@ function scenePadLeds(project: Project, mode: "journal" | "set", tick: number): 
     if (targetId && id === targetId) {
       return { family: "yellow", color: shadeColor(color, targetAmount), blink: true };
     }
-    if (id === activeId) return { family: "yellow", color, blink: true };
+    if (id === activeId) return currentSceneLed(color);
     return { family: "yellow", color, blink: false };
   });
 }
@@ -189,6 +194,11 @@ function pageOverlay(base: Led[], context: ContextId, page: number): Led[] {
   return out;
 }
 
+/** The playing scene blinks between its colour and white. */
+function currentSceneLed(color: number): Led {
+  return { family: "yellow", color, blink: true, blinkTo: LED.white };
+}
+
 function pageLed(context: ContextId, index: number, current: boolean): Led {
   return { family: "yellow", color: pageGroupColor(context, index), blink: current };
 }
@@ -207,7 +217,7 @@ export function blinkHalfPeriod(ppqn: number): number {
 export function ledColorAt(led: Led, tick: number, ppqn: number): number {
   if (!led.blink) return led.color;
   const on = Math.floor(tick / blinkHalfPeriod(ppqn)) % 2 === 0;
-  return on ? led.color : 0;
+  return on ? led.color : (led.blinkTo ?? LED.off);
 }
 
 function led(family: LedFamily, blink: boolean): Led {

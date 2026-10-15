@@ -457,6 +457,30 @@ describe("morph, journal, macros", () => {
     );
     assertPeakHeld(bassDegree, "bass");
   });
+
+  it("pulls repeats and density across lanes without rewriting them", () => {
+    const project = defaultProject();
+    project.working.bass.repeat = modulated(0.5);
+    project.working.kick.ratchet.count = modulated(0.5);
+    const open = generatePhrase(project);
+    const pulled = { ...project, macros: { repeat: -1 } };
+    const fewer = generatePhrase(pulled);
+    assert.ok(fewer.lanes.bass.length < open.lanes.bass.length);
+    assert.ok(fewer.lanes.kick.length < open.lanes.kick.length);
+    assert.equal(pulled.working.bass.repeat.value, 0.5);
+    assert.equal(pulled.working.kick.ratchet.count.value, 0.5);
+    const locked = { ...pulled, lock: { ...pulled.lock, bass: true } };
+    const held = generatePhrase(locked);
+    assert.equal(held.lanes.bass.length, open.lanes.bass.length);
+    assert.ok(held.lanes.kick.length < open.lanes.kick.length);
+
+    const dense = defaultProject();
+    const kickHits = generatePhrase(dense).lanes.kick.length;
+    assert.ok(kickHits > 0);
+    dense.macros = { probability: -1 };
+    assert.equal(generatePhrase(dense).lanes.kick.length, 0);
+    assert.equal(dense.working.kick.gen1.probability, 1);
+  });
 });
 
 function morphPair(setupA: (project: Project) => void, setupB: (project: Project) => void): Project {

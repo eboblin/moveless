@@ -7,7 +7,6 @@ import {
   CAPTURE_INTENSITIES,
   LANES,
   SET_CAPACITY,
-  SOUND,
   WANDER_BARS,
   type CaptureIntensity,
   type EuclidGen,
@@ -218,17 +217,6 @@ function clampMixer(value: number): number {
   if (value < 0) return 0;
   if (value > 1) return 1;
   return value;
-}
-
-export function sharedParamIds(): string[] {
-  const counts = new Map<string, number>();
-  const bump = (id: string) => counts.set(id, (counts.get(id) ?? 0) + 1);
-  for (const lane of LANES) for (const id of SOUND[lane]) bump(id);
-  for (const id of ["degree", "range", "length", "velocity", "repeat", "step"]) {
-    bump(id);
-    bump(id);
-  }
-  return [...counts.entries()].filter(([, count]) => count >= 2).map(([id]) => id).sort();
 }
 
 export type CaptureScope = "pattern" | "notes" | "sound" | "all";
@@ -507,7 +495,10 @@ function randomizePattern(
   target.gen1 = touchEuclid(target.gen1, roll, "gen1", intensity);
   target.gen2 = touchEuclid(target.gen2, roll, "gen2", intensity);
   if (lane === "bass" || lane === "lead") {
-    if (intensity !== "clear") lanes[lane].follow = roll("follow");
+    const pitched = lanes[lane];
+    pitched.repeat = touchModulated(pitched.repeat, roll, "repeat", intensity);
+    pitched.step = touchModulated(pitched.step, roll, "step", intensity);
+    if (intensity !== "clear") pitched.follow = roll("follow");
     return;
   }
   const drum = lanes[lane];
@@ -526,8 +517,6 @@ function randomizeNotes(
     pitched.degree = touchModulated(pitched.degree, roll, "degree", intensity);
     pitched.range = touchModulated(pitched.range, roll, "range", intensity);
     pitched.length = touchModulated(pitched.length, roll, "length", intensity);
-    pitched.repeat = touchModulated(pitched.repeat, roll, "repeat", intensity);
-    pitched.step = touchModulated(pitched.step, roll, "step", intensity);
     if (intensity !== "clear") pitched.follow = roll("follow");
     return;
   }
