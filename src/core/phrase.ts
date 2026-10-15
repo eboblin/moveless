@@ -8,7 +8,9 @@ import {
   swungStepTick,
   tickToSample,
 } from "./clock.ts";
+import { blendPhrases } from "./blend.ts";
 import { generateHits, phraseStepsOf, type Hit } from "./events.ts";
+import { morphEndpoints } from "./morph.ts";
 import { applyFollowMidi, chordTonePitchClasses, degreeToMidi, generateHarmony, harmonyAt, scaleOf } from "./harmony.ts";
 import { hash01 } from "./hash.ts";
 import { bipolarFromUnit, evalModulated, withMacro } from "./modulate.ts";
@@ -31,12 +33,32 @@ import {
   type TimedEvent,
 } from "./types.ts";
 
+let endCache: { key: string; fromPhrase: Phrase; toPhrase: Phrase; from: Lanes; to: Lanes } | null = null;
+
 const BASS_OCTAVE = 2;
 const LEAD_OCTAVE = 4;
 const CHORD_OCTAVE = 4;
 
 export function generatePhrase(project: Project): Phrase {
-  const { global, working, macros, lock } = project;
+  const morph = project.morph;
+  const target = morph ? project.journal.find((scene) => scene.id === morph.targetId) : undefined;
+  if (!morph || !target) return phraseOf(project, project.working);
+  const ends = morphEndpoints(project, target.lanes);
+  const key = JSON.stringify([ends.from, ends.to, project.macros, project.global]);
+  if (!endCache || endCache.key !== key) {
+    endCache = {
+      key,
+      from: ends.from,
+      to: ends.to,
+      fromPhrase: phraseOf(project, ends.from),
+      toPhrase: phraseOf(project, ends.to),
+    };
+  }
+  return blendPhrases(endCache.fromPhrase, endCache.toPhrase, endCache.from, endCache.to, project, morph.t);
+}
+
+function phraseOf(project: Project, working: Lanes): Phrase {
+  const { global, macros, lock } = project;
   const bassSteps = laneSteps(working, "bass", global);
   const leadSteps = laneSteps(working, "lead", global);
   const chordSteps = sixteenthSteps(global.phrase, global.bar);

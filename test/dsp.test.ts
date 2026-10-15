@@ -2,6 +2,10 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { SIXTEENTH_TICKS, tickToSample } from "../src/core/clock.ts";
 import { defaultProject } from "../src/core/defaults.ts";
+import { evalModulated } from "../src/core/modulate.ts";
+import { applyMorph } from "../src/core/morph.ts";
+import { clone } from "../src/core/clone.ts";
+import { launchScene, record } from "../src/core/performance.ts";
 import { mapKick, mapSound } from "../src/dsp/map.ts";
 import { eventsInBlock, phraseLoop, soundMotions } from "../src/dsp/schedule.ts";
 import { createEngine, loadPhrase, packBlock, packPhrase, renderBlock, renderClock } from "../src/dsp/voice.ts";
@@ -172,6 +176,73 @@ describe("dsp adapter", () => {
     }
     assert.ok(peak > 0.01);
     assert.ok(engine.notes.some((note) => note.on || note.age > 100));
+  });
+
+  it("blends live cutoff between two motifs", () => {
+    const tempo = 120;
+    const sixteenth = tickToSample(SIXTEENTH_TICKS, tempo);
+    const loop = sixteenth * 8;
+    const from = { value: 0.2, pattern: 0, cycle: 8, amount: 1 };
+    const to = { value: 0.8, pattern: 4, cycle: 4, amount: 1 };
+    const engine = createEngine();
+    loadPhrase(engine, [{
+      sample: 0,
+      loop,
+      lane: "bass",
+      note: 40,
+      velocity: 100,
+      lengthTicks: 16 * 48,
+      params: mapSound("bass", { shape: 0.2, detune: 0.5, fm: 0, noise: 0, cutoff: 0, resonance: 0, attack: 0, decay: 0.8 }),
+    }], tempo, true, [{
+      lane: "bass",
+      id: "cutoff",
+      value: from.value,
+      pattern: from.pattern,
+      cycle: from.cycle,
+      amount: from.amount,
+      loop,
+      blend: { ...to, t: 0.5 },
+    }]);
+    renderClock(engine);
+    const step = 120 / sixteenth;
+    const mixed = 0.5 * evalModulated(from, step) + 0.5 * evalModulated(to, step);
+    assert.ok(Math.abs(engine.notes[0].cutoff - mixed) < 1e-6);
+    assert.ok(Math.abs(engine.notes[0].cutoff - evalModulated(from, step)) > 1e-3);
+  });
+
+  it("lerps a still cutoff and packs the live pair", () => {
+    let project = defaultProject();
+    project.working.bass.sound.cutoff.value = 0;
+    project.working.bass.sound.cutoff.amount = 0;
+    project = record(project);
+    project.working.bass.sound.cutoff.value = 1;
+    project = record(project);
+    project.working = clone(project.journal[0].lanes);
+    project.transition = "fast";
+    project = launchScene(project, "002", 0);
+    const still = soundMotions(applyMorph(project, (project.morph?.durationTicks ?? 0) / 2)).find((motion) => motion.lane === "bass" && motion.id === "cutoff");
+    assert.ok(still);
+    assert.equal(still.blend, undefined);
+    assert.equal(still.amount, 0);
+    assert.ok(Math.abs(still.value - 0.5) < 1e-9);
+
+    project = defaultProject();
+    project.working.bass.sound.cutoff.value = 0.25;
+    project.working.bass.sound.cutoff.amount = 0;
+    project = record(project);
+    project.working.bass.sound.cutoff.amount = 1;
+    project.working.bass.sound.cutoff.pattern = 4;
+    project.working.bass.sound.cutoff.cycle = 4;
+    project.working.bass.sound.cutoff.value = 0.9;
+    project = record(project);
+    project.working = clone(project.journal[0].lanes);
+    project.transition = "fast";
+    project = launchScene(project, "002", 0);
+    const live = soundMotions(applyMorph(project, (project.morph?.durationTicks ?? 0) / 2)).find((motion) => motion.lane === "bass" && motion.id === "cutoff");
+    assert.ok(live?.blend);
+    assert.equal(live.blend.t, 0.5);
+    assert.equal(live.blend.pattern, 4);
+    assert.match(packPhrase([], 120, false, [live]), /:0\.9000:4:4:1\.0000:0\.5000/);
   });
 
   it("moves cutoff across a held note", () => {

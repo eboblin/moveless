@@ -116,6 +116,7 @@ function walk(root: unknown, path: string): { parent: Record<string, number>; ke
 }
 
 export function morphValue(kind: MorphKind, from: number, to: number, t: number): number {
-  if (kind === "switch") return t >= 0.5 ? to : from;
+  // Discrete fields stay put until the morph lands. The heard phrase blends the whole way.
+  if (kind === "switch") return t >= 1 ? to : from;
   return from + (to - from) * t;
 }

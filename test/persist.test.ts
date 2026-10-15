@@ -54,6 +54,7 @@ describe("project persist", () => {
       originTick: 100,
       durationTicks: 200,
       punched: [],
+      t: 0,
     };
     project.wander = "fast";
     project.wanderOriginTick = 999;

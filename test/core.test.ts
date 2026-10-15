@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { clone } from "../src/core/clone.ts";
-import { sampleOffset, unitForIndex } from "../src/core/clock.ts";
+import { sampleOffset, SIXTEENTH_TICKS, unitForIndex } from "../src/core/clock.ts";
 import { defaultProject } from "../src/core/defaults.ts";
 import { euclidPattern, phraseStepsOf } from "../src/core/events.ts";
 import { applyMorph } from "../src/core/morph.ts";
@@ -183,7 +183,7 @@ describe("euclid generator", () => {
 });
 
 describe("morph, journal, macros", () => {
-  it("lerps velocity and switches pattern ids at one half", () => {
+  it("lerps velocity and keeps pattern ids until the morph lands", () => {
     let project = defaultProject();
     project = punch(project, "kick.gen1.velocity.value", 0);
     project = punch(project, "kick.ratchet.count.pattern", 2);
@@ -200,11 +200,14 @@ describe("morph, journal, macros", () => {
     assert.ok(Math.abs(mid.working.kick.gen1.velocity.value - 376 / duration) < 1e-9);
     assert.equal(mid.working.kick.ratchet.count.pattern, 2);
     const half = applyMorph(project, duration / 2);
-    assert.equal(half.working.kick.ratchet.count.pattern, 10);
+    assert.equal(half.working.kick.ratchet.count.pattern, 2);
+    const heard = generatePhrase(half).lanes.kick;
+    assert.ok(heard.length > 0);
     const done = applyMorph(project, 4 * 192);
     assert.equal(done.morph, null);
     assert.equal(done.activeSceneId, "002");
     assert.equal(done.working.kick.gen1.velocity.value, 1);
+    assert.equal(done.working.kick.ratchet.count.pattern, 10);
   });
 
   it("advance lands a saved scene once the clock reaches it", () => {
@@ -297,7 +300,206 @@ describe("morph, journal, macros", () => {
     project = applyMorph(project, 10);
     assert.equal(project.mixer.master, 0.2);
   });
+
+  it("blends kick hits across the morph and lands on the target phrase", () => {
+    let project = defaultProject();
+    project.working.kick.gen1.hits = 4;
+    project.working.kick.gen1.rotate = 0;
+    project.working.kick.sound.decay.value = 0;
+    project.working.kick.sound.decay.amount = 0;
+    project.working.chords.start = 0;
+    project = record(project);
+    project.working.kick.gen1.hits = 7;
+    project.working.kick.gen1.rotate = 3;
+    project.working.kick.sound.decay.value = 1;
+    project.working.kick.sound.decay.amount = 0;
+    project.working.chords.start = 3;
+    project = record(project);
+    project.working = clone(project.journal[0].lanes);
+    project.transition = "fast";
+    project = launchScene(project, "002", 0);
+    const duration = project.morph?.durationTicks ?? 0;
+    const start = generatePhrase({ ...project, morph: null, working: project.morph!.start });
+    const goal = generatePhrase({ ...project, morph: null, working: project.journal[1].lanes });
+    const at0 = generatePhrase(project);
+    assert.deepEqual(kickSig(at0), kickSig(start));
+    assert.deepEqual(at0.harmony.map((event) => event.root), start.harmony.map((event) => event.root));
+
+    const ticks = (phrase: ReturnType<typeof generatePhrase>) => new Set(phrase.lanes.kick.map((event) => event.tick));
+    const setA = ticks(start);
+    const setB = ticks(goal);
+    const onlyA = [...setA].filter((tick) => !setB.has(tick));
+    const onlyB = [...setB].filter((tick) => !setA.has(tick));
+    const shared = [...setA].filter((tick) => setB.has(tick));
+    assert.ok(onlyA.length > 0);
+    assert.ok(onlyB.length > 0);
+    assert.ok(shared.length > 0);
+
+    const sounding = (tick: number) => ticks(generatePhrase(applyMorph(project, tick)));
+    const countOnly = (have: Set<number>, marks: number[]) => marks.filter((tick) => have.has(tick)).length;
+    const early = sounding(duration * 0.2);
+    const late = sounding(duration * 0.85);
+    assert.ok(countOnly(early, onlyA) > countOnly(late, onlyA));
+    assert.ok(countOnly(early, onlyB) < countOnly(late, onlyB));
+    assert.ok(shared.every((tick) => early.has(tick) && late.has(tick)));
+
+    const left = sounding(duration * 0.49);
+    const right = sounding(duration * 0.51);
+    let diff = 0;
+    for (const tick of left) if (!right.has(tick)) diff += 1;
+    for (const tick of right) if (!left.has(tick)) diff += 1;
+    assert.ok(diff < setA.size);
+    assert.ok([...left].some((tick) => setA.has(tick)));
+
+    const mid = applyMorph(project, duration / 2);
+    const changed = generatePhrase(mid).harmony.filter((event, index) => event.root !== start.harmony[index].root).length;
+    assert.ok(changed > 0 && changed < start.harmony.length);
+
+    const oneSided = generatePhrase(mid).lanes.kick.find((event) => onlyA.includes(event.tick) || onlyB.includes(event.tick));
+    assert.ok(oneSided);
+    assert.ok(Math.abs(oneSided.sound.decay - 0.5) < 1e-6);
+    assert.notEqual(oneSided.sound.decay, onlyA.includes(oneSided.tick) ? 0 : 1);
+
+    const done = applyMorph(project, duration);
+    assert.equal(done.morph, null);
+    assert.deepEqual(kickSig(generatePhrase(done)), kickSig(goal));
+  });
+
+  it("keeps the drum loop length steady and mixes a one-sided hit's sound", () => {
+    let project = defaultProject();
+    project.working.kick.gen1.length = 16;
+    project.working.kick.gen1.hits = 1;
+    project.working.kick.gen1.rotate = 0;
+    project.working.kick.gen2.length = 0;
+    project.working.kick.sound.decay.value = 0;
+    project.working.kick.sound.decay.amount = 0;
+    project = record(project);
+    project.working.kick.gen1.length = 12;
+    project.working.kick.gen1.hits = 1;
+    project.working.kick.gen1.rotate = 4;
+    project.working.kick.gen2.length = 0;
+    project.working.kick.sound.decay.value = 1;
+    project = record(project);
+    project.working = clone(project.journal[0].lanes);
+    project.transition = "medium";
+    project = launchScene(project, "002", 0);
+    const duration = project.morph?.durationTicks ?? 0;
+    const early = generatePhrase(applyMorph(project, duration * 0.2));
+    const late = generatePhrase(applyMorph(project, duration * 0.8));
+    assert.equal(early.steps.kick, late.steps.kick);
+    assert.ok(early.steps.kick > 16);
+    const hit = early.lanes.kick.find((event) => event.tick === 0);
+    assert.ok(hit);
+    assert.ok(Math.abs(hit.sound.decay - 0.2) < 1e-6);
+  });
+
+  it("does not morph a locked lane or a punched sound", () => {
+    let project = defaultProject();
+    project.working.kick.gen1.hits = 1;
+    project.working.kick.gen1.rotate = 0;
+    project.working.kick.sound.decay.value = 0;
+    project.working.kick.sound.decay.amount = 0;
+    project = record(project);
+    project.working.kick.gen1.rotate = 8;
+    project.working.kick.sound.decay.value = 1;
+    project = record(project);
+    project.working = clone(project.journal[0].lanes);
+    project.lock.kick = true;
+    project.transition = "fast";
+    project = launchScene(project, "002", 0);
+    const duration = project.morph?.durationTicks ?? 0;
+    const locked = generatePhrase(applyMorph(project, duration / 2));
+    assert.ok(locked.lanes.kick.some((event) => event.tick === 0));
+    assert.ok(locked.lanes.kick.every((event) => event.tick % (16 * 48) === 0));
+    assert.ok(locked.lanes.kick.every((event) => Math.abs(event.sound.decay) < 1e-6));
+
+    project.lock.kick = false;
+    project = launchScene(project, "002", 0);
+    project = applyMorph(project, duration * 0.1);
+    project = punch(project, "kick.sound.decay.value", 0.2);
+    const punched = generatePhrase(applyMorph(project, duration / 2));
+    assert.ok(punched.lanes.kick.length > 0);
+    assert.ok(punched.lanes.kick.every((event) => Math.abs(event.sound.decay - 0.2) < 1e-6));
+  });
+
+  it("keeps chord and bass peaks within the louder endpoint", () => {
+    const blockToBlock = morphPair(
+      (project) => {
+        project.working.chords.start = 0;
+        project.working.chords.rate.value = 0;
+      },
+      (project) => {
+        project.working.chords.start = 4;
+        project.working.chords.mood = 1;
+        project.working.chords.rate.value = 0;
+      },
+    );
+    assertPeakHeld(blockToBlock, "chords");
+
+    const blockToArp = morphPair(
+      (project) => {
+        project.working.chords.rate.value = 0;
+      },
+      (project) => {
+        project.working.chords.start = 2;
+        project.working.chords.rate.value = 0.45;
+        project.working.chords.direction = 1;
+      },
+    );
+    assertPeakHeld(blockToArp, "chords");
+
+    const bassDegree = morphPair(
+      () => {},
+      (project) => {
+        project.working.bass.degree.value = 0.85;
+        project.working.bass.gen1.hits = 5;
+      },
+    );
+    assertPeakHeld(bassDegree, "bass");
+  });
 });
+
+function morphPair(setupA: (project: Project) => void, setupB: (project: Project) => void): Project {
+  let project = defaultProject();
+  setupA(project);
+  project = record(project);
+  setupB(project);
+  project = record(project);
+  project.working = clone(project.journal[0].lanes);
+  project.transition = "fast";
+  return launchScene(project, "002", 0);
+}
+
+function assertPeakHeld(project: Project, lane: "chords" | "bass"): void {
+  const duration = project.morph?.durationTicks ?? 0;
+  const start = peakOverlap(generatePhrase(project), lane);
+  const goal = peakOverlap(generatePhrase(applyMorph(project, duration)), lane);
+  const cap = Math.max(start, goal);
+  for (let i = 1; i < 20; i++) {
+    const peak = peakOverlap(generatePhrase(applyMorph(project, (i / 20) * duration)), lane);
+    assert.ok(peak <= cap + 1e-6, `${lane} peak ${peak} above ${cap}`);
+  }
+}
+
+function peakOverlap(phrase: ReturnType<typeof generatePhrase>, lane: "chords" | "bass"): number {
+  const events = phrase.lanes[lane];
+  const span = Math.max(1, phrase.steps[lane]) * SIXTEENTH_TICKS;
+  let peak = 0;
+  for (let tick = 0; tick < span; tick += SIXTEENTH_TICKS / 2) {
+    let acc = 0;
+    for (const event of events) {
+      const start = ((event.tick % span) + span) % span;
+      const length = Math.max(0, Math.min(event.lengthTicks, span - start));
+      if (tick >= start && tick < start + length) acc += event.velocity;
+    }
+    if (acc > peak) peak = acc;
+  }
+  return peak;
+}
+
+function kickSig(phrase: ReturnType<typeof generatePhrase>): Array<[number, number, number]> {
+  return phrase.lanes.kick.map((event) => [event.tick, event.note, event.velocity]);
+}
 
 describe("harmony", () => {
   it("publishes chord context that bass can follow, including when chords are muted", () => {

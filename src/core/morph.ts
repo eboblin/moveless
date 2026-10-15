@@ -1,8 +1,7 @@
 import { ticksPerBar } from "./clock.ts";
 import { clone } from "./clone.ts";
 import { fieldsOf, getPath, morphValue, setPath } from "./fields.ts";
-import type { LaneId, Lanes, MorphState, Project, Scene, TransitionId } from "./types.ts";
-import { TRANSITION_BARS } from "./types.ts";
+import { LANES, TRANSITION_BARS, type LaneId, type Lanes, type MorphState, type Project, type Scene, type TransitionId } from "./types.ts";
 
 export function quantizeStart(tick: number, transition: TransitionId, beatsPerBar: number): number {
   const grid = transition === "now" ? ticksPerBar(1) / 4 : ticksPerBar(beatsPerBar);
@@ -44,7 +43,7 @@ export function applyMorph(project: Project, tick: number): Project {
   const t = morphProgress(project.morph, tick);
   const working = mergeLanes(project.morph.start, target.lanes, project.working, t, new Set(project.morph.punched), project.lock);
   const done = tick >= project.morph.originTick && t >= 1;
-  if (!done) return { ...project, working };
+  if (!done) return { ...project, working, morph: { ...project.morph, t } };
   return { ...project, working, morph: null, activeSceneId: target.id, wanderPreviousTarget: target.id };
 }
 
@@ -60,8 +59,38 @@ export function retarget(project: Project, scene: Scene, tick: number): Project 
       originTick: origin,
       durationTicks,
       punched: [],
+      t: 0,
     },
   };
+}
+
+/** Start and target lanes with lock and punch already written into both. */
+export function morphEndpoints(project: Project, target: Lanes): { from: Lanes; to: Lanes } {
+  const punched = new Set(project.morph?.punched ?? []);
+  const start = project.morph?.start ?? project.working;
+  return {
+    from: pinLanes(start, project.working, punched, project.lock),
+    to: pinLanes(target, project.working, punched, project.lock),
+  };
+}
+
+function pinLanes(base: Lanes, current: Lanes, punched: ReadonlySet<string>, lock: Project["lock"]): Lanes {
+  const next = clone(base);
+  for (const lane of LANES) {
+    if (lock[lane]) copyLane(next, current, lane);
+  }
+  for (const path of punched) {
+    const lane = path.split(".")[0] as LaneId;
+    if (lock[lane]) continue;
+    setPath(next, path, getPath(current, path));
+  }
+  return next;
+}
+
+function copyLane(into: Lanes, from: Lanes, lane: LaneId): void {
+  if (lane === "kick" || lane === "snare" || lane === "hat" || lane === "perc") into[lane] = clone(from[lane]);
+  else if (lane === "bass" || lane === "lead") into[lane] = clone(from[lane]);
+  else into.chords = clone(from.chords);
 }
 
 export function punch(project: Project, path: string, value: number): Project {

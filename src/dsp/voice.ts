@@ -110,6 +110,7 @@ interface LaneMotion {
   value: number;
   cycle: number;
   amount: number;
+  blend: { value: number; pattern: number; cycle: number; amount: number; t: number } | null;
 }
 
 interface LaneBox {
@@ -191,7 +192,10 @@ export function packPhraseBody(events: LoopEvent[], motions: Motion[] = []): str
   if (!motions.length) return body;
   const tail = motions.map((motion) => {
     const lane = LANES.indexOf(motion.lane);
-    return `${lane}:${motion.id}:${motion.value.toFixed(4)}:${Math.round(motion.pattern)}:${Math.round(motion.cycle)}:${motion.amount.toFixed(4)}:${motion.loop}`;
+    const head = `${lane}:${motion.id}:${motion.value.toFixed(4)}:${Math.round(motion.pattern)}:${Math.round(motion.cycle)}:${motion.amount.toFixed(4)}:${motion.loop}`;
+    if (!motion.blend) return head;
+    const blend = motion.blend;
+    return `${head}:${blend.value.toFixed(4)}:${Math.round(blend.pattern)}:${Math.round(blend.cycle)}:${blend.amount.toFixed(4)}:${blend.t.toFixed(4)}`;
   }).join(";");
   return `${body}#${tail}`;
 }
@@ -439,12 +443,7 @@ function follow(engine: Engine): void {
     const loop = laneLoop(engine, lane);
     if (loop < 1) continue;
     const step = (pos % loop) / span;
-    const units = box.live.map((motion) => evalModulated({
-      value: motion.value,
-      pattern: motion.pattern,
-      cycle: motion.cycle,
-      amount: motion.amount,
-    }, step));
+    const units = box.live.map((motion) => evalMotion(motion, step));
     if (lane < DRUM_COUNT) {
       const drum = engine.drums[lane];
       for (let m = 0; m < box.live.length; m++) applyDrum(drum, box.live[m].param, units[m]);
@@ -520,6 +519,19 @@ function refreshRelease(note: NoteVoice): void {
   note.releaseK = Math.exp(-1 / ((0.04 + note.release * 1.6) * SAMPLE_RATE));
 }
 
+function evalMotion(motion: LaneMotion, step: number): number {
+  const a = evalModulated({
+    value: motion.value,
+    pattern: motion.pattern,
+    cycle: motion.cycle,
+    amount: motion.amount,
+  }, step);
+  if (!motion.blend) return a;
+  const b = evalModulated(motion.blend, step);
+  const t = Math.max(0, Math.min(1, motion.blend.t));
+  return Math.max(0, Math.min(1, (1 - t) * a + t * b));
+}
+
 function bucketMotions(engine: Engine, motions: Motion[]): void {
   engine.lanes = emptyLanes();
   for (const motion of motions) {
@@ -527,7 +539,9 @@ function bucketMotions(engine: Engine, motions: Motion[]): void {
     const param = paramOf(motion.id);
     if (lane < 0 || lane >= LANE_COUNT || param === P_NONE || param === P_FREQ) continue;
     const box = engine.lanes[lane];
-    const list = motion.amount === 0 ? box.still : box.live;
+    const blend = motion.blend ?? null;
+    const live = motion.amount !== 0 || (blend !== null && blend.amount !== 0);
+    const list = live ? box.live : box.still;
     if (list.length >= LANE_MOTION_CAP) continue;
     list.push({
       param,
@@ -535,6 +549,7 @@ function bucketMotions(engine: Engine, motions: Motion[]): void {
       value: motion.value,
       cycle: motion.cycle,
       amount: motion.amount,
+      blend: live ? blend : null,
     });
   }
 }
