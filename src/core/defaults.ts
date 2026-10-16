@@ -116,8 +116,8 @@ const SOUND_VALUE: Record<LaneId, Record<string, number>> = {
     width: 0.5,
     cutoff: 0.5,
     resonance: 0.5,
-    attack: 0.5,
-    release: 0.5,
+    attack: 0,
+    release: 0,
   },
 };
 
@@ -169,10 +169,8 @@ function chords(): ChordLane {
     mood: 0,
     tension: 0.15,
     way: 3,
-    spread: 0.25,
-    flow: 0.5,
-    octaves: 1,
-    direction: 0,
+    tone: home("chords.tone", 0),
+    octave: home("chords.octave", unitForOctave(4)),
     rate: home("chords.rate", 0),
     gate: home("chords.gate", 0.7),
     sound: sound("chords"),

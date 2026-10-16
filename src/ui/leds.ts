@@ -4,6 +4,7 @@ import {
   CAPTURE_DEPTHS,
   CAPTURE_INTENSITIES,
   CAPTURE_SCOPES,
+  isDrum,
   LANE_CODE,
   type ContextId,
   type LaneId,
@@ -47,7 +48,7 @@ const COLOR: Record<LedFamily, number> = {
 };
 
 export function laneFamily(lane: LaneId): "red" | "yellow" {
-  return lane === "kick" || lane === "snare" || lane === "hat" || lane === "perc" ? "red" : "yellow";
+  return isDrum(lane) ? "red" : "yellow";
 }
 
 export function stepLed(project: Project, context: ContextId, lane: LaneId): Led {

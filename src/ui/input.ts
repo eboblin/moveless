@@ -21,7 +21,7 @@ import {
   toggleLock,
   toggleMute,
 } from "../core/performance.ts";
-import { CAPTURE_DEPTHS, CAPTURE_INTENSITIES, CAPTURE_SCOPES, type LaneId, type Project, type TransitionId, type WanderId } from "../core/types.ts";
+import { CAPTURE_DEPTHS, CAPTURE_INTENSITIES, CAPTURE_SCOPES, LANES, type LaneId, type Project, type TransitionId, type WanderId } from "../core/types.ts";
 import { resetControl, writeControl } from "./controls.ts";
 import { pageCount, pageGroup, pagesFor } from "./pages.ts";
 import { applyBookmark, focusHoldTicks, HOLD_MS, HOLD_TICKS, type Notice, type UiState } from "./state.ts";
@@ -42,7 +42,6 @@ export interface Session {
 const LOOP = 58;
 const MENU = 50;
 const SHIFT = 49;
-const LANES: LaneId[] = ["kick", "snare", "hat", "perc", "bass", "lead", "chords"];
 const TRANSITIONS: TransitionId[] = ["now", "fast", "medium", "slow"];
 const WANDERS: WanderId[] = ["fast", "medium", "slow", "glacial"];
 

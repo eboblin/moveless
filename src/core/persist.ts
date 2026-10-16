@@ -179,7 +179,7 @@ function hasValue(value: unknown): boolean {
 /** Current lane shape only. Anything older is unreadable and stays at the factory lane. */
 function laneCurrent(id: (typeof LANES)[number], raw: unknown): boolean {
   if (!isRecord(raw)) return false;
-  if (id === "chords") return typeof raw.start === "number" && hasValue(raw.rate);
+  if (id === "chords") return typeof raw.start === "number" && hasValue(raw.tone) && hasValue(raw.octave) && hasValue(raw.rate);
   if (id === "bass" || id === "lead") return hasValue(raw.pitch) && hasValue(raw.octave);
   return isRecord(raw.gen1) && typeof raw.gen1.hits === "number" && isRecord(raw.ratchet) && hasValue(raw.ratchet.count);
 }

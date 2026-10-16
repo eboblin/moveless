@@ -1,8 +1,8 @@
 import { SIXTEENTH_TICKS } from "../core/clock.ts";
 import { chordSymbol, degreeNumeral, pitchClassName, scaleShort, scaleTitle } from "../core/harmony.ts";
-import { chordFigure, directionLabel, generatePhrase, laneSteps, restingOctave, restingPitchLabel } from "../core/phrase.ts";
+import { chordFigure, generatePhrase, laneSteps, restingChordToneLabel, restingOctave, restingPitchLabel } from "../core/phrase.ts";
 import { evalModulated } from "../core/modulate.ts";
-import { LANE_CODE, type CaptureDepth, type CaptureIntensity, type CaptureScope, type ContextId, type HarmonicEvent, type LaneId, type Project, type TimedEvent } from "../core/types.ts";
+import { isPitched, LANE_CODE, type CaptureDepth, type CaptureIntensity, type CaptureScope, type ContextId, type HarmonicEvent, type LaneId, type Phrase, type Project, type TimedEvent } from "../core/types.ts";
 import { DIGIT_H, displayAmount, type BigAmount, type DisplayAmount } from "./digits.ts";
 import { readControl } from "./controls.ts";
 import { pagesFor, type Binding, type Page } from "./pages.ts";
@@ -76,16 +76,18 @@ export function renderScreen(project: Project, ui: UiState, tick: number, playin
   drawPager(pixels, Math.min(pageIndex, Math.max(0, pages.length - 1)), pages.length);
   if (!mixer) drawParamSeparator(pixels);
   const chordRoll = vizLane === "chords" && page?.id !== "prog" && !capture;
+  const showPhrase = !notice && !mixer && !generator && !capture && vizLane !== null;
+  const phrase = showPhrase ? generatePhrase(project) : null;
   if (notice) fillViz(pixels);
   else if (mixer) drawMixer(pixels, project, focus);
   else if (generator) drawGenerator(pixels, project, context, generator, focusState?.showPattern ?? false, playing ? stepAt(project, tick) : -1);
-  else if (chordRoll) drawChordRoll(pixels, project, playing ? stepAt(project, tick) : -1);
-  else if (!capture && vizLane === "chords") drawChordBars(pixels, project, playing ? stepAt(project, tick) : -1);
-  else if (!capture && vizLane) drawPhrase(pixels, project, vizLane, playing ? stepAt(project, tick) : -1);
+  else if (chordRoll && phrase) drawChordRoll(pixels, phrase, playing ? stepAt(project, tick) : -1);
+  else if (vizLane === "chords" && phrase) drawChordBars(pixels, phrase, playing ? stepAt(project, tick) : -1);
+  else if (vizLane && phrase) drawPhrase(pixels, phrase, vizLane, playing ? stepAt(project, tick) : -1);
   const labels = mixer
     ? [{ x: 1, y: 1, text: header.slice(0, LINE_LIMIT) }, ...mixerChannelLabels(project, focus)]
     : drawLabels(project, context, page, focus, header);
-  if (vizLane === "chords" && !notice && !capture && !generator && !chordRoll) labels.push(...chordNameLabels(project));
+  if (phrase && vizLane === "chords" && !chordRoll) labels.push(...chordNameLabels(project, phrase));
   if (notice) labels.push(...noticeLabels(notice.title, notice.value));
   if (capture) labels.push(...captureMenuLabels(project));
   const digits = mixer || !page ? [] : paramDigits(project, context, page, focus);
@@ -311,8 +313,7 @@ function chordSpans(events: readonly HarmonicEvent[], steps: number): ChordSpan[
 }
 
 /** Names and duration blocks. Width is the harmonic length. */
-function drawChordBars(pixels: Uint8Array, project: Project, playhead: number): void {
-  const phrase = generatePhrase(project);
+function drawChordBars(pixels: Uint8Array, phrase: Phrase, playhead: number): void {
   const steps = Math.max(1, phrase.steps.chords);
   const yTop = HEADER_H;
   const yBottom = HEADER_H + VIZ_H - 2;
@@ -324,8 +325,7 @@ function drawChordBars(pixels: Uint8Array, project: Project, playhead: number): 
   if (playhead >= 0) paintPlayhead(pixels, wrapStep(playhead, steps), steps, yTop, yBottom);
 }
 
-function chordNameLabels(project: Project): Label[] {
-  const phrase = generatePhrase(project);
+function chordNameLabels(project: Project, phrase: Phrase): Label[] {
   const steps = Math.max(1, phrase.steps.chords);
   const yTop = HEADER_H;
   const yBottom = HEADER_H + VIZ_H - 2;
@@ -359,8 +359,7 @@ function chordNameLabels(project: Project): Label[] {
 }
 
 /** Piano roll of the notes the chord figure actually plays. */
-function drawChordRoll(pixels: Uint8Array, project: Project, playhead: number): void {
-  const phrase = generatePhrase(project);
+function drawChordRoll(pixels: Uint8Array, phrase: Phrase, playhead: number): void {
   const steps = Math.max(1, phrase.steps.chords);
   const events = phrase.lanes.chords;
   const yTop = HEADER_H;
@@ -387,8 +386,7 @@ function drawChordRoll(pixels: Uint8Array, project: Project, playhead: number): 
   if (playhead >= 0) paintPlayhead(pixels, wrapStep(playhead, steps), steps, yTop, yBottom);
 }
 
-function drawPhrase(pixels: Uint8Array, project: Project, lane: LaneId, playhead: number): void {
-  const phrase = generatePhrase(project);
+function drawPhrase(pixels: Uint8Array, phrase: Phrase, lane: LaneId, playhead: number): void {
   const steps = Math.max(1, phrase.steps[lane]);
   const events = lane === "chords" ? phrase.lanes[lane] : collapseMono(phrase.lanes[lane], steps);
   const yTop = HEADER_H;
@@ -400,7 +398,7 @@ function drawPhrase(pixels: Uint8Array, project: Project, lane: LaneId, playhead
     minNote = Math.min(minNote, event.note);
     maxNote = Math.max(maxNote, event.note);
   }
-  const melodic = lane === "bass" || lane === "lead";
+  const melodic = isPitched(lane);
   for (const event of events) {
     const height = lineHeight(event.velocity, maxEvent);
     const center = pitchCenter(event.note, minNote, maxNote, yTop, yBottom, maxEvent);
@@ -506,21 +504,24 @@ function figureHeader(project: Project, context: ContextId, focus: string | null
   if ((context === "bass" || context === "lead") && focus === "PITCH V") {
     return restingPitchLabel(context, readControl(project, context, "pitch.value"), readControl(project, context, "octave.value"), project.global);
   }
-  if ((context === "bass" || context === "lead") && focus === "OCTAVE V") {
+  if ((context === "bass" || context === "lead" || context === "chords") && focus === "OCTAVE V") {
     return `OCT ${restingOctave(readControl(project, context, "octave.value"))}`;
   }
   if (context === "global" && focus === "ROOT") return pitchClassName(project.global.root);
   if (context === "global" && focus === "SCALE") return scaleTitle(project.global.scale);
   if (context !== "chords") return null;
+  if (focus === "TONE V") return restingChordToneLabel(project.working.chords, project.global);
   if (focus === "RATE V") return chordFigure(readControl(project, "chords", "rate.value")).label.slice(0, LINE_LIMIT);
-  if (focus === "DIR") return directionLabel(readControl(project, "chords", "direction")).slice(0, LINE_LIMIT);
   return null;
 }
 
 function knobAmount(project: Project, context: ContextId, binding: Binding): DisplayAmount {
-  if ((context === "bass" || context === "lead") && binding.path === "octave.value") {
+  if ((context === "bass" || context === "lead" || context === "chords") && binding.path === "octave.value") {
     const n = restingOctave(readControl(project, context, "octave.value"));
     return { kind: "big", n: Math.abs(n), negative: n < 0 };
+  }
+  if (context === "chords" && binding.path === "tone.value") {
+    return { kind: "wide", text: restingChordToneLabel(project.working.chords, project.global), negative: false };
   }
   if (context === "global" && binding.path === "root") {
     return { kind: "wide", text: pitchClassName(project.global.root), negative: false };
@@ -550,8 +551,6 @@ const WORD: Record<string, string> = {
   C: "CYCLE",
   A: "AMOUNT",
   TRANS: "TRANSPOSE",
-  OCT: "OCTAVES",
-  DIR: "DIRECTION",
   KCK: "KICK",
   SNR: "SNARE",
   PRC: "PERC",

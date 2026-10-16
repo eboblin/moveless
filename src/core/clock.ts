@@ -8,7 +8,7 @@ export interface Rate {
   ticks: number;
 }
 
-/** 1/64 and triplet sixteenths are integers at 192 PPQN. */
+/** 1/64 and triplet sixteenths are integers at 192 PPQN. Ratchet uses this table. */
 export const RATES: readonly Rate[] = [
   { id: "1/8", ticks: 96 },
   { id: "1/16", ticks: 48 },
@@ -16,6 +16,14 @@ export const RATES: readonly Rate[] = [
   { id: "1/32", ticks: 24 },
   { id: "1/32T", ticks: 16 },
   { id: "1/64", ticks: 12 },
+];
+
+/** Chord arp. 0 on the knob is a block; the first step above that is a whole note. */
+export const CHORD_RATES: readonly Rate[] = [
+  { id: "1/1", ticks: PPQN * 4 },
+  { id: "1/2", ticks: PPQN * 2 },
+  { id: "1/4", ticks: PPQN },
+  ...RATES,
 ];
 
 export function ticksPerBar(beatsPerBar: number): number {

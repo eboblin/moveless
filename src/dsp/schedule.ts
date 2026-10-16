@@ -1,8 +1,7 @@
 import { clamp01, FRAMES_PER_BLOCK, SIXTEENTH_TICKS, tickToSample } from "../core/clock.ts";
-import { LANES, type LaneId, type Project } from "../core/types.ts";
-import { morphEndpoints } from "../core/morph.ts";
 import { withMacro } from "../core/modulate.ts";
-import { generatePhrase, laneSteps } from "../core/phrase.ts";
+import { generatePhrase, laneSteps, endpointLanes } from "../core/phrase.ts";
+import { LANES, type LaneId, type Phrase, type Project } from "../core/types.ts";
 import { mapSound, type EngineParam } from "./map.ts";
 
 export interface BlockEvent {
@@ -39,8 +38,7 @@ export interface Motion {
 }
 
 /** The whole phrase, once around. Each lane repeats on its own length. */
-export function phraseLoop(project: Project): LoopEvent[] {
-  const phrase = generatePhrase(project);
+export function phraseLoop(project: Project, phrase: Phrase = generatePhrase(project)): LoopEvent[] {
   const tempo = project.global.tempo;
   const out: LoopEvent[] = [];
   for (const lane of LANES) {
@@ -66,17 +64,16 @@ export function phraseLoop(project: Project): LoopEvent[] {
 }
 
 /** Sound parameters follow their generator for the whole note. Note pitch stays at note on. During a morph the same generators glide from one scene's timbre to the other's. */
-export function soundMotions(project: Project): Motion[] {
+export function soundMotions(project: Project, phrase?: Phrase): Motion[] {
   const tempo = project.global.tempo;
   const morph = project.morph;
-  const target = morph ? project.journal.find((scene) => scene.id === morph.targetId) : undefined;
-  const ends = morph && target ? morphEndpoints(project, target.lanes) : null;
+  const ready = phrase ?? (morph ? generatePhrase(project) : undefined);
+  const ends = morph ? endpointLanes(project) : null;
   const t = morph?.t ?? 0;
-  const heardSteps = ends ? generatePhrase(project).steps : null;
   const out: Motion[] = [];
   for (const lane of LANES) {
     if (project.mute[lane]) continue;
-    const steps = Math.max(1, heardSteps ? heardSteps[lane] : laneSteps(project.working, lane, project.global));
+    const steps = Math.max(1, ready ? ready.steps[lane] : laneSteps(project.working, lane, project.global));
     const loop = Math.max(1, tickToSample(steps * SIXTEENTH_TICKS, tempo));
     const sound = ends ? ends.from[lane].sound : project.working[lane].sound;
     const other = ends ? ends.to[lane].sound : null;

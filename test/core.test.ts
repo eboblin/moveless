@@ -27,7 +27,7 @@ import {
   setMacro,
   audibleEvents,
 } from "../src/core/performance.ts";
-import { chordOrder, generatePhrase, previewPhrase } from "../src/core/phrase.ts";
+import { generatePhrase, previewPhrase, unitForOctave } from "../src/core/phrase.ts";
 import { pitchClassOfDegree, scaleOf } from "../src/core/harmony.ts";
 import { chordLabels, textPreview } from "../src/core/text-preview.ts";
 import type { ScaleId } from "../src/core/types.ts";
@@ -776,38 +776,24 @@ describe("harmony", () => {
     }
   });
 
-  it("orders chord tones up, down, across, and back through the chord", () => {
-    const notes = [48, 52, 55];
-    assert.deepEqual(chordOrder(notes, 0, 0, 1), [48, 52, 55]);
-    assert.deepEqual(chordOrder(notes, 1, 0, 1), [55, 52, 48]);
-    assert.deepEqual(chordOrder(notes, 2, 0, 1), [48, 52, 55]);
-    assert.deepEqual(chordOrder(notes, 2, 1, 1), [55, 52, 48]);
-    assert.deepEqual(chordOrder(notes, 3, 0, 1), [48, 52, 55, 52]);
-    assert.deepEqual(chordOrder(notes, 4, 0, 1), [55, 52, 48, 52]);
-    assert.deepEqual(chordOrder(notes, 5, 0, 1), [48, 55, 52]);
-    assert.deepEqual(chordOrder(notes, 6, 0, 1), [52, 55, 48]);
-    assert.deepEqual(chordOrder(notes, 7, 0, 1), chordOrder(notes, 7, 0, 1));
-    const again = chordOrder(notes, 7, 0, 1).join();
-    assert.ok([2, 3, 4, 5, 6, 7, 8, 9].some((seed) => chordOrder(notes, 7, 0, seed).join() !== again));
-  });
-
   it("holds a block for the chord and repeats an arp inside it", () => {
     const project = bar(defaultProject(), 1);
     project.global.phrase = 1;
     project.working.chords.count = 1;
     project.working.chords.length = 4;
     project.working.chords.variation = 0;
-    project.working.chords.octaves = 1;
-    project.working.chords.direction = 0;
     const chordTicks = 16 * 48;
     project.working.chords.rate = modulated(0);
+    project.working.chords.tone = modulated(1);
     const block = generatePhrase(project).lanes.chords;
-    assert.ok(block.length >= 3);
+    assert.deepEqual(block.map((event) => event.note), [48, 52, 55]);
     assert.ok(block.every((event) => event.tick === 0 && event.lengthTicks === chordTicks));
 
     project.working.chords.rate = modulated(0.25);
     project.working.chords.gate = modulated(0.5);
+    project.working.chords.tone = modulated(0);
     const arp = generatePhrase(project).lanes.chords;
+    assert.ok(arp.every((event) => event.note === 48));
     const step = arp[1].tick - arp[0].tick;
     assert.ok(step > 0);
     assert.ok(arp.length > block.length);
@@ -823,8 +809,6 @@ describe("harmony", () => {
     project.working.chords.count = 1;
     project.working.chords.length = 4;
     project.working.chords.variation = 0;
-    project.working.chords.octaves = 1;
-    project.working.chords.direction = 0;
     const chordTicks = 16 * 48;
     project.working.chords.rate = modulated(0.5, 2, 16, 0.5);
     project.working.chords.gate = modulated(0.5);
@@ -834,7 +818,7 @@ describe("harmony", () => {
     assert.ok(new Set(early.map((event) => event.tick)).size > 3);
     assert.ok(early.every((event) => event.lengthTicks < 48));
     assert.equal(new Set(late.map((event) => event.tick)).size, 1);
-    assert.ok(late.length >= 3);
+    assert.deepEqual(late.map((event) => event.note), [48, 52, 55]);
     assert.ok(late.every((event) => event.tick + event.lengthTicks === chordTicks));
 
     project.working.chords.rate = modulated(0.75);
@@ -846,14 +830,22 @@ describe("harmony", () => {
     assert.ok(later.lengthTicks > short.lengthTicks);
   });
 
-  it("keeps bass notes stable when the arp direction changes", () => {
+  it("picks one chord tone and an octave without moving the bass", () => {
     const project = bar(defaultProject());
     project.working.chords.rate = modulated(1);
-    const up = generatePhrase(project);
-    project.working.chords.direction = 1;
-    const down = generatePhrase(project);
-    assert.deepEqual(up.lanes.bass.map((event) => event.note), down.lanes.bass.map((event) => event.note));
-    assert.notDeepEqual(up.lanes.chords.map((event) => event.note), down.lanes.chords.map((event) => event.note));
+    project.working.chords.tone = modulated(0);
+    const root = generatePhrase(project);
+    project.working.chords.tone = modulated(1);
+    const top = generatePhrase(project);
+    assert.deepEqual(root.lanes.bass.map((event) => event.note), top.lanes.bass.map((event) => event.note));
+    assert.notDeepEqual(root.lanes.chords.map((event) => event.note), top.lanes.chords.map((event) => event.note));
+    project.working.chords.tone = modulated(0);
+    project.working.chords.octave = modulated(unitForOctave(5));
+    const higher = generatePhrase(project);
+    assert.equal(higher.lanes.chords.length, root.lanes.chords.length);
+    for (let i = 0; i < root.lanes.chords.length; i++) {
+      assert.equal(higher.lanes.chords[i]?.note, (root.lanes.chords[i]?.note ?? 0) + 12);
+    }
   });
 
   it("fits chord lengths to the bar grid and shortens passing chords", () => {

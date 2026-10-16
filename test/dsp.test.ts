@@ -430,6 +430,8 @@ describe("dsp adapter", () => {
     assert.equal(project.working.bass.sound.noise.value < 0.1, true);
     assert.equal(project.working.lead.sound.attack.value < 0.1, true);
     assert.equal(project.working.chords.sound.fm.value, 0.5);
+    assert.equal(project.working.chords.sound.attack.value, 0);
+    assert.equal(project.working.chords.sound.release.value, 0);
   });
 });
 

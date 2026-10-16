@@ -47,17 +47,23 @@ export function generateHits(
   // Span may exceed a single Euclidean ring — rings tile via step % length so
   // pitched lanes can cover the full chord phrase.
   const span = Math.max(1, Math.round(steps));
+  const rings: (boolean[] | null)[] = [];
+  const lengths: number[] = [];
+  for (const gen of [gen1, gen2]) {
+    const length = Math.max(0, Math.round(gen.length));
+    lengths.push(length);
+    const hits = length > 0 ? Math.max(0, Math.min(length, Math.round(gen.hits))) : 0;
+    rings.push(hits > 0 ? rotatePattern(euclidPattern(hits, length), gen.rotate) : null);
+  }
   const hits: Hit[] = [];
   for (let step = 0; step < span; step++) {
     const fired: (1 | 2)[] = [];
     let velocity = 0;
     for (const which of [1, 2] as const) {
       const gen = which === 1 ? gen1 : gen2;
-      const length = Math.max(0, Math.round(gen.length));
-      if (length <= 0) continue;
-      const h = Math.max(0, Math.min(length, Math.round(gen.hits)));
-      if (h <= 0) continue;
-      const pattern = rotatePattern(euclidPattern(h, length), gen.rotate);
+      const pattern = rings[which - 1];
+      const length = lengths[which - 1] ?? 0;
+      if (!pattern || length <= 0) continue;
       const local = ((step % length) + length) % length;
       if (!pattern[local]) continue;
       const probability = clamp01(gen.probability + probabilityMacro);

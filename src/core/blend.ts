@@ -1,7 +1,7 @@
 import { clamp01, sampleOffset, SIXTEENTH_TICKS, sixteenthSteps, tickToSample } from "./clock.ts";
 import { hash01 } from "./hash.ts";
 import { evalModulated, withMacro } from "./modulate.ts";
-import { LANES, type HarmonicEvent, type LaneId, type Lanes, type Modulated, type Phrase, type Project, type TimedEvent } from "./types.ts";
+import { isDrum, LANES, type HarmonicEvent, type LaneId, type Lanes, type Modulated, type Phrase, type Project, type TimedEvent } from "./types.ts";
 
 /** Shared loop for two patterns. Prefers a common multiple that still lands on the target. */
 export function morphWindow(stepsA: number, stepsB: number, cap: number): number {
@@ -45,7 +45,7 @@ export function blendPhrases(
   const cap = sixteenthSteps(project.global.phrase, project.global.bar);
   const steps = {} as Phrase["steps"];
   for (const lane of LANES) {
-    const limit = lane === "kick" || lane === "snare" || lane === "hat" || lane === "perc"
+    const limit = isDrum(lane)
       ? cap
       : Math.max(cap, fromPhrase.steps[lane], toPhrase.steps[lane]);
     steps[lane] = morphWindow(fromPhrase.steps[lane], toPhrase.steps[lane], limit);
@@ -160,26 +160,32 @@ function admitted(pick: Pick): boolean {
   return pick.side === "src" ? pick.roll < 1 - pick.place : pick.roll < pick.place;
 }
 
-function rank(pick: Pick): number {
-  const favored = pick.place < 0.5 ? pick.side === "src" : pick.side === "dst";
-  const margin = pick.side === "src" ? 1 - pick.place - pick.roll : pick.place - pick.roll;
+function keepRank(place: number, side: "src" | "dst", roll: number): number {
+  const favored = place < 0.5 ? side === "src" : side === "dst";
+  const margin = side === "src" ? 1 - place - roll : place - roll;
   return (favored ? 2 : 0) + margin;
 }
 
-function cluster(picks: readonly Pick[]): Pick[][] {
-  const sorted = [...picks].sort((a, b) => a.event.tick - b.event.tick || a.event.note - b.event.note);
-  const groups: Pick[][] = [];
+function clusterBy<T>(items: readonly T[], tickOf: (item: T) => number, tieOf: (item: T) => number): T[][] {
+  const sorted = [...items].sort((a, b) => tickOf(a) - tickOf(b) || tieOf(a) - tieOf(b));
+  const groups: T[][] = [];
   for (const item of sorted) {
     const group = groups[groups.length - 1];
     const first = group?.[0];
-    if (!group || !first || item.event.tick - first.event.tick > SAME_PLACE_TICKS) groups.push([item]);
+    if (!group || !first || tickOf(item) - tickOf(first) > SAME_PLACE_TICKS) groups.push([item]);
     else group.push(item);
   }
   return groups;
 }
 
+function cluster(picks: readonly Pick[]): Pick[][] {
+  return clusterBy(picks, (item) => item.event.tick, (item) => item.event.note);
+}
+
 function dedupe(picks: readonly Pick[]): Pick[] {
-  return cluster(picks).map((group) => group.reduce((best, item) => (rank(item) > rank(best) ? item : best)));
+  return cluster(picks).map((group) => group.reduce((best, item) => (
+    keepRank(item.place, item.side, item.roll) > keepRank(best.place, best.side, best.roll) ? item : best
+  )));
 }
 
 /** A chord may keep at most max(source voices, destination voices) at one place. */
@@ -192,7 +198,7 @@ function capVoices(admitted: readonly Pick[], all: readonly Pick[]): Pick[] {
     const src = new Set(place.filter((item) => item.side === "src").map((item) => item.event.note));
     const dst = new Set(place.filter((item) => item.side === "dst").map((item) => item.event.note));
     const cap = Math.max(src.size, dst.size);
-    const ranked = [...group].sort((a, b) => rank(b) - rank(a) || a.event.tick - b.event.tick || a.event.note - b.event.note);
+    const ranked = [...group].sort((a, b) => keepRank(b.place, b.side, b.roll) - keepRank(a.place, a.side, a.roll) || a.event.tick - b.event.tick || a.event.note - b.event.note);
     const seen = new Set<number>();
     for (const item of ranked) {
       if (seen.has(item.event.note) || seen.size >= cap) continue;
@@ -256,19 +262,8 @@ function blendHarmony(from: readonly HarmonicEvent[], to: readonly HarmonicEvent
     const roll = hash01(project.global.seed, "chords", "dst", start + rel, event.root);
     if (roll < place) picks.push({ event, side: "dst", place, roll });
   }
-  const sorted = [...picks].sort((a, b) => a.event.startTick - b.event.startTick || a.event.root - b.event.root);
-  const groups: ChordPick[][] = [];
-  for (const item of sorted) {
-    const group = groups[groups.length - 1];
-    const first = group?.[0];
-    if (!group || !first || item.event.startTick - first.event.startTick > SAME_PLACE_TICKS) groups.push([item]);
-    else group.push(item);
-  }
-  return groups.map((group) => group.reduce((best, item) => (chordRank(item) > chordRank(best) ? item : best)).event);
-}
-
-function chordRank(pick: ChordPick): number {
-  const favored = pick.place < 0.5 ? pick.side === "src" : pick.side === "dst";
-  const margin = pick.side === "src" ? 1 - pick.place - pick.roll : pick.place - pick.roll;
-  return (favored ? 2 : 0) + margin;
+  const sorted = clusterBy(picks, (item) => item.event.startTick, (item) => item.event.root);
+  return sorted.map((group) => group.reduce((best, item) => (
+    keepRank(item.place, item.side, item.roll) > keepRank(best.place, best.side, best.roll) ? item : best
+  )).event);
 }

@@ -32,10 +32,6 @@ const CHORD_PLAIN = {
   mood: "switch",
   tension: "switch",
   way: "switch",
-  spread: "switch",
-  flow: "switch",
-  octaves: "switch",
-  direction: "switch",
 } as const;
 
 export function fieldsOf(lanes: Lanes): Field[] {
@@ -86,6 +82,8 @@ function pushChords(out: Field[], lane: ChordLane): void {
   for (const key of Object.keys(CHORD_PLAIN) as (keyof typeof CHORD_PLAIN)[]) {
     out.push({ path: `chords.${key}`, kind: CHORD_PLAIN[key], value: lane[key] });
   }
+  pushMod(out, "chords.tone", lane.tone, false);
+  pushMod(out, "chords.octave", lane.octave, false);
   pushMod(out, "chords.rate", lane.rate, false);
   pushMod(out, "chords.gate", lane.gate, false);
   pushSound(out, "chords", lane.sound);

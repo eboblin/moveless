@@ -1,6 +1,6 @@
 import { SAMPLE_RATE, SIXTEENTH_TICKS, tickToSample } from "../core/clock.ts";
 import { evalModulated } from "../core/modulate.ts";
-import { LANES, type LaneId } from "../core/types.ts";
+import { isDrum, LANES, type LaneId } from "../core/types.ts";
 import type { EngineParam } from "./map.ts";
 import type { BlockEvent, LoopEvent, Motion } from "./schedule.ts";
 
@@ -153,20 +153,16 @@ export function loadPhrase(engine: Engine, events: LoopEvent[], tempo: number, r
 function holdSig(events: LoopEvent[]): string {
   let sig = "";
   for (const event of events) {
-    if (isDrumLane(event.lane)) continue;
+    if (isDrum(event.lane)) continue;
     sig += `${event.lane}:${event.sample}:${event.loop}:${event.note};`;
   }
   return sig;
 }
 
-function isDrumLane(lane: LaneId): boolean {
-  return lane === "kick" || lane === "snare" || lane === "hat" || lane === "perc";
-}
-
 function catchHolding(engine: Engine): void {
   const tempo = Math.max(1, engine.tempo);
   for (const event of engine.phrase) {
-    if (isDrumLane(event.lane)) continue;
+    if (isDrum(event.lane)) continue;
     const loop = Math.max(1, event.loop);
     const pos = ((engine.clock % loop) + loop) % loop;
     const start = ((event.sample % loop) + loop) % loop;

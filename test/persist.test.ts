@@ -111,6 +111,32 @@ describe("project persist", () => {
     assert.equal(parsed.project.journal[0].id, "001");
   });
 
+  it("resets a chord lane that has no tone or octave", () => {
+    const project = defaultProject();
+    const legacy = {
+      ...project.working.chords,
+      spread: 0.9,
+      flow: 0.1,
+      octaves: 3,
+      direction: 1,
+    };
+    delete (legacy as { tone?: unknown }).tone;
+    delete (legacy as { octave?: unknown }).octave;
+    const parsed = parseStored(JSON.stringify({
+      version: 1,
+      project: {
+        ...project,
+        working: { ...project.working, chords: legacy },
+        journal: [{ id: "001", color: 3, lanes: { ...project.working, chords: legacy } }],
+      },
+      ui: { context: "chords", page: 0, mode: "journal" },
+    }));
+    assert.ok(parsed);
+    const fresh = defaultProject().working.chords;
+    assert.deepEqual(parsed.project.working.chords, fresh);
+    assert.deepEqual(parsed.project.journal[0].lanes.chords, fresh);
+  });
+
   it("resets a bass lane that still stores degree and range", () => {
     const project = defaultProject();
     const bass = {

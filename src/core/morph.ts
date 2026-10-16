@@ -1,7 +1,7 @@
 import { ticksPerBar } from "./clock.ts";
 import { clone } from "./clone.ts";
 import { fieldsOf, getPath, morphValue, setPath } from "./fields.ts";
-import { LANES, TRANSITION_BARS, type LaneId, type Lanes, type MorphState, type Project, type Scene, type TransitionId } from "./types.ts";
+import { LANES, isDrum, isPitched, TRANSITION_BARS, type LaneId, type Lanes, type MorphState, type Project, type Scene, type TransitionId } from "./types.ts";
 
 export function quantizeStart(tick: number, transition: TransitionId, beatsPerBar: number): number {
   const grid = transition === "now" ? ticksPerBar(1) / 4 : ticksPerBar(beatsPerBar);
@@ -88,8 +88,7 @@ function pinLanes(base: Lanes, current: Lanes, punched: ReadonlySet<string>, loc
 }
 
 function copyLane(into: Lanes, from: Lanes, lane: LaneId): void {
-  if (lane === "kick" || lane === "snare" || lane === "hat" || lane === "perc") into[lane] = clone(from[lane]);
-  else if (lane === "bass" || lane === "lead") into[lane] = clone(from[lane]);
+  if (isDrum(lane) || isPitched(lane)) into[lane] = clone(from[lane]);
   else into.chords = clone(from.chords);
 }
 

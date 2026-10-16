@@ -497,17 +497,33 @@ describe("surface", () => {
     const play = renderScreen(project, { ...defaultUi(), context: "chords", page: 1 }, 0);
     assert.ok(play.labels.some((label) => label.text === "RATE"));
     assert.ok(play.labels.some((label) => label.text === "GATE"));
-    const voiceNames = renderScreen(project, { ...defaultUi(), context: "chords", page: 2 }, 0)
-      .labels.filter((label) => label.y === NAME_Y)
-      .map((label) => label.text);
-    assert.deepEqual(voiceNames.slice(0, 4), ["SPR", "FLO", "OCT", "DIR"]);
+    const tonePage = renderScreen(project, { ...defaultUi(), context: "chords", page: 2 }, 0);
+    assert.match(tonePage.header, /TONE/);
+    assert.match(tonePage.header, /OCTAVE/);
+    const toneNames = tonePage.labels.filter((label) => label.y === NAME_Y).map((label) => label.text);
+    assert.deepEqual(toneNames, ["V", "P", "C", "A", "V", "P", "C", "A"]);
+    const toneHeld = renderScreen(project, {
+      ...defaultUi(),
+      context: "chords",
+      page: 2,
+      focus: { label: "TONE V", generator: "tone.value", showPattern: false, held: true, untilTick: 0 },
+    }, 0);
+    assert.equal(toneHeld.header, "C4");
+    const octaveHeld = renderScreen(project, {
+      ...defaultUi(),
+      context: "chords",
+      page: 2,
+      focus: { label: "OCTAVE V", generator: "octave.value", showPattern: false, held: true, untilTick: 0 },
+    }, 0);
+    assert.equal(octaveHeld.header, "OCT 4");
     const zone = (rate: number) => renderScreen(
       { ...project, working: { ...project.working, chords: { ...project.working.chords, rate: modulated(rate) } } },
       { ...defaultUi(), context: "chords", page: 1, focus: { label: "RATE V", generator: "rate.value", showPattern: false, held: true, untilTick: 0 } },
       0,
     ).header;
     assert.equal(zone(0), "BLOCK");
-    assert.equal(zone(0.25), "1/16");
+    assert.equal(zone(0.01), "1/1");
+    assert.equal(zone(0.25), "1/4");
     assert.match(zone(0.75), /^\d/);
     const roll = renderScreen(project, { ...defaultUi(), context: "chords", page: 2 }, 0);
     assert.equal(

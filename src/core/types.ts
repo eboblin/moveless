@@ -74,11 +74,10 @@ export interface ChordLane {
   tension: number;
   /** 0 up, 1 down, 2 alternate, 3 random from the seed. */
   way: number;
-  spread: number;
-  flow: number;
-  octaves: number;
-  /** 0 up, 1 down, 2 alternate chords, 3 up-down, 4 down-up, 5 in, 6 out, 7 random. Voice order only. */
-  direction: number;
+  /** 0 is the root of the current chord, 1 is its top tone. */
+  tone: Modulated;
+  /** Absolute octave 0..9, same scale as bass and lead. */
+  octave: Modulated;
   rate: Modulated;
   gate: Modulated;
   sound: Record<string, Modulated>;

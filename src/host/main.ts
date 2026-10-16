@@ -1,6 +1,7 @@
 import { PPQN, SAMPLE_RATE } from "../core/clock.ts";
 import { defaultProject } from "../core/defaults.ts";
 import { advance } from "../core/performance.ts";
+import { generatePhrase } from "../core/phrase.ts";
 import { loadStoredProject, saveStoredProject, type HostFiles, type StoredUi } from "../core/persist.ts";
 import { phraseLoop, soundMotions } from "../dsp/schedule.ts";
 import { packPhraseBody } from "../dsp/voice.ts";
@@ -118,7 +119,8 @@ function syncVoice(reset: boolean): void {
   const morphing = session.project.morph !== null;
   const boundary = morphing !== voiceMorph || step !== voiceStep;
   if (phraseProject !== session.project && (!morphing || boundary || reset)) {
-    phraseBody = packPhraseBody(phraseLoop(session.project), soundMotions(session.project));
+    const phrase = generatePhrase(session.project);
+    phraseBody = packPhraseBody(phraseLoop(session.project, phrase), soundMotions(session.project, phrase));
     phraseProject = session.project;
     phraseSent = "";
   }

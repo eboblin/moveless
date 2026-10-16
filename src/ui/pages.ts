@@ -1,4 +1,4 @@
-import { LANE_CODE, SCALE_IDS, SOUND, type ContextId, type LaneId } from "../core/types.ts";
+import { isPitched, LANE_CODE, SCALE_IDS, SOUND, type ContextId, type LaneId } from "../core/types.ts";
 
 export interface Binding {
   path: string;
@@ -116,23 +116,9 @@ function playPage(): Page {
   };
 }
 
-function voicePage(): Page {
-  return {
-    id: "voice",
-    title: "VOICE",
-    groups: ["VOICE", null],
-    bindings: slots([
-      num("spread", "SPREAD", 0, 1, 0.01),
-      num("flow", "FLOW", 0, 1, 0.01),
-      num("octaves", "OCT", 1, 4, 1, true),
-      num("direction", "DIR", 0, 7, 1, true),
-    ]),
-  };
-}
-
 export function lanePages(lane: LaneId): Page[] {
   if (lane === "chords") {
-    return [progPage(), playPage(), voicePage(), ...soundPages(SOUND.chords)];
+    return [progPage(), playPage(), pair("tone", "TONE", "octave", "OCTAVE"), ...soundPages(SOUND.chords)];
   }
   const pitched = lane === "bass" || lane === "lead";
   return [
@@ -212,15 +198,60 @@ export function perfPages(): Page[] {
   ];
 }
 
+const pageCache = new Map<ContextId, Page[]>();
+
 export function pagesFor(context: ContextId): Page[] {
-  if (context === "mix") return [mixPage()];
-  if (context === "global") return globalPages();
-  if (context === "perf") return perfPages();
-  return lanePages(context);
+  const hit = pageCache.get(context);
+  if (hit) return hit;
+  const pages = context === "mix"
+    ? [mixPage()]
+    : context === "global"
+      ? globalPages()
+      : context === "perf"
+        ? perfPages()
+        : lanePages(context);
+  pageCache.set(context, pages);
+  return pages;
 }
 
 export function pageCount(context: ContextId): number {
   return pagesFor(context).length;
+}
+
+/** Knob paths on one page, in column order. Capture spends these, not a second list. */
+export function bindingPaths(page: Page): string[] {
+  const paths: string[] = [];
+  for (const binding of page.bindings) if (binding) paths.push(binding.path);
+  return paths;
+}
+
+/** Pattern, notes, or sound pages for a lane, taken from the same pages the screen shows. */
+export function laneScopePaths(lane: LaneId, scope: "pattern" | "notes" | "sound" | "all"): string[][] {
+  const pages = pagesFor(lane);
+  const picked: string[][] = [];
+  pages.forEach((page, index) => {
+    const group = pageGroup(lane, index);
+    if (group !== "pattern" && group !== "notes" && group !== "sound") return;
+    if (scope !== "all" && group !== scope) return;
+    picked.push(bindingPaths(page));
+  });
+  return picked;
+}
+
+/** Paths of one generator. A paired page contributes only the named modulator. */
+export function modulatorPaths(lane: LaneId, target: string): string[] {
+  if (target === "gen1" || target === "gen2") {
+    const page = pagesFor(lane).find((item) => item.id === target);
+    return page ? bindingPaths(page) : [];
+  }
+  const prefix = `${target}.`;
+  const paths: string[] = [];
+  for (const page of pagesFor(lane)) {
+    for (const binding of page.bindings) {
+      if (binding && (binding.path === target || binding.path.startsWith(prefix))) paths.push(binding.path);
+    }
+  }
+  return paths;
 }
 
 export type PageGroup = "pattern" | "notes" | "sound" | "global" | "macro" | "mix";
