@@ -1,6 +1,8 @@
+import { morphWindow } from "../core/blend.ts";
 import { SIXTEENTH_TICKS } from "../core/clock.ts";
+import { phraseStepsOf } from "../core/events.ts";
 import { chordSymbol, degreeNumeral, pitchClassName, scaleShort, scaleTitle } from "../core/harmony.ts";
-import { chordFigure, generatePhrase, laneSteps, restingChordToneLabel, restingOctave, restingPitchLabel } from "../core/phrase.ts";
+import { chordFigure, endpointLanes, generatePhrase, laneSteps, restingChordToneLabel, restingOctave, restingPitchLabel } from "../core/phrase.ts";
 import { evalModulated } from "../core/modulate.ts";
 import { isPitched, LANE_CODE, type CaptureDepth, type CaptureIntensity, type CaptureScope, type ContextId, type HarmonicEvent, type LaneId, type Phrase, type Project, type TimedEvent } from "../core/types.ts";
 import { DIGIT_H, displayAmount, type BigAmount, type DisplayAmount } from "./digits.ts";
@@ -83,7 +85,7 @@ export function renderScreen(project: Project, ui: UiState, tick: number, playin
   else if (generator) drawGenerator(pixels, project, context, generator, focusState?.showPattern ?? false, playing ? stepAt(project, tick) : -1);
   else if (chordRoll && phrase) drawChordRoll(pixels, phrase, playing ? stepAt(project, tick) : -1);
   else if (vizLane === "chords" && phrase) drawChordBars(pixels, phrase, playing ? stepAt(project, tick) : -1);
-  else if (vizLane && phrase) drawPhrase(pixels, phrase, vizLane, playing ? stepAt(project, tick) : -1);
+  else if (vizLane && phrase) drawPhrase(pixels, project, phrase, vizLane, playing ? stepAt(project, tick) : -1);
   const labels = mixer
     ? [{ x: 1, y: 1, text: header.slice(0, LINE_LIMIT) }, ...mixerChannelLabels(project, focus)]
     : drawLabels(project, context, page, focus, header);
@@ -386,9 +388,10 @@ function drawChordRoll(pixels: Uint8Array, phrase: Phrase, playhead: number): vo
   if (playhead >= 0) paintPlayhead(pixels, wrapStep(playhead, steps), steps, yTop, yBottom);
 }
 
-function drawPhrase(pixels: Uint8Array, phrase: Phrase, lane: LaneId, playhead: number): void {
-  const steps = Math.max(1, phrase.steps[lane]);
-  const events = lane === "chords" ? phrase.lanes[lane] : collapseMono(phrase.lanes[lane], steps);
+function drawPhrase(pixels: Uint8Array, project: Project, phrase: Phrase, lane: LaneId, playhead: number): void {
+  const view = lanePicture(project, phrase, lane, playhead);
+  const steps = Math.max(1, view.steps);
+  const events = lane === "chords" ? view.events : collapseMono(view.events, steps);
   const yTop = HEADER_H;
   const yBottom = HEADER_H + VIZ_H - 2;
   const maxEvent = Math.floor(VIZ_H / 2);
@@ -424,7 +427,50 @@ function drawPhrase(pixels: Uint8Array, phrase: Phrase, lane: LaneId, playhead: 
       for (let y = y0; y <= y1; y++) set(pixels, x, y, 1);
     }
   }
-  if (playhead >= 0) paintPlayhead(pixels, wrapStep(playhead, steps), steps, yTop, yBottom);
+  if (view.playhead >= 0) paintPlayhead(pixels, wrapStep(view.playhead, steps), steps, yTop, yBottom);
+}
+
+/**
+ * Bass and lead are baked across the phrase so follow can see later chords.
+ * During a morph that filmstrip is the whole pattern. The lane page shows one
+ * pass of this lane's own generator ring, the pass the cursor is in.
+ */
+function lanePicture(project: Project, phrase: Phrase, lane: LaneId, playhead: number): { steps: number; events: TimedEvent[]; playhead: number } {
+  const full = Math.max(1, phrase.steps[lane]);
+  const events = phrase.lanes[lane];
+  if (!project.morph || !isPitched(lane)) return { steps: full, events, playhead };
+  const ring = generatorRing(project, lane, full);
+  if (ring >= full) return { steps: full, events, playhead };
+  const cursor = phraseCursor(project, playhead, full);
+  const origin = Math.floor(cursor / ring) * ring;
+  const originTick = origin * SIXTEENTH_TICKS;
+  const endTick = (origin + ring) * SIXTEENTH_TICKS;
+  const sliced: TimedEvent[] = [];
+  for (const event of events) {
+    if (event.tick < originTick || event.tick >= endTick) continue;
+    sliced.push({ ...event, tick: event.tick - originTick });
+  }
+  return { steps: ring, events: sliced, playhead: playhead < 0 ? -1 : cursor - origin };
+}
+
+function generatorRing(project: Project, lane: "bass" | "lead", cap: number): number {
+  const ends = endpointLanes(project);
+  if (!ends) return cap;
+  return morphWindow(
+    phraseStepsOf(ends.from[lane].gen1, ends.from[lane].gen2),
+    phraseStepsOf(ends.to[lane].gen1, ends.to[lane].gen2),
+    cap,
+  );
+}
+
+function phraseCursor(project: Project, playhead: number, steps: number): number {
+  const morph = project.morph;
+  const raw = playhead >= 0
+    ? playhead
+    : morph
+      ? Math.floor((morph.originTick + morph.t * Math.max(0, morph.durationTicks)) / SIXTEENTH_TICKS)
+      : 0;
+  return ((raw % steps) + steps) % steps;
 }
 
 function paintPlayhead(pixels: Uint8Array, pos: number, steps: number, yTop: number, yBottom: number): void {

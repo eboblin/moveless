@@ -598,12 +598,22 @@ describe("morph, journal, macros", () => {
       const earlySig = noteSig(early, lane);
       assert.deepEqual(noteSig(late, lane), earlySig);
       assert.deepEqual(noteSig(built, lane), earlySig);
-      for (const event of [...early.lanes[lane], ...late.lanes[lane]]) {
-        const key = `${event.tick}:${event.note}:${event.lengthTicks}`;
-        const source = start.lanes[lane].find((item) => `${item.tick}:${item.note}:${item.lengthTicks}` === key)
-          ?? goal.lanes[lane].find((item) => `${item.tick}:${item.note}:${item.lengthTicks}` === key);
-        assert.ok(source);
-        assert.equal(event.velocity, source.velocity);
+      for (const heard of [
+        { phrase: early, t: 0.25 },
+        { phrase: late, t: 0.75 },
+      ]) {
+        for (const event of heard.phrase.lanes[lane]) {
+          const key = `${event.tick}:${event.note}:${event.lengthTicks}`;
+          const srcHit = start.lanes[lane].find((item) => `${item.tick}:${item.note}:${item.lengthTicks}` === key);
+          const dstHit = goal.lanes[lane].find((item) => `${item.tick}:${item.note}:${item.lengthTicks}` === key);
+          assert.ok(srcHit || dstHit);
+          const place = morphPlaceOf(project, heard.phrase.steps[lane], heard.t, event.tick);
+          const levels = [
+            srcHit ? srcHit.velocity * (1 - place) : undefined,
+            dstHit ? dstHit.velocity * place : undefined,
+          ];
+          assert.ok(levels.some((level) => level !== undefined && Math.abs(event.velocity - level) < 1e-9));
+        }
       }
     }
     for (const phrase of [early, late]) {
@@ -674,6 +684,19 @@ describe("morph, journal, macros", () => {
 
 function noteSig(phrase: ReturnType<typeof generatePhrase>, lane: "bass" | "lead" | "chords"): string[] {
   return phrase.lanes[lane].map((event) => `${event.tick}:${event.note}:${event.lengthTicks}`).sort();
+}
+
+function morphPlaceOf(project: Project, spanSteps: number, t: number, tick: number): number {
+  const morph = project.morph;
+  if (!morph || morph.durationTicks <= 0) return 1;
+  const span = Math.max(1, spanSteps * SIXTEENTH_TICKS);
+  const now = morph.originTick + t * morph.durationTicks;
+  const start = Math.floor(now / span) * span;
+  const rel = ((tick % span) + span) % span;
+  const raw = (start + rel - morph.originTick) / morph.durationTicks;
+  if (raw <= 0) return 0;
+  if (raw >= 1) return 1;
+  return raw;
 }
 
 function splitSig(start: string[], goal: string[]): { onlyA: string[]; onlyB: string[]; shared: string[]; all: Set<string> } {

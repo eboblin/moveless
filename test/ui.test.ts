@@ -340,6 +340,34 @@ describe("surface", () => {
     for (let x = 0; x < 128; x++) assert.ok(columnSpan(screen, x) <= VIZ_H / 2);
   });
 
+  it("shows the current bass loop during a morph, not the whole phrase", () => {
+    let project = defaultProject();
+    project.working.bass.gen1 = { ...project.working.bass.gen1, length: 16, hits: 1, rotate: 0, probability: 1 };
+    project.working.bass.gen2.hits = 0;
+    project.working.bass.length = modulated(0.2);
+    project.working.lead.gen1 = { ...project.working.lead.gen1, length: 16, hits: 1, rotate: 0, probability: 1 };
+    project.working.lead.gen2.hits = 0;
+    project.working.lead.length = modulated(0.2);
+    project = record(project);
+    project.working.bass.pitch.value = 0.9;
+    project.working.lead.pitch.value = 0.9;
+    project = record(project);
+    project.working = clone(project.journal[0].lanes);
+    project.transition = "slow";
+    project = launchScene(project, "002", 0);
+    const ui = { ...defaultUi(), context: "bass" as const };
+    const idle = renderScreen({ ...project, morph: null, working: project.morph!.start }, ui, 0, false);
+    const first = renderScreen(project, ui, 0, false);
+    assert.ok(litRuns(idle) > 1);
+    assert.equal(litRuns(first), 1);
+    assert.ok(columnSpan(first, 0) > 0);
+    const later = renderScreen(applyMorph(project, 16 * 48), ui, 0, false);
+    assert.equal(litRuns(later), 1);
+    assert.ok(columnSpan(later, 0) > 0);
+    const lead = renderScreen(project, { ...defaultUi(), context: "lead" }, 0, false);
+    assert.equal(litRuns(lead), 1);
+  });
+
   it("wraps ratchet tails into the phrase so the playhead still reaches the end", () => {
     const project = defaultProject();
     project.working.kick.ratchet.count = modulated(1);
@@ -1024,6 +1052,17 @@ describe("surface", () => {
     assert.deepEqual(state.project.sets[0].sceneIds, ["002"]);
   });
 });
+
+function litRuns(screen: Screen): number {
+  let runs = 0;
+  let on = false;
+  for (let x = 0; x < 128; x++) {
+    const lit = columnSpan(screen, x) > 0;
+    if (lit && !on) runs++;
+    on = lit;
+  }
+  return runs;
+}
 
 function columnSpan(screen: Screen, x: number): number {
   let count = 0;

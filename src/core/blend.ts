@@ -28,11 +28,13 @@ function gcd(a: number, b: number): number {
 /**
  * Both phrases are snapshots. Each event is kept by its place on the morph:
  * a source event at place p survives with probability 1−p, a destination event
- * with probability p. The two sets are united, doubles within half a 64th are
+ * with probability p. A kept event is scaled by that same weight, so a
+ * destination hit at 10% of the morph plays at 10% of its own velocity.
+ * The two sets are united, doubles within half a 64th are
  * dropped, and pitch is the note the owning side already printed. Chord stacks
  * stay at or under the busier side. The picture is fixed for one pass of the
- * lane loop, so the screen and the voice read the same phrase. Timbre still
- * follows t.
+ * blend span, and the voice plays that phrase. Bass and lead pages draw only
+ * the generator ring the cursor is in. Timbre still follows t.
  */
 export function blendPhrases(
   fromPhrase: Phrase,
@@ -123,7 +125,7 @@ function blendLane(
   const kept = all.filter(admitted);
   const chosen = lane === "chords" ? capVoices(kept, all) : dedupe(kept);
   chosen.sort((a, b) => a.event.tick - b.event.tick || a.event.note - b.event.note);
-  return finish(chosen.map((pick) => pick.event));
+  return finish(chosen.map(withMorphLevel));
 }
 
 function tag(events: readonly TimedEvent[], side: "src" | "dst", project: Project, lane: LaneId, spanTicks: number): Pick[] {
@@ -158,6 +160,12 @@ function passStart(project: Project, spanTicks: number): number {
 
 function admitted(pick: Pick): boolean {
   return pick.side === "src" ? pick.roll < 1 - pick.place : pick.roll < pick.place;
+}
+
+/** Source weight is 1−place, destination weight is place. This is not a lane velocity. */
+function withMorphLevel(pick: Pick): TimedEvent {
+  const level = pick.side === "src" ? 1 - pick.place : pick.place;
+  return { ...pick.event, velocity: pick.event.velocity * level };
 }
 
 function keepRank(place: number, side: "src" | "dst", roll: number): number {
