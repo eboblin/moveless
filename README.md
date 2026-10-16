@@ -70,7 +70,7 @@ A locked lane is left as it is. A knob turned during the morph keeps the value y
 
 **Wander** picks the next scene by itself and uses the current Transition. The intervals are 2, 8, 16, and 32 bars. Press the active rate again to turn Wander off. It reads the active Set, or the Journal when that Set is empty.
 
-**Copy** puts the newest Journal scene on the clipboard. Hold Copy and press a pad in Set mode to add that scene to the active Set. The Journal scene stays. **Delete** plus a scene pad always deletes that pattern: in Set it drops the reference from the active Set; in Journal it removes the scene and every Set link to it. **Delete** plus **Down** deletes the Set itself. **Up** and **Down** move between Sets.
+**Copy** puts the newest Journal scene on the clipboard. Hold Copy and press a pad in Set mode to add that scene to the active Set. The Journal scene stays. **Delete** plus a lane step restores that lane’s parameters to the factory defaults. Mute, lock, and the mixer stay. **Delete** plus a scene pad always deletes that pattern: in Set it drops the reference from the active Set; in Journal it removes the scene and every Set link to it. **Delete** plus **Down** deletes the Set itself. **Up** and **Down** move between Sets.
 
 ## Other controls
 

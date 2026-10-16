@@ -381,6 +381,33 @@ describe("dsp adapter", () => {
     assert.ok(fat > thin);
   });
 
+  it("keeps a sounding note's length and gives the next note the new one", () => {
+    const engine = createEngine();
+    const tempo = 120;
+    const loop = tickToSample(16 * SIXTEENTH_TICKS, tempo);
+    const second = tickToSample(8 * SIXTEENTH_TICKS, tempo);
+    const phrase = (lengthTicks: number) => [
+      { sample: 0, loop, lane: "bass" as const, note: 40, velocity: 100, lengthTicks, params: [] },
+      { sample: second, loop, lane: "bass" as const, note: 52, velocity: 100, lengthTicks, params: [] },
+    ];
+    loadPhrase(engine, phrase(192), tempo, true);
+    renderClock(engine, 128);
+    const sounding = engine.notes.find((voice) => voice.on);
+    assert.ok(sounding);
+    const left = sounding.left;
+    loadPhrase(engine, phrase(192 * 4), tempo, false);
+    const held = engine.notes.filter((voice) => voice.on);
+    assert.equal(held.length, 1);
+    assert.equal(held[0].freq, sounding.freq);
+    assert.ok(held[0].left <= left && held[0].left > left - 128);
+    renderClock(engine, second - engine.clock + 8);
+    const next = engine.notes.find((voice) => voice.on && voice.freq !== sounding.freq);
+    assert.ok(next);
+    const full = tickToSample(192 * 4, tempo);
+    assert.ok(next.left > full - 64);
+    assert.ok(next.left <= full);
+  });
+
   it("spreads pitched detune, fm and resonance into the note voice", () => {
     const engine = createEngine();
     loadPhrase(engine, [{

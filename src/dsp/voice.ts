@@ -149,12 +149,12 @@ export function loadPhrase(engine: Engine, events: LoopEvent[], tempo: number, r
   if (engine.clock > 0 && sig !== previous) catchHolding(engine);
 }
 
-/** Notes already under the playhead when a knob rebuilds the grid. Drums stay put. */
+/** Notes already under the playhead when a knob rebuilds the grid. Drums stay put. Length is not part of the grid: a sounding note keeps the length it started with, and the next note-on reads the new one. */
 function holdSig(events: LoopEvent[]): string {
   let sig = "";
   for (const event of events) {
     if (isDrumLane(event.lane)) continue;
-    sig += `${event.lane}:${event.sample}:${event.loop}:${event.note}:${event.lengthTicks};`;
+    sig += `${event.lane}:${event.sample}:${event.loop}:${event.note};`;
   }
   return sig;
 }

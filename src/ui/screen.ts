@@ -400,8 +400,8 @@ function drawPhrase(pixels: Uint8Array, project: Project, lane: LaneId, playhead
     minNote = Math.min(minNote, event.note);
     maxNote = Math.max(maxNote, event.note);
   }
+  const melodic = lane === "bass" || lane === "lead";
   for (const event of events) {
-    const [x0, x1] = bucket(wrapStep(event.tick / SIXTEENTH_TICKS, steps), steps, WIDTH);
     const height = lineHeight(event.velocity, maxEvent);
     const center = pitchCenter(event.note, minNote, maxNote, yTop, yBottom, maxEvent);
     let y0 = Math.round(center - (height - 1) / 2);
@@ -416,6 +416,11 @@ function drawPhrase(pixels: Uint8Array, project: Project, lane: LaneId, playhead
     }
     y0 = Math.max(yTop, y0);
     y1 = Math.min(yBottom, y1);
+    if (melodic) {
+      paintNoteLength(pixels, wrapStep(event.tick / SIXTEENTH_TICKS, steps), event.lengthTicks / SIXTEENTH_TICKS, steps, y0, y1);
+      continue;
+    }
+    const [x0, x1] = bucket(wrapStep(event.tick / SIXTEENTH_TICKS, steps), steps, WIDTH);
     const xEnd = x1 - x0 > 1 ? x1 - 1 : x1;
     for (let x = x0; x < xEnd; x++) {
       for (let y = y0; y <= y1; y++) set(pixels, x, y, 1);
@@ -459,6 +464,35 @@ function pitchCenter(note: number, minNote: number, maxNote: number, yTop: numbe
 function lineHeight(velocity: number, maxLine: number): number {
   const unit = Math.max(0, Math.min(1, velocity));
   return Math.max(1, Math.round(unit * maxLine));
+}
+
+/** Bass and lead span their length. A tail past the loop wraps; a note wider than one pixel keeps a 1px gap at its end. */
+function paintNoteLength(pixels: Uint8Array, step: number, lengthSteps: number, steps: number, y0: number, y1: number): void {
+  const span = Math.max(lengthSteps, 1 / Math.max(1, steps));
+  const paint = (from: number, to: number) => {
+    const a = Math.max(0, from);
+    const b = Math.min(WIDTH, to);
+    for (let x = a; x < b; x++) {
+      for (let y = y0; y <= y1; y++) set(pixels, x, y, 1);
+    }
+  };
+  if (span >= steps) {
+    paint(0, WIDTH);
+    return;
+  }
+  const x0 = (step / steps) * WIDTH;
+  let x1 = x0 + (span / steps) * WIDTH;
+  if (x1 < x0 + 1) x1 = x0 + 1;
+  if (x1 - x0 > 1) x1 -= 1;
+  const start = Math.floor(x0);
+  const end = Math.floor(x1);
+  if (end <= WIDTH) {
+    paint(start, Math.max(start + 1, end));
+    return;
+  }
+  paint(start, WIDTH);
+  const tail = end - WIDTH;
+  if (tail > 0) paint(0, tail);
 }
 
 function bucket(index: number, count: number, size: number): [number, number] {

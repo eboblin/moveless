@@ -4,6 +4,7 @@ import { clone } from "../src/core/clone.ts";
 import { unitForIndex } from "../src/core/clock.ts";
 import { defaultProject } from "../src/core/defaults.ts";
 import { modulated } from "../src/core/modulate.ts";
+import { applyMorph } from "../src/core/morph.ts";
 import { createSet, launchScene, record } from "../src/core/performance.ts";
 import { generatePhrase } from "../src/core/phrase.ts";
 import { lanePages, pageCount, pageGroup, pageGroupColor, pagesFor } from "../src/ui/pages.ts";
@@ -319,6 +320,7 @@ describe("surface", () => {
     project.working.bass.gen1 = { ...project.working.bass.gen1, length: 16, hits: 16, rotate: 0 };
     project.working.bass.gen2.hits = 0;
     project.working.bass.follow = 0;
+    project.working.bass.length = modulated(0);
     project.working.bass.repeat = modulated(unitForIndex(1, 8));
     project.working.bass.step = modulated(1);
     project.working.bass.pitch = modulated(0.2);
@@ -415,6 +417,7 @@ describe("surface", () => {
     const bassProject = defaultProject();
     bassProject.working.bass.pitch = modulated(0.5, 0, 8, 1);
     bassProject.working.bass.follow = 0;
+    bassProject.working.bass.length = modulated(0);
     bassProject.working.bass.gen1.hits = 8;
     const pitchPage = renderScreen(defaultProject(), { ...defaultUi(), context: "bass", page: 3 }, 0);
     assert.ok(pitchPage.digits.some((digit) => digit.cell === 0 && digit.amount.kind === "big" && digit.amount.n === 50));
@@ -436,6 +439,40 @@ describe("surface", () => {
     const chords = renderScreen(defaultProject(), { ...defaultUi(), context: "chords" }, 0);
     const chordNames = chords.labels.filter((label) => label.y === NAME_Y).map((label) => label.text);
     assert.deepEqual(chordNames, ["STA", "COU", "LEN", "MOT", "VAR", "MOO", "TEN", "WAY"]);
+  });
+
+  it("draws bass and lead notes across their length and wraps the tail", () => {
+    const project = defaultProject();
+    project.global.phrase = 1;
+    project.global.bar = 4;
+    for (const lane of ["bass", "lead"] as const) {
+      project.working[lane].gen1 = { ...project.working[lane].gen1, length: 16, hits: 1, rotate: 15, probability: 1 };
+      project.working[lane].gen2.hits = 0;
+      project.working[lane].follow = 0;
+      project.working[lane].length = modulated(1);
+    }
+    const bass = renderScreen(project, { ...defaultUi(), context: "bass" }, 0, false);
+    assert.equal(columnSpan(bass, 119), 0);
+    assert.ok(columnSpan(bass, 120) > 0);
+    assert.ok(columnSpan(bass, 120) <= VIZ_H / 2);
+    assert.ok(columnSpan(bass, 0) > 0);
+    assert.ok(columnSpan(bass, 22) > 0);
+    assert.equal(columnSpan(bass, 23), 0);
+    const lead = renderScreen(project, { ...defaultUi(), context: "lead" }, 0, false);
+    assert.ok(columnSpan(lead, 120) > 0);
+    assert.ok(columnSpan(lead, 0) > 0);
+    assert.equal(columnSpan(lead, 23), 0);
+
+    project.working.bass.gen1.rotate = 0;
+    project.working.bass.length = modulated(0.25);
+    const short = renderScreen(project, { ...defaultUi(), context: "bass" }, 0, false);
+    let run = 0;
+    for (let x = 0; x < 128; x++) {
+      if (columnSpan(short, x) > 0) run++;
+      else if (run) break;
+    }
+    assert.equal(run, 7);
+    assert.equal(columnSpan(short, 8), 0);
   });
 
   it("draws chord names with duration blocks, and a piano roll on the arp page", () => {
@@ -866,6 +903,43 @@ describe("surface", () => {
     current = reduce(current, { kind: "note", data1: 68, data2: 127 });
     assert.deepEqual(current.project.sets[0].sceneIds, ["001"]);
     assert.equal(relDelta(65), -63);
+  });
+
+  it("restores a lane to factory defaults with Delete and its step", () => {
+    let state = session();
+    state.project.working.bass.pitch.value = 0.9;
+    state.project.working.bass.gen1.hits = 7;
+    state.project.working.bass.follow = 0.1;
+    state.project.working.bass.sound.cutoff.value = 0.15;
+    state.project.working.lead.pitch.value = 0.2;
+    state.project.mute.bass = true;
+    state.project.lock.bass = true;
+    state.project.mixer.bass = 0.4;
+    const factory = defaultProject().working.bass;
+    state = reduce(state, { kind: "cc", data1: 119, data2: 127 });
+    state = reduce(state, { kind: "note", data1: 20, data2: 127 });
+    assert.equal(state.project.working.bass.pitch.value, factory.pitch.value);
+    assert.equal(state.project.working.bass.gen1.hits, factory.gen1.hits);
+    assert.equal(state.project.working.bass.follow, factory.follow);
+    assert.equal(state.project.working.bass.sound.cutoff.value, factory.sound.cutoff.value);
+    assert.equal(state.project.working.lead.pitch.value, 0.2);
+    assert.equal(state.project.mute.bass, true);
+    assert.equal(state.project.lock.bass, true);
+    assert.equal(state.project.mixer.bass, 0.4);
+    state = reduce(state, { kind: "note", data1: 20, data2: 0 });
+    assert.equal(state.ui.context, "bass");
+
+    let morph = record(defaultProject());
+    morph.working.kick.gen1.hits = 8;
+    morph = launchScene(morph, morph.journal[0].id, 0);
+    assert.ok(morph.morph);
+    morph.working.kick.gen1.hits = 1;
+    morph.working.snare.gen1.hits = 6;
+    state = { project: morph, ui: { ...defaultUi(), deleteHeld: true }, tick: 0, playing: false };
+    state = reduce(state, { kind: "note", data1: 16, data2: 127 });
+    assert.equal(state.project.working.snare.gen1.hits, 6);
+    const kept = applyMorph(state.project, (state.project.morph?.originTick ?? 0) + 1);
+    assert.equal(kept.working.kick.gen1.hits, defaultProject().working.kick.gen1.hits);
   });
 
   it("locks with Loop and switches journal and set from the menu button", () => {

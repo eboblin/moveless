@@ -519,6 +519,26 @@ describe("morph, journal, macros", () => {
     assertPeakHeld(bassDegree, "bass");
   });
 
+  it("holds a melodic note for the length knob", () => {
+    const project = bar(defaultProject());
+    project.working.bass.gen1.hits = 1;
+    project.working.bass.gen1.rotate = 0;
+    project.working.bass.gen1.probability = 1;
+    project.working.bass.gen2.hits = 0;
+    project.working.bass.length = modulated(1);
+    const full = generatePhrase(project).lanes.bass[0];
+    assert.ok(full);
+    assert.equal(full.lengthTicks, project.global.bar * SIXTEENTH_TICKS);
+    project.working.bass.length = modulated(0.5);
+    assert.equal(generatePhrase(project).lanes.bass[0].lengthTicks, Math.round(0.5 * project.global.bar * SIXTEENTH_TICKS));
+    project.working.lead.gen1.hits = 1;
+    project.working.lead.gen1.rotate = 0;
+    project.working.lead.gen1.probability = 1;
+    project.working.lead.gen2.hits = 0;
+    project.working.lead.length = modulated(0);
+    assert.equal(generatePhrase(project).lanes.lead[0].lengthTicks, 1);
+  });
+
   it("pulls repeats and density across lanes without rewriting them", () => {
     const project = defaultProject();
     project.working.bass.repeat = modulated(0.5);

@@ -655,7 +655,6 @@ static unsigned phrase_timing_sig(const Engine *engine) {
         h = (h ^ (unsigned)hit->loop) * 16777619u;
         h = (h ^ (unsigned)hit->lane) * 16777619u;
         h = (h ^ (unsigned)hit->note) * 16777619u;
-        h = (h ^ (unsigned)hit->ticks) * 16777619u;
     }
     return h;
 }

@@ -6,6 +6,7 @@ import {
   copyScene,
   cycleSet,
   deleteSet,
+  resetLane,
   launchScene,
   pasteClipboard,
   record,
@@ -88,6 +89,13 @@ function onCc(session: Session, cc: number, value: number, press: boolean): Sess
 function onStep(session: Session, index: number, press: boolean): Session {
   if (index < 7) {
     const lane = LANES[index];
+    if (session.ui.deleteHeld && press) {
+      return {
+        ...session,
+        project: resetLane(session.project, lane),
+        ui: { ...session.ui, heldLane: lane, laneDownTick: session.tick },
+      };
+    }
     if (session.ui.loopHeld && press) {
       return { ...session, project: toggleLock(session.project, lane) };
     }

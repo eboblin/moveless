@@ -1,6 +1,7 @@
 import { ticksPerBar } from "./clock.ts";
 import { clone } from "./clone.ts";
 import { defaultProject } from "./defaults.ts";
+import { fieldsOf } from "./fields.ts";
 import { hash01 } from "./hash.ts";
 import { applyMorph, retarget } from "./morph.ts";
 import {
@@ -127,6 +128,20 @@ export function toggleMute(project: Project, lane: LaneId): Project {
 
 export function toggleLock(project: Project, lane: LaneId): Project {
   return { ...project, lock: { ...project.lock, [lane]: !project.lock[lane] } };
+}
+
+/** Factory parameters for one lane. Mute, lock and the mixer stay. A running morph keeps the reset. */
+export function resetLane(project: Project, lane: LaneId): Project {
+  const working = clone(project.working);
+  working[lane] = clone(defaultProject().working[lane]);
+  if (!project.morph) return { ...project, working };
+  const prefix = `${lane}.`;
+  const punched = project.morph.punched.slice();
+  for (const field of fieldsOf(working)) {
+    if (!field.path.startsWith(prefix) || punched.includes(field.path)) continue;
+    punched.push(field.path);
+  }
+  return { ...project, working, morph: { ...project.morph, punched } };
 }
 
 export function createSet(project: Project, name: string): Project {
