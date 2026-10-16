@@ -20,7 +20,7 @@ const EUCLID_KIND = {
   length: "switch",
   hits: "switch",
   rotate: "switch",
-  probability: "lerp",
+  probability: "switch",
 } as const;
 
 const CHORD_PLAIN = {
@@ -29,11 +29,11 @@ const CHORD_PLAIN = {
   length: "switch",
   motion: "switch",
   variation: "switch",
-  mood: "lerp",
-  tension: "lerp",
+  mood: "switch",
+  tension: "switch",
   way: "switch",
-  spread: "lerp",
-  flow: "lerp",
+  spread: "switch",
+  flow: "switch",
   octaves: "switch",
   direction: "switch",
 } as const;
@@ -46,35 +46,29 @@ export function fieldsOf(lanes: Lanes): Field[] {
   return out;
 }
 
-function pushMod(out: Field[], prefix: string, value: Modulated): void {
-  const note = holdsNote(prefix);
+function pushMod(out: Field[], prefix: string, value: Modulated, timbre: boolean): void {
   for (const key of MOD_KEYS) {
-    const kind = note && (key === "value" || key === "amount") ? "switch" : MOD_KIND[key];
+    const kind = !timbre && (key === "value" || key === "amount") ? "switch" : MOD_KIND[key];
     out.push({ path: `${prefix}.${key}`, kind, value: value[key] });
   }
-}
-
-/** Pitch, octave and detune name the note. They stay put until the morph lands. */
-function holdsNote(prefix: string): boolean {
-  return prefix.endsWith(".pitch") || prefix.endsWith(".octave") || prefix.endsWith(".detune");
 }
 
 function pushEuclid(out: Field[], prefix: string, gen: EuclidGen): void {
   for (const key of Object.keys(EUCLID_KIND) as (keyof typeof EUCLID_KIND)[]) {
     out.push({ path: `${prefix}.${key}`, kind: EUCLID_KIND[key], value: gen[key] });
   }
-  pushMod(out, `${prefix}.velocity`, gen.velocity);
+  pushMod(out, `${prefix}.velocity`, gen.velocity, false);
 }
 
 function pushSound(out: Field[], prefix: string, sound: Record<string, Modulated>): void {
-  for (const id of Object.keys(sound).sort()) pushMod(out, `${prefix}.sound.${id}`, sound[id]);
+  for (const id of Object.keys(sound).sort()) pushMod(out, `${prefix}.sound.${id}`, sound[id], true);
 }
 
 function pushDrum(out: Field[], id: string, lane: DrumLane): void {
   pushEuclid(out, `${id}.gen1`, lane.gen1);
   pushEuclid(out, `${id}.gen2`, lane.gen2);
-  pushMod(out, `${id}.ratchet.count`, lane.ratchet.count);
-  pushMod(out, `${id}.ratchet.rate`, lane.ratchet.rate);
+  pushMod(out, `${id}.ratchet.count`, lane.ratchet.count, false);
+  pushMod(out, `${id}.ratchet.rate`, lane.ratchet.rate, false);
   pushSound(out, id, lane.sound);
 }
 
@@ -83,7 +77,7 @@ function pushPitched(out: Field[], id: string, lane: PitchedLane): void {
   pushEuclid(out, `${id}.gen2`, lane.gen2);
   out.push({ path: `${id}.follow`, kind: "switch", value: lane.follow });
   for (const key of ["pitch", "octave", "length", "repeat", "step"] as const) {
-    pushMod(out, `${id}.${key}`, lane[key]);
+    pushMod(out, `${id}.${key}`, lane[key], false);
   }
   pushSound(out, id, lane.sound);
 }
@@ -92,8 +86,8 @@ function pushChords(out: Field[], lane: ChordLane): void {
   for (const key of Object.keys(CHORD_PLAIN) as (keyof typeof CHORD_PLAIN)[]) {
     out.push({ path: `chords.${key}`, kind: CHORD_PLAIN[key], value: lane[key] });
   }
-  pushMod(out, "chords.rate", lane.rate);
-  pushMod(out, "chords.gate", lane.gate);
+  pushMod(out, "chords.rate", lane.rate, false);
+  pushMod(out, "chords.gate", lane.gate, false);
   pushSound(out, "chords", lane.sound);
 }
 

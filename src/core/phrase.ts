@@ -33,7 +33,7 @@ import {
   type TimedEvent,
 } from "./types.ts";
 
-let endCache: { key: string; fromPhrase: Phrase; toPhrase: Phrase; from: Lanes; to: Lanes } | null = null;
+let endCache: { key: string; fromPhrase: Phrase; toPhrase: Phrase } | null = null;
 
 const BASS_OCTAVE = 2;
 const LEAD_OCTAVE = 4;
@@ -97,13 +97,11 @@ export function generatePhrase(project: Project): Phrase {
   if (!endCache || endCache.key !== key) {
     endCache = {
       key,
-      from: ends.from,
-      to: ends.to,
       fromPhrase: phraseOf(project, ends.from),
       toPhrase: phraseOf(project, ends.to),
     };
   }
-  return blendPhrases(endCache.fromPhrase, endCache.toPhrase, endCache.from, endCache.to, project, morph.t);
+  return blendPhrases(endCache.fromPhrase, endCache.toPhrase, ends.from, ends.to, project, morph.t);
 }
 
 function phraseOf(project: Project, working: Lanes): Phrase {

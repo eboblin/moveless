@@ -65,7 +65,7 @@ export function phraseLoop(project: Project): LoopEvent[] {
   return out;
 }
 
-/** Sound parameters follow their generator for the whole note. Pitch and note choice stay at note on. */
+/** Sound parameters follow their generator for the whole note. Note pitch stays at note on. During a morph the same generators glide from one scene's timbre to the other's. */
 export function soundMotions(project: Project): Motion[] {
   const tempo = project.global.tempo;
   const morph = project.morph;
@@ -82,7 +82,7 @@ export function soundMotions(project: Project): Motion[] {
     const other = ends ? ends.to[lane].sound : null;
     const macros = project.lock[lane] ? {} : project.macros;
     for (const id of Object.keys(sound)) {
-      if (id === "pitch" || (ends && id === "detune")) continue;
+      if (id === "pitch") continue;
       const heard = withMacro(sound[id], macros[id] ?? 0);
       const mapped = mapSound(lane, { [id]: 0 })[0];
       if (!mapped) continue;

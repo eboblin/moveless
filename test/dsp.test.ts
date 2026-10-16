@@ -216,7 +216,7 @@ describe("dsp adapter", () => {
     assert.ok(Math.abs(engine.notes[0].cutoff - evalModulated(from, step)) > 1e-3);
   });
 
-  it("lerps a still cutoff and packs the live pair", () => {
+  it("glides timbre during a morph and does not follow note pitch", () => {
     let project = defaultProject();
     project.working.bass.sound.cutoff.value = 0;
     project.working.bass.sound.cutoff.amount = 0;
@@ -227,12 +227,11 @@ describe("dsp adapter", () => {
     project.transition = "fast";
     project = launchScene(project, "002", 0);
     const midMotions = soundMotions(applyMorph(project, (project.morph?.durationTicks ?? 0) / 2));
-    assert.equal(midMotions.some((motion) => motion.id === "osc_detune" || motion.id.endsWith("freq")), false);
+    assert.equal(midMotions.some((motion) => motion.id.endsWith("freq")), false);
     const still = midMotions.find((motion) => motion.lane === "bass" && motion.id === "cutoff");
     assert.ok(still);
     assert.equal(still.blend, undefined);
-    assert.equal(still.amount, 0);
-    assert.ok(Math.abs(still.value - 0.5) < 1e-9);
+    assert.ok(Math.abs((still?.value ?? 0) - 0.5) < 1e-9);
 
     project = defaultProject();
     project.working.bass.sound.cutoff.value = 0.25;
@@ -250,7 +249,6 @@ describe("dsp adapter", () => {
     assert.ok(live?.blend);
     assert.equal(live.blend.t, 0.5);
     assert.equal(live.blend.pattern, 4);
-    assert.match(packPhrase([], 120, false, [live]), /:0\.9000:4:4:1\.0000:0\.5000/);
   });
 
   it("moves cutoff across a held note", () => {

@@ -26,10 +26,13 @@ function gcd(a: number, b: number): number {
 }
 
 /**
- * Every lane keeps the events its own probability already produced. During a
- * morph each of those events gets a second chance: the start phrase goes from
- * 1 to 0, the destination from 0 to 1. A note on the same tick in both stays.
- * Timbre glides the whole way.
+ * Both phrases are snapshots. Each event is kept by its place on the morph:
+ * a source event at place p survives with probability 1−p, a destination event
+ * with probability p. The two sets are united, doubles within half a 64th are
+ * dropped, and pitch is the note the owning side already printed. Chord stacks
+ * stay at or under the busier side. The picture is fixed for one pass of the
+ * lane loop, so the screen and the voice read the same phrase. Timbre still
+ * follows t.
  */
 export function blendPhrases(
   fromPhrase: Phrase,
@@ -47,26 +50,17 @@ export function blendPhrases(
       : Math.max(cap, fromPhrase.steps[lane], toPhrase.steps[lane]);
     steps[lane] = morphWindow(fromPhrase.steps[lane], toPhrase.steps[lane], limit);
   }
-  const aligned = LANES.every((lane) => steps[lane] === fromPhrase.steps[lane]);
-  if (t <= 0 && aligned) return fromPhrase;
   const tempo = project.global.tempo;
   const lanes = {} as Phrase["lanes"];
   for (const lane of LANES) {
     const fromEvents = tile(fromPhrase.lanes[lane], fromPhrase.steps[lane], steps[lane], tempo);
     const toEvents = tile(toPhrase.lanes[lane], toPhrase.steps[lane], steps[lane], tempo);
-    if (t <= 0) {
-      lanes[lane] = fromEvents;
-      continue;
-    }
-    if (t >= 1) {
-      lanes[lane] = toEvents;
-      continue;
-    }
-    lanes[lane] = blendLane(fromEvents, toEvents, fromLanes, toLanes, project, lane, t);
+    const spanTicks = Math.max(1, steps[lane] * SIXTEENTH_TICKS);
+    lanes[lane] = blendLane(fromEvents, toEvents, fromLanes[lane].sound, toLanes[lane].sound, project, lane, spanTicks, t);
   }
   return {
     lanes,
-    harmony: blendHarmony(fromPhrase.harmony, toPhrase.harmony, t),
+    harmony: blendHarmony(fromPhrase.harmony, toPhrase.harmony, project, Math.max(1, steps.chords * SIXTEENTH_TICKS)),
     steps,
   };
 }
@@ -97,118 +91,137 @@ function tile(events: readonly TimedEvent[], nativeSteps: number, span: number, 
   return out;
 }
 
+/** Half a 64th. Neighboring 64ths stay apart; swung sixteenths are farther. */
+const SAME_PLACE_TICKS = 6;
+
+interface Pick {
+  event: TimedEvent;
+  side: "src" | "dst";
+  place: number;
+  roll: number;
+}
+
 function blendLane(
   fromEvents: readonly TimedEvent[],
   toEvents: readonly TimedEvent[],
-  fromLanes: Lanes,
-  toLanes: Lanes,
+  soundFrom: Record<string, Modulated>,
+  soundTo: Record<string, Modulated>,
   project: Project,
   lane: LaneId,
+  spanTicks: number,
   t: number,
 ): TimedEvent[] {
-  const pool = toEvents.slice();
-  const claimed = new Set<number>();
-  const out: TimedEvent[] = [];
-  for (const event of fromEvents) {
-    const twin = takeTwin(pool, claimed, event);
-    if (twin >= 0) {
-      const other = pool[twin];
-      if (!other) continue;
-      out.push(paint(event, event.velocity, event.lengthTicks, event.sound, other.sound, fromLanes, toLanes, project, lane, t));
-      continue;
-    }
-    if (admits(project, lane, event, t, "from")) out.push(scaled(event, fromLanes, toLanes, project, lane, t, "from"));
-  }
-  pool.forEach((event, index) => {
-    if (claimed.has(index)) return;
-    if (admits(project, lane, event, t, "to")) out.push(scaled(event, fromLanes, toLanes, project, lane, t, "to"));
+  const macros = project.lock[lane] ? {} : project.macros;
+  const finish = (events: readonly TimedEvent[]) => events.map((event) => ({
+    ...event,
+    sound: stampPitch(event, mixSound(event.step, t, soundFrom, soundTo, macros)),
+  }));
+  if (project.lock[lane]) return finish(fromEvents);
+  const src = tag(fromEvents, "src", project, lane, spanTicks);
+  const dst = tag(toEvents, "dst", project, lane, spanTicks);
+  const all = [...src, ...dst];
+  const kept = all.filter(admitted);
+  const chosen = lane === "chords" ? capVoices(kept, all) : dedupe(kept);
+  chosen.sort((a, b) => a.event.tick - b.event.tick || a.event.note - b.event.note);
+  return finish(chosen.map((pick) => pick.event));
+}
+
+function tag(events: readonly TimedEvent[], side: "src" | "dst", project: Project, lane: LaneId, spanTicks: number): Pick[] {
+  const start = passStart(project, spanTicks);
+  const span = Math.max(1, spanTicks);
+  return events.map((event) => {
+    const rel = ((event.tick % span) + span) % span;
+    const absolute = start + rel;
+    const place = morphPlace(project, absolute);
+    return { event, side, place, roll: hash01(project.global.seed, lane, side, absolute, event.note) };
   });
-  out.sort((x, y) => x.tick - y.tick || x.note - y.note);
+}
+
+/** 0 at the morph start, 1 at its end. A source event is kept with probability 1−place. */
+function morphPlace(project: Project, absolute: number): number {
+  const morph = project.morph;
+  if (!morph || morph.durationTicks <= 0) return 1;
+  const raw = (absolute - morph.originTick) / morph.durationTicks;
+  if (raw <= 0) return 0;
+  if (raw >= 1) return 1;
+  return raw;
+}
+
+/** Start of the lane loop the cursor is in. The picture holds until that loop wraps. */
+function passStart(project: Project, spanTicks: number): number {
+  const morph = project.morph;
+  const loop = Math.max(1, spanTicks);
+  if (!morph) return 0;
+  const now = morph.originTick + morph.t * Math.max(0, morph.durationTicks);
+  return Math.floor(now / loop) * loop;
+}
+
+function admitted(pick: Pick): boolean {
+  return pick.side === "src" ? pick.roll < 1 - pick.place : pick.roll < pick.place;
+}
+
+function rank(pick: Pick): number {
+  const favored = pick.place < 0.5 ? pick.side === "src" : pick.side === "dst";
+  const margin = pick.side === "src" ? 1 - pick.place - pick.roll : pick.place - pick.roll;
+  return (favored ? 2 : 0) + margin;
+}
+
+function cluster(picks: readonly Pick[]): Pick[][] {
+  const sorted = [...picks].sort((a, b) => a.event.tick - b.event.tick || a.event.note - b.event.note);
+  const groups: Pick[][] = [];
+  for (const item of sorted) {
+    const group = groups[groups.length - 1];
+    const first = group?.[0];
+    if (!group || !first || item.event.tick - first.event.tick > SAME_PLACE_TICKS) groups.push([item]);
+    else group.push(item);
+  }
+  return groups;
+}
+
+function dedupe(picks: readonly Pick[]): Pick[] {
+  return cluster(picks).map((group) => group.reduce((best, item) => (rank(item) > rank(best) ? item : best)));
+}
+
+/** A chord may keep at most max(source voices, destination voices) at one place. */
+function capVoices(admitted: readonly Pick[], all: readonly Pick[]): Pick[] {
+  const out: Pick[] = [];
+  for (const place of cluster(all)) {
+    const from = place[0]?.event.tick ?? 0;
+    const to = place[place.length - 1]?.event.tick ?? from;
+    const group = admitted.filter((item) => item.event.tick >= from && item.event.tick <= to);
+    const src = new Set(place.filter((item) => item.side === "src").map((item) => item.event.note));
+    const dst = new Set(place.filter((item) => item.side === "dst").map((item) => item.event.note));
+    const cap = Math.max(src.size, dst.size);
+    const ranked = [...group].sort((a, b) => rank(b) - rank(a) || a.event.tick - b.event.tick || a.event.note - b.event.note);
+    const seen = new Set<number>();
+    for (const item of ranked) {
+      if (seen.has(item.event.note) || seen.size >= cap) continue;
+      seen.add(item.event.note);
+      out.push(item);
+    }
+  }
   return out;
 }
 
-/** Same tick and note in both phrases. The two morph chances add up to a sure hit. */
-function takeTwin(pool: TimedEvent[], claimed: Set<number>, event: TimedEvent): number {
-  for (let i = 0; i < pool.length; i++) {
-    if (claimed.has(i)) continue;
-    const other = pool[i];
-    if (!other || other.tick !== event.tick || other.note !== event.note) continue;
-    claimed.add(i);
-    return i;
-  }
-  return -1;
-}
-
-/** Start events survive while their roll is at least t. Destination events arrive once t passes the roll. */
-function admits(project: Project, lane: LaneId, event: TimedEvent, t: number, side: "from" | "to"): boolean {
-  const roll = hash01(project.global.seed, lane, "morph", event.tick, event.note);
-  return side === "from" ? roll >= t : roll < t;
-}
-
-function scaled(
-  event: TimedEvent,
-  fromLanes: Lanes,
-  toLanes: Lanes,
-  project: Project,
-  lane: LaneId,
-  t: number,
-  side: "from" | "to",
-): TimedEvent {
-  return paint(
-    event,
-    event.velocity,
-    event.lengthTicks,
-    side === "from" ? event.sound : null,
-    side === "to" ? event.sound : null,
-    fromLanes,
-    toLanes,
-    project,
-    lane,
-    t,
-  );
-}
-
-function paint(
-  event: TimedEvent,
-  velocity: number,
-  lengthTicks: number,
-  bakedFrom: Record<string, number> | null,
-  bakedTo: Record<string, number> | null,
-  fromLanes: Lanes,
-  toLanes: Lanes,
-  project: Project,
-  lane: LaneId,
-  t: number,
-): TimedEvent {
-  return {
-    ...event,
-    velocity,
-    lengthTicks,
-    sound: mixSound(bakedFrom, bakedTo, event.step, t, fromLanes[lane].sound, toLanes[lane].sound, project.lock[lane] ? {} : project.macros),
-  };
+function stampPitch(event: TimedEvent, sound: Record<string, number>): Record<string, number> {
+  if (event.sound.pitch === undefined) return sound;
+  return { ...sound, pitch: event.sound.pitch };
 }
 
 function mixSound(
-  bakedFrom: Record<string, number> | null,
-  bakedTo: Record<string, number> | null,
   step: number,
   t: number,
   soundFrom: Record<string, Modulated>,
   soundTo: Record<string, Modulated>,
   macros: Record<string, number>,
 ): Record<string, number> {
-  const ids = new Set([...Object.keys(soundFrom), ...Object.keys(soundTo)]);
   const out: Record<string, number> = {};
-  for (const id of ids) {
+  for (const id of new Set([...Object.keys(soundFrom), ...Object.keys(soundTo)])) {
+    if (id === "pitch") continue;
     const macro = macros[id] ?? 0;
-    if (id === "pitch" || id === "detune") {
-      const owned = bakedFrom && id in bakedFrom ? bakedFrom[id] : bakedTo && id in bakedTo ? bakedTo[id] : undefined;
-      out[id] = clamp01(owned ?? heard(soundFrom[id] ?? soundTo[id], macro, step));
-      continue;
-    }
-    const from = bakedFrom && id in bakedFrom ? bakedFrom[id] : heard(soundFrom[id] ?? soundTo[id], macro, step);
-    const to = bakedTo && id in bakedTo ? bakedTo[id] : heard(soundTo[id] ?? soundFrom[id], macro, step);
-    out[id] = clamp01(lerp(from, to, t));
+    const from = heard(soundFrom[id] ?? soundTo[id], macro, step);
+    const to = heard(soundTo[id] ?? soundFrom[id], macro, step);
+    out[id] = clamp01(from + (to - from) * t);
   }
   return out;
 }
@@ -218,11 +231,44 @@ function heard(modulated: Modulated | undefined, macro: number, step: number): n
   return evalModulated(withMacro(modulated, macro), step);
 }
 
-function lerp(from: number, to: number, t: number): number {
-  return from + (to - from) * t;
+interface ChordPick {
+  event: HarmonicEvent;
+  side: "src" | "dst";
+  place: number;
+  roll: number;
 }
 
-/** Chord names follow the notes: the start progression until halfway, then the target. */
-function blendHarmony(from: readonly HarmonicEvent[], to: readonly HarmonicEvent[], t: number): HarmonicEvent[] {
-  return (t < 0.5 ? from : to).slice();
+/** Chord names follow the same place rule, then collapse to one name per spot. */
+function blendHarmony(from: readonly HarmonicEvent[], to: readonly HarmonicEvent[], project: Project, spanTicks: number): HarmonicEvent[] {
+  if (project.lock.chords) return from.slice();
+  const start = passStart(project, spanTicks);
+  const span = Math.max(1, spanTicks);
+  const picks: ChordPick[] = [];
+  for (const event of from) {
+    const rel = ((event.startTick % span) + span) % span;
+    const place = morphPlace(project, start + rel);
+    const roll = hash01(project.global.seed, "chords", "src", start + rel, event.root);
+    if (roll < 1 - place) picks.push({ event, side: "src", place, roll });
+  }
+  for (const event of to) {
+    const rel = ((event.startTick % span) + span) % span;
+    const place = morphPlace(project, start + rel);
+    const roll = hash01(project.global.seed, "chords", "dst", start + rel, event.root);
+    if (roll < place) picks.push({ event, side: "dst", place, roll });
+  }
+  const sorted = [...picks].sort((a, b) => a.event.startTick - b.event.startTick || a.event.root - b.event.root);
+  const groups: ChordPick[][] = [];
+  for (const item of sorted) {
+    const group = groups[groups.length - 1];
+    const first = group?.[0];
+    if (!group || !first || item.event.startTick - first.event.startTick > SAME_PLACE_TICKS) groups.push([item]);
+    else group.push(item);
+  }
+  return groups.map((group) => group.reduce((best, item) => (chordRank(item) > chordRank(best) ? item : best)).event);
+}
+
+function chordRank(pick: ChordPick): number {
+  const favored = pick.place < 0.5 ? pick.side === "src" : pick.side === "dst";
+  const margin = pick.side === "src" ? 1 - pick.place - pick.roll : pick.place - pick.roll;
+  return (favored ? 2 : 0) + margin;
 }
