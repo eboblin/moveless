@@ -226,7 +226,9 @@ describe("dsp adapter", () => {
     project.working = clone(project.journal[0].lanes);
     project.transition = "fast";
     project = launchScene(project, "002", 0);
-    const still = soundMotions(applyMorph(project, (project.morph?.durationTicks ?? 0) / 2)).find((motion) => motion.lane === "bass" && motion.id === "cutoff");
+    const midMotions = soundMotions(applyMorph(project, (project.morph?.durationTicks ?? 0) / 2));
+    assert.equal(midMotions.some((motion) => motion.id === "osc_detune" || motion.id.endsWith("freq")), false);
+    const still = midMotions.find((motion) => motion.lane === "bass" && motion.id === "cutoff");
     assert.ok(still);
     assert.equal(still.blend, undefined);
     assert.equal(still.amount, 0);

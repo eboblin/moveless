@@ -47,9 +47,16 @@ export function fieldsOf(lanes: Lanes): Field[] {
 }
 
 function pushMod(out: Field[], prefix: string, value: Modulated): void {
+  const note = holdsNote(prefix);
   for (const key of MOD_KEYS) {
-    out.push({ path: `${prefix}.${key}`, kind: MOD_KIND[key], value: value[key] });
+    const kind = note && (key === "value" || key === "amount") ? "switch" : MOD_KIND[key];
+    out.push({ path: `${prefix}.${key}`, kind, value: value[key] });
   }
+}
+
+/** Pitch, octave and detune name the note. They stay put until the morph lands. */
+function holdsNote(prefix: string): boolean {
+  return prefix.endsWith(".pitch") || prefix.endsWith(".octave") || prefix.endsWith(".detune");
 }
 
 function pushEuclid(out: Field[], prefix: string, gen: EuclidGen): void {
@@ -74,7 +81,7 @@ function pushDrum(out: Field[], id: string, lane: DrumLane): void {
 function pushPitched(out: Field[], id: string, lane: PitchedLane): void {
   pushEuclid(out, `${id}.gen1`, lane.gen1);
   pushEuclid(out, `${id}.gen2`, lane.gen2);
-  out.push({ path: `${id}.follow`, kind: "lerp", value: lane.follow });
+  out.push({ path: `${id}.follow`, kind: "switch", value: lane.follow });
   for (const key of ["pitch", "octave", "length", "repeat", "step"] as const) {
     pushMod(out, `${id}.${key}`, lane[key]);
   }

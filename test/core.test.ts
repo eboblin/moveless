@@ -500,20 +500,32 @@ describe("morph, journal, macros", () => {
     const project = morphPair(
       (item) => {
         item.working.bass.pitch.value = 0.2;
+        item.working.bass.octave.value = 0.2;
+        item.working.bass.follow = 0;
         item.working.bass.gen1.hits = 3;
         item.working.bass.gen1.probability = 0.7;
         item.working.bass.sound.cutoff.value = 0;
         item.working.bass.sound.cutoff.amount = 0;
+        item.working.bass.sound.detune.value = 0;
+        item.working.bass.sound.detune.amount = 0;
+        item.working.kick.sound.pitch.value = 0.15;
+        item.working.kick.sound.pitch.amount = 0;
         item.working.lead.pitch.value = 0.25;
         item.working.chords.start = 0;
         item.working.chords.mood = 0;
       },
       (item) => {
         item.working.bass.pitch.value = 0.9;
+        item.working.bass.octave.value = 0.8;
+        item.working.bass.follow = 1;
         item.working.bass.gen1.hits = 6;
         item.working.bass.gen1.probability = 1;
         item.working.bass.sound.cutoff.value = 1;
         item.working.bass.sound.cutoff.amount = 0;
+        item.working.bass.sound.detune.value = 1;
+        item.working.bass.sound.detune.amount = 0;
+        item.working.kick.sound.pitch.value = 0.85;
+        item.working.kick.sound.pitch.amount = 0;
         item.working.lead.pitch.value = 0.85;
         item.working.chords.start = 4;
         item.working.chords.mood = 1;
@@ -525,6 +537,12 @@ describe("morph, journal, macros", () => {
     const early = generatePhrase(applyMorph(project, duration * 0.25));
     const late = generatePhrase(applyMorph(project, duration * 0.75));
     assert.equal(project.working.bass.gen1.probability, 0.7);
+    const riding = applyMorph(project, duration * 0.25);
+    assert.equal(riding.working.bass.pitch.value, 0.2);
+    assert.equal(riding.working.bass.octave.value, 0.2);
+    assert.equal(riding.working.bass.follow, 0);
+    assert.equal(riding.working.bass.sound.detune.value, 0);
+    assert.equal(riding.working.kick.sound.pitch.value, 0.15);
     for (const lane of ["bass", "lead", "chords"] as const) {
       const parts = splitSig(noteSig(start, lane), noteSig(goal, lane));
       assert.ok(parts.onlyA.length > 0 && parts.onlyB.length > 0);
@@ -539,7 +557,13 @@ describe("morph, journal, macros", () => {
         const source = start.lanes[lane].find((item) => `${item.tick}:${item.note}:${item.lengthTicks}` === key)
           ?? goal.lanes[lane].find((item) => `${item.tick}:${item.note}:${item.lengthTicks}` === key);
         assert.equal(event.velocity, source?.velocity);
+        if (lane === "bass") assert.equal(event.sound.detune, source?.sound.detune);
       }
+    }
+    for (const event of [...early.lanes.kick, ...late.lanes.kick]) {
+      const source = start.lanes.kick.find((item) => item.tick === event.tick) ?? goal.lanes.kick.find((item) => item.tick === event.tick);
+      assert.equal(event.sound.pitch, source?.sound.pitch);
+      assert.ok(event.sound.pitch === 0.15 || event.sound.pitch === 0.85);
     }
     assert.ok(early.lanes.bass.length > 0);
     assert.ok(early.lanes.bass.every((event) => Math.abs(event.sound.cutoff - 0.25) < 1e-6));

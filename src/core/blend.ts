@@ -201,6 +201,11 @@ function mixSound(
   const out: Record<string, number> = {};
   for (const id of ids) {
     const macro = macros[id] ?? 0;
+    if (id === "pitch" || id === "detune") {
+      const owned = bakedFrom && id in bakedFrom ? bakedFrom[id] : bakedTo && id in bakedTo ? bakedTo[id] : undefined;
+      out[id] = clamp01(owned ?? heard(soundFrom[id] ?? soundTo[id], macro, step));
+      continue;
+    }
     const from = bakedFrom && id in bakedFrom ? bakedFrom[id] : heard(soundFrom[id] ?? soundTo[id], macro, step);
     const to = bakedTo && id in bakedTo ? bakedTo[id] : heard(soundTo[id] ?? soundFrom[id], macro, step);
     out[id] = clamp01(lerp(from, to, t));

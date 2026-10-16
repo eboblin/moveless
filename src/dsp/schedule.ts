@@ -82,7 +82,7 @@ export function soundMotions(project: Project): Motion[] {
     const other = ends ? ends.to[lane].sound : null;
     const macros = project.lock[lane] ? {} : project.macros;
     for (const id of Object.keys(sound)) {
-      if (id === "pitch") continue;
+      if (id === "pitch" || (ends && id === "detune")) continue;
       const heard = withMacro(sound[id], macros[id] ?? 0);
       const mapped = mapSound(lane, { [id]: 0 })[0];
       if (!mapped) continue;
