@@ -230,10 +230,16 @@ export function restingChordToneLabel(lane: ChordLane, global: GlobalSettings): 
   return noteLabel(chordToneMidi(harm, scale, rootPc, lane.tone.value, lane.octave.value));
 }
 
-function chordVoices(harm: HarmonicEvent, scale: readonly number[], rootPc: number, octaveUnit: number): number[] {
+function chordPitchClasses(harm: HarmonicEvent, scale: readonly number[], rootPc: number): number[] {
   const semis = QUALITY_SEMITONES[harm.quality] ?? QUALITY_SEMITONES[0];
-  const base = octaveNumber(octaveUnit) * 12 + degreeToMidi(harm.root, scale, rootPc, 0);
-  return semis.map((semi) => base + semi);
+  const root = mod(degreeToMidi(harm.root, scale, rootPc, 0), 12);
+  return [...new Set(semis.map((semi) => mod(root + semi, 12)))].sort((a, b) => a - b);
+}
+
+/** Every chord of the phrase shares the selected octave, so a walking root does not drag the voicing. */
+function chordVoices(harm: HarmonicEvent, scale: readonly number[], rootPc: number, octaveUnit: number): number[] {
+  const base = octaveNumber(octaveUnit) * 12;
+  return chordPitchClasses(harm, scale, rootPc).map((pc) => base + pc);
 }
 
 function chordToneMidi(
@@ -243,8 +249,10 @@ function chordToneMidi(
   toneUnit: number,
   octaveUnit: number,
 ): number {
-  const voices = chordVoices(harm, scale, rootPc, octaveUnit);
-  return voices[chordToneIndex(toneUnit, voices.length)] ?? voices[0] ?? 0;
+  const semis = QUALITY_SEMITONES[harm.quality] ?? QUALITY_SEMITONES[0];
+  const semi = semis[chordToneIndex(toneUnit, semis.length)] ?? 0;
+  const root = mod(degreeToMidi(harm.root, scale, rootPc, 0), 12);
+  return octaveNumber(octaveUnit) * 12 + mod(root + semi, 12);
 }
 
 export function generatePhrase(project: Project): Phrase {

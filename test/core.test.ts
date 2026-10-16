@@ -803,6 +803,23 @@ describe("harmony", () => {
     }
   });
 
+  it("keeps a descending walk inside the selected octave", () => {
+    const project = bar(defaultProject(), 1);
+    project.global.phrase = 4;
+    project.working.chords.count = 8;
+    project.working.chords.motion = 1;
+    project.working.chords.way = 1;
+    project.working.chords.variation = 0;
+    project.working.chords.rate = modulated(0);
+    project.working.chords.tension = 0.5;
+    const notes = generatePhrase(project).lanes.chords.map((event) => event.note);
+    assert.ok(notes.length > 8);
+    const low = Math.min(...notes);
+    const high = Math.max(...notes);
+    assert.ok(low >= 48 && high <= 59);
+    assert.ok(high - low < 12);
+  });
+
   it("rereads rate and gate before the chord ends", () => {
     const project = bar(defaultProject(), 1);
     project.global.phrase = 1;
