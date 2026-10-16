@@ -431,9 +431,8 @@ function drawPhrase(pixels: Uint8Array, project: Project, phrase: Phrase, lane: 
 }
 
 /**
- * Bass and lead are baked across the phrase so follow can see later chords.
- * During a morph that filmstrip is the whole pattern. The lane page shows one
- * pass of this lane's own generator ring, the pass the cursor is in.
+ * Bass and lead span the phrase so follow can see later chords. The lane page
+ * shows one pass of this lane's generator ring, the pass the cursor is in.
  */
 function lanePicture(project: Project, phrase: Phrase, lane: LaneId, playhead: number): { steps: number; events: TimedEvent[]; playhead: number } {
   const full = Math.max(1, phrase.steps[lane]);

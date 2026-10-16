@@ -364,7 +364,7 @@ describe("morph, journal, macros", () => {
     assert.equal(project.mixer.master, 0.2);
   });
 
-  it("blends kick hits across the morph and lands on the target phrase", () => {
+  it("plays the source pattern until the halfway bar, then the target", () => {
     let project = defaultProject();
     project.working.kick.gen1.hits = 4;
     project.working.kick.gen1.rotate = 0;
@@ -379,39 +379,28 @@ describe("morph, journal, macros", () => {
     project.working.chords.start = 3;
     project = record(project);
     project.working = clone(project.journal[0].lanes);
-    project.transition = "fast";
+    project.transition = "medium";
     project = launchScene(project, "002", 0);
     const duration = project.morph?.durationTicks ?? 0;
     const start = generatePhrase({ ...project, morph: null, working: project.morph!.start });
     const goal = generatePhrase({ ...project, morph: null, working: project.journal[1].lanes });
-    const at0 = generatePhrase(project);
-    const ticks = (phrase: ReturnType<typeof generatePhrase>) => new Set(phrase.lanes.kick.map((event) => event.tick));
-    const setA = ticks(start);
-    const setB = ticks(goal);
-    const onlyA = [...setA].filter((tick) => !setB.has(tick));
-    const onlyB = [...setB].filter((tick) => !setA.has(tick));
-    const shared = [...setA].filter((tick) => setB.has(tick));
-    assert.ok(onlyA.length > 0);
-    assert.ok(onlyB.length > 0);
-    assert.ok(shared.length > 0);
+    assert.notDeepEqual(kickSig(start), kickSig(goal));
+    assert.notDeepEqual(start.harmony.map((event) => event.root), goal.harmony.map((event) => event.root));
 
-    const built = [...ticks(at0)].sort((a, b) => a - b);
-    assert.ok(built.every((tick) => setA.has(tick) || setB.has(tick)));
-    if (setA.has(0)) assert.ok(built.includes(0));
-    if (!setA.has(0) && setB.has(0)) assert.equal(built.includes(0), false);
-    for (let i = 1; i <= 19; i++) {
-      const have = [...ticks(generatePhrase(applyMorph(project, (i / 20) * duration)))].sort((a, b) => a - b);
-      assert.deepEqual(have, built);
-    }
-    assert.deepEqual(
-      generatePhrase(applyMorph(project, duration / 2)).harmony.map((event) => event.root),
-      at0.harmony.map((event) => event.root),
-    );
+    const before = generatePhrase(applyMorph(project, duration / 2 - 1));
+    assert.deepEqual(kickSig(before), kickSig(start));
+    assert.deepEqual(before.harmony.map((event) => event.root), start.harmony.map((event) => event.root));
+    const early = generatePhrase(applyMorph(project, duration * 0.2));
+    assert.deepEqual(kickSig(early), kickSig(start));
+    assert.ok(early.lanes.kick.length > 0);
+    assert.ok(early.lanes.kick.every((event) => Math.abs(event.sound.decay - 0.2) < 1e-6));
 
-    const mid = applyMorph(project, duration / 2);
-    const midKick = generatePhrase(mid).lanes.kick;
-    assert.ok(midKick.length > 0);
-    assert.ok(midKick.every((event) => Math.abs(event.sound.decay - 0.5) < 1e-6));
+    const halfway = generatePhrase(applyMorph(project, duration / 2));
+    assert.deepEqual(kickSig(halfway), kickSig(goal));
+    assert.deepEqual(halfway.harmony.map((event) => event.root), goal.harmony.map((event) => event.root));
+    assert.ok(halfway.lanes.kick.every((event) => Math.abs(event.sound.decay - 0.5) < 1e-6));
+    const later = generatePhrase(applyMorph(project, duration * 0.8));
+    assert.deepEqual(kickSig(later), kickSig(goal));
 
     const done = applyMorph(project, duration);
     assert.equal(done.morph, null);
@@ -477,7 +466,7 @@ describe("morph, journal, macros", () => {
     assert.ok(punched.lanes.kick.every((event) => Math.abs(event.sound.decay - 0.2) < 1e-6));
   });
 
-  it("holds the sounding pattern for one cursor pass, then takes the next", () => {
+  it("holds the pattern for the whole bar and hands it over on the downbeat", () => {
     let project = defaultProject();
     project.global.phrase = 1;
     project.working.bass.gen1 = { ...project.working.bass.gen1, length: 16, hits: 2, rotate: 0, probability: 1 };
@@ -491,59 +480,55 @@ describe("morph, journal, macros", () => {
     project.transition = "medium";
     project = launchScene(project, "002", 0);
     const bar = project.global.bar * 192;
+    const duration = project.morph?.durationTicks ?? 0;
     const start = generatePhrase({ ...project, morph: null, working: project.morph!.start });
     const goal = generatePhrase({ ...project, morph: null, working: project.journal[1].lanes });
+    assert.notDeepEqual(noteSig(start, "bass"), noteSig(goal, "bass"));
     const first = generatePhrase(project);
-    const beforeWrap = generatePhrase(applyMorph(project, bar - 1));
-    assert.deepEqual(noteSig(beforeWrap, "bass"), noteSig(first, "bass"));
-    const next = generatePhrase(applyMorph(project, bar));
-    const held = generatePhrase(applyMorph(project, bar * 2 - 1));
-    assert.deepEqual(noteSig(held, "bass"), noteSig(next, "bass"));
-    for (const phrase of [first, next]) {
-      const ticks = phrase.lanes.bass.map((event) => event.tick).sort((a, b) => a - b);
-      for (let i = 1; i < ticks.length; i++) assert.ok((ticks[i] ?? 0) - (ticks[i - 1] ?? 0) > 6);
-      for (const event of phrase.lanes.bass) {
-        const key = `${event.tick}:${event.note}:${event.lengthTicks}`;
-        const from = start.lanes.bass.some((item) => `${item.tick}:${item.note}:${item.lengthTicks}` === key);
-        const to = goal.lanes.bass.some((item) => `${item.tick}:${item.note}:${item.lengthTicks}` === key);
-        assert.ok(from || to);
-      }
-    }
+    const endOfBar = generatePhrase(applyMorph(project, bar - 1));
+    assert.deepEqual(noteSig(first, "bass"), noteSig(start, "bass"));
+    assert.deepEqual(noteSig(endOfBar, "bass"), noteSig(start, "bass"));
+    const nextBar = generatePhrase(applyMorph(project, bar));
+    assert.deepEqual(noteSig(nextBar, "bass"), noteSig(start, "bass"));
+    const handed = generatePhrase(applyMorph(project, duration / 2));
+    const held = generatePhrase(applyMorph(project, duration / 2 + bar - 1));
+    assert.deepEqual(noteSig(handed, "bass"), noteSig(goal, "bass"));
+    assert.deepEqual(noteSig(held, "bass"), noteSig(goal, "bass"));
   });
 
-  it("keeps a source event at the start of the morph and a destination event at the end of it", () => {
+  it("keeps each morph event at its own velocity", () => {
     let project = defaultProject();
     project.working.bass.gen1 = { ...project.working.bass.gen1, length: 16, hits: 1, rotate: 0, probability: 1 };
     project.working.bass.gen2.hits = 0;
     project.working.bass.pitch.value = 0.2;
     project.working.bass.pitch.amount = 0;
+    project.working.bass.gen1.velocity.value = 0.4;
     project = record(project);
     project.working.bass.gen1 = { ...project.working.bass.gen1, length: 16, hits: 1, rotate: 0, probability: 1 };
     project.working.bass.gen2.hits = 0;
     project.working.bass.pitch.value = 0.9;
     project.working.bass.pitch.amount = 0;
+    project.working.bass.gen1.velocity.value = 0.9;
     project = record(project);
     project.working = clone(project.journal[0].lanes);
-    project.transition = "fast";
+    project.transition = "medium";
     project = launchScene(project, "002", 0);
     const duration = project.morph?.durationTicks ?? 0;
     const start = generatePhrase({ ...project, morph: null, working: project.morph!.start });
     const goal = generatePhrase({ ...project, morph: null, working: project.journal[1].lanes });
-    const sourceNote = start.lanes.bass.find((event) => event.tick === 0)?.note;
-    const destNote = goal.lanes.bass.find((event) => event.tick === duration)?.note;
-    assert.ok(sourceNote !== undefined && destNote !== undefined && sourceNote !== destNote);
-    const early = generatePhrase(project);
-    const mid = generatePhrase(applyMorph(project, duration / 2));
-    assert.deepEqual(noteSig(mid, "bass"), noteSig(early, "bass"));
-    assert.equal(early.lanes.bass.find((event) => event.tick === 0)?.note, sourceNote);
-    assert.equal(early.lanes.bass.some((event) => event.tick === 0 && event.note === destNote), false);
-    assert.equal(early.lanes.bass.find((event) => event.tick === duration)?.note, destNote);
-    assert.equal(early.lanes.bass.some((event) => event.tick === duration && event.note === sourceNote), false);
-    const ticks = early.lanes.bass.map((event) => event.tick).sort((a, b) => a - b);
-    for (let i = 1; i < ticks.length; i++) assert.ok((ticks[i] ?? 0) - (ticks[i - 1] ?? 0) > 6);
+    const sourceHit = start.lanes.bass.find((event) => event.tick === 0);
+    const destHit = goal.lanes.bass.find((event) => event.tick === 0);
+    assert.ok(sourceHit && destHit && sourceHit.note !== destHit.note);
+    assert.notEqual(sourceHit.velocity, destHit.velocity);
+    const early = generatePhrase(applyMorph(project, duration * 0.25));
+    const late = generatePhrase(applyMorph(project, duration * 0.75));
+    assert.equal(early.lanes.bass.find((event) => event.tick === 0)?.note, sourceHit.note);
+    assert.equal(early.lanes.bass.find((event) => event.tick === 0)?.velocity, sourceHit.velocity);
+    assert.equal(late.lanes.bass.find((event) => event.tick === 0)?.note, destHit.note);
+    assert.equal(late.lanes.bass.find((event) => event.tick === 0)?.velocity, destHit.velocity);
   });
 
-  it("keeps the first pass on the phrase that was playing, and never invents a note", () => {
+  it("plays one whole side and glides only timbre", () => {
     const project = morphPair(
       (item) => {
         item.working.bass.pitch.value = 0.2;
@@ -593,48 +578,28 @@ describe("morph, journal, macros", () => {
     assert.ok(Math.abs(riding.working.bass.sound.detune.value - 0.25) < 1e-9);
     assert.ok(Math.abs(riding.working.kick.sound.pitch.value - 0.325) < 1e-9);
     for (const lane of ["bass", "lead", "chords"] as const) {
-      const parts = splitSig(noteSig(start, lane), noteSig(goal, lane));
-      assert.ok(parts.onlyA.length > 0 && parts.onlyB.length > 0);
-      const earlySig = noteSig(early, lane);
-      assert.deepEqual(noteSig(late, lane), earlySig);
-      assert.deepEqual(noteSig(built, lane), earlySig);
-      for (const heard of [
-        { phrase: early, t: 0.25 },
-        { phrase: late, t: 0.75 },
-      ]) {
-        for (const event of heard.phrase.lanes[lane]) {
-          const key = `${event.tick}:${event.note}:${event.lengthTicks}`;
-          const srcHit = start.lanes[lane].find((item) => `${item.tick}:${item.note}:${item.lengthTicks}` === key);
-          const dstHit = goal.lanes[lane].find((item) => `${item.tick}:${item.note}:${item.lengthTicks}` === key);
-          assert.ok(srcHit || dstHit);
-          const place = morphPlaceOf(project, heard.phrase.steps[lane], heard.t, event.tick);
-          const levels = [
-            srcHit ? srcHit.velocity * (1 - place) : undefined,
-            dstHit ? dstHit.velocity * place : undefined,
-          ];
-          assert.ok(levels.some((level) => level !== undefined && Math.abs(event.velocity - level) < 1e-9));
-        }
+      assert.notDeepEqual(noteSig(start, lane), noteSig(goal, lane));
+      assert.deepEqual(noteSig(built, lane), noteSig(start, lane));
+      assert.deepEqual(noteSig(early, lane), noteSig(start, lane));
+      assert.deepEqual(noteSig(late, lane), noteSig(goal, lane));
+      for (const event of early.lanes[lane]) {
+        const srcHit = start.lanes[lane].find((item) => item.tick === event.tick && item.note === event.note && item.lengthTicks === event.lengthTicks);
+        assert.ok(srcHit);
+        assert.equal(event.velocity, srcHit.velocity);
+      }
+      for (const event of late.lanes[lane]) {
+        const dstHit = goal.lanes[lane].find((item) => item.tick === event.tick && item.note === event.note && item.lengthTicks === event.lengthTicks);
+        assert.ok(dstHit);
+        assert.equal(event.velocity, dstHit.velocity);
       }
     }
-    for (const phrase of [early, late]) {
-      for (const group of clustersOf(phrase.lanes.chords)) {
-        const from = group[0]?.tick ?? 0;
-        const to = group[group.length - 1]?.tick ?? from;
-        const src = new Set(start.lanes.chords.filter((event) => event.tick >= from && event.tick <= to).map((event) => event.note));
-        const dst = new Set(goal.lanes.chords.filter((event) => event.tick >= from && event.tick <= to).map((event) => event.note));
-        const heard = new Set(group.map((event) => event.note));
-        assert.ok(heard.size <= Math.max(src.size, dst.size));
-      }
-    }
+    assert.deepEqual(early.harmony.map((event) => event.root), start.harmony.map((event) => event.root));
+    assert.deepEqual(late.harmony.map((event) => event.root), goal.harmony.map((event) => event.root));
     assert.ok(early.lanes.bass.length > 0);
     assert.ok(early.lanes.bass.every((event) => Math.abs(event.sound.cutoff - 0.25) < 1e-6));
     assert.ok(late.lanes.bass.every((event) => Math.abs(event.sound.cutoff - 0.75) < 1e-6));
-    const kickAtStart = early.lanes.kick.find((event) => event.tick === 0);
-    if (start.lanes.kick.some((event) => event.tick === 0)) {
-      assert.ok(kickAtStart);
-      assert.ok(Math.abs((kickAtStart?.sound.pitch ?? 0) - 0.15) < 1e-6);
-    }
-    assert.ok(early.lanes.kick.every((event) => Math.abs(event.sound.pitch - 0.15) < 1e-6 || Math.abs(event.sound.pitch - 0.85) < 1e-6));
+    assert.ok(early.lanes.kick.every((event) => Math.abs(event.sound.pitch - 0.15) < 1e-6));
+    assert.ok(late.lanes.kick.every((event) => Math.abs(event.sound.pitch - 0.85) < 1e-6));
   });
 
   it("holds a melodic note for the length knob", () => {
@@ -683,47 +648,7 @@ describe("morph, journal, macros", () => {
 });
 
 function noteSig(phrase: ReturnType<typeof generatePhrase>, lane: "bass" | "lead" | "chords"): string[] {
-  return phrase.lanes[lane].map((event) => `${event.tick}:${event.note}:${event.lengthTicks}`).sort();
-}
-
-function morphPlaceOf(project: Project, spanSteps: number, t: number, tick: number): number {
-  const morph = project.morph;
-  if (!morph || morph.durationTicks <= 0) return 1;
-  const span = Math.max(1, spanSteps * SIXTEENTH_TICKS);
-  const now = morph.originTick + t * morph.durationTicks;
-  const start = Math.floor(now / span) * span;
-  const rel = ((tick % span) + span) % span;
-  const raw = (start + rel - morph.originTick) / morph.durationTicks;
-  if (raw <= 0) return 0;
-  if (raw >= 1) return 1;
-  return raw;
-}
-
-function splitSig(start: string[], goal: string[]): { onlyA: string[]; onlyB: string[]; shared: string[]; all: Set<string> } {
-  const a = new Set(start);
-  const b = new Set(goal);
-  return {
-    onlyA: [...a].filter((key) => !b.has(key)),
-    onlyB: [...b].filter((key) => !a.has(key)),
-    shared: [...a].filter((key) => b.has(key)),
-    all: new Set([...a, ...b]),
-  };
-}
-
-function countIn(have: Set<string>, keys: string[]): number {
-  return keys.filter((key) => have.has(key)).length;
-}
-
-function clustersOf(events: { tick: number; note: number }[]): { tick: number; note: number }[][] {
-  const sorted = [...events].sort((a, b) => a.tick - b.tick || a.note - b.note);
-  const groups: { tick: number; note: number }[][] = [];
-  for (const event of sorted) {
-    const group = groups[groups.length - 1];
-    const first = group?.[0];
-    if (!group || !first || event.tick - first.tick > 6) groups.push([event]);
-    else group.push(event);
-  }
-  return groups;
+  return phrase.lanes[lane].map((event) => `${event.tick}:${event.note}:${event.lengthTicks}:${event.velocity}`).sort();
 }
 
 function morphPair(setupA: (project: Project) => void, setupB: (project: Project) => void): Project {
@@ -733,7 +658,7 @@ function morphPair(setupA: (project: Project) => void, setupB: (project: Project
   setupB(project);
   project = record(project);
   project.working = clone(project.journal[0].lanes);
-  project.transition = "fast";
+  project.transition = "medium";
   return launchScene(project, "002", 0);
 }
 
