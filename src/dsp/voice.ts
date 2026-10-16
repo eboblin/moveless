@@ -8,6 +8,7 @@ const TWO_PI = Math.PI * 2;
 const DRUM_COUNT = 4;
 const NOTE_COUNT = 12;
 const LANE_COUNT = 8;
+const CHORDS_LANE = LANES.indexOf("chords");
 const LANE_MOTION_CAP = 8;
 
 const P_NONE = 0;
@@ -371,7 +372,9 @@ function noteSample(engine: Engine, note: NoteVoice): [number, number] {
   const inc = (TWO_PI * note.freq) / SAMPLE_RATE;
   // FM/reso use a square curve: the old linear*8 died around unit 0.16; this
   // keeps the musical throw across most of the knob and leaves 1.0 as chaos.
-  const fm = note.fm * note.fm * 5;
+  // Chord FM used to stop being useful near unit 0.5, so the whole knob covers that throw.
+  const fmUnit = note.lane === CHORDS_LANE ? note.fm * 0.5 : note.fm;
+  const fm = fmUnit * fmUnit * 5;
   if (fm > 1e-4) note.phase += inc + Math.sin(note.phase) * fm * inc;
   else note.phase += inc;
   const detOff = note.detune - 0.5;

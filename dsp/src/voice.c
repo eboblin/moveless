@@ -13,6 +13,7 @@
 #define SR 44100.0f
 #define TWO_PI 6.28318530718f
 #define DRUMS 4
+#define CHORDS_LANE 6
 #define NOTES 12
 #define TEXT_CAP 8192
 #define PHRASE_TEXT 65536
@@ -507,8 +508,10 @@ static float drum_sample(Engine *engine, Drum *drum) {
 
 static void note_sample(Engine *engine, Note *note, float *left, float *right) {
     float inc = (TWO_PI * note->freq) / SR;
-    /* Square FM/reso so the musical range is most of the knobs, not unit≈0.16. */
-    float fm = note->fm * note->fm * 5.0f;
+    /* Square FM/reso so the musical range is most of the knobs, not unit≈0.16.
+       Chord FM used to stop being useful near unit 0.5, so the whole knob covers that throw. */
+    float fm_unit = note->lane == CHORDS_LANE ? note->fm * 0.5f : note->fm;
+    float fm = fm_unit * fm_unit * 5.0f;
     if (fm > 1e-4f) note->phase += inc + sinf(note->phase) * fm * inc;
     else note->phase += inc;
     float det_off = note->detune - 0.5f;
