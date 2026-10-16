@@ -1,4 +1,5 @@
 import { hash01 } from "./hash.ts";
+import { homeOctave, unitForOctave } from "./phrase.ts";
 import { modulated } from "./modulate.ts";
 import { MOTIF_BANK_VERSION } from "./motif.ts";
 import {
@@ -144,13 +145,13 @@ function drum(id: DrumId): DrumLane {
   };
 }
 
-function pitched(lane: "bass" | "lead", follow: number, octaveBias: number): PitchedLane {
+function pitched(lane: "bass" | "lead", follow: number): PitchedLane {
   return {
     gen1: scatteredGen(lane, 1, 0.8),
     gen2: scatteredGen(lane, 2, 0.55),
     follow,
-    degree: home(`${lane}.degree`, 0.5),
-    range: home(`${lane}.range`, octaveBias),
+    pitch: home(`${lane}.pitch`, 0.5),
+    octave: home(`${lane}.octave`, unitForOctave(homeOctave(lane))),
     length: home(`${lane}.length`, lane === "bass" ? 0.55 : 0.35),
     repeat: home(`${lane}.repeat`, 0),
     step: home(`${lane}.step`, 0.5),
@@ -192,8 +193,8 @@ export function defaultGlobal(): GlobalSettings {
 }
 
 export function defaultLanes(): Lanes {
-  const bass = pitched("bass", 1, 0.45);
-  const lead = pitched("lead", 0.65, 0.55);
+  const bass = pitched("bass", 1);
+  const lead = pitched("lead", 0.65);
   return {
     kick: drum("kick"),
     snare: drum("snare"),

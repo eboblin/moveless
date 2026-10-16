@@ -67,26 +67,15 @@ function genPage(which: 1 | 2): Page {
 }
 
 function pitchPage(): Page {
-  return {
-    id: "pitch",
-    title: "PITCH",
-    groups: ["DEGREE", "RANGE"],
-    bindings: slots([
-      ...vpca("degree", "DEGREE"),
-      num("range.value", "RANGE V", 0, 1, 0.01),
-      num("range.amount", "RANGE A", -1, 1, 0.01),
-      num("follow", "FOLLOW", 0, 1, 0.01),
-      null,
-    ]),
-  };
+  return pair("pitch", "PITCH", "octave", "OCTAVE");
 }
 
 function lengthPage(): Page {
   return {
     id: "length",
     title: "LENGTH",
-    groups: ["LENGTH", null],
-    bindings: slots(vpca("length", "LENGTH")),
+    groups: ["LENGTH", "FOLLOW"],
+    bindings: slots([...vpca("length", "LENGTH"), num("follow", "FOLLOW", 0, 1, 0.01)]),
   };
 }
 

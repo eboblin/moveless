@@ -51,8 +51,8 @@ export interface PitchedLane {
   gen1: EuclidGen;
   gen2: EuclidGen;
   follow: number;
-  degree: Modulated;
-  range: Modulated;
+  pitch: Modulated;
+  octave: Modulated;
   length: Modulated;
   repeat: Modulated;
   step: Modulated;

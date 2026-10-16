@@ -1,11 +1,11 @@
 import { SIXTEENTH_TICKS } from "../core/clock.ts";
-import { chordSymbol, degreeNumeral } from "../core/harmony.ts";
-import { chordFigure, directionLabel, generatePhrase, laneSteps } from "../core/phrase.ts";
+import { chordSymbol, degreeNumeral, pitchClassName, scaleShort, scaleTitle } from "../core/harmony.ts";
+import { chordFigure, directionLabel, generatePhrase, laneSteps, restingOctave, restingPitchLabel } from "../core/phrase.ts";
 import { evalModulated } from "../core/modulate.ts";
 import { LANE_CODE, type CaptureDepth, type CaptureIntensity, type CaptureScope, type ContextId, type HarmonicEvent, type LaneId, type Project, type TimedEvent } from "../core/types.ts";
-import { DIGIT_H, displayAmount, type BigAmount } from "./digits.ts";
+import { DIGIT_H, displayAmount, type BigAmount, type DisplayAmount } from "./digits.ts";
 import { readControl } from "./controls.ts";
-import { pagesFor, type Page } from "./pages.ts";
+import { pagesFor, type Binding, type Page } from "./pages.ts";
 import type { UiState } from "./state.ts";
 
 export const WIDTH = 128;
@@ -84,7 +84,7 @@ export function renderScreen(project: Project, ui: UiState, tick: number, playin
   else if (!capture && vizLane) drawPhrase(pixels, project, vizLane, playing ? stepAt(project, tick) : -1);
   const labels = mixer
     ? [{ x: 1, y: 1, text: header.slice(0, LINE_LIMIT) }, ...mixerChannelLabels(project, focus)]
-    : drawLabels(project, context, page, focus);
+    : drawLabels(project, context, page, focus, header);
   if (vizLane === "chords" && !notice && !capture && !generator && !chordRoll) labels.push(...chordNameLabels(project));
   if (notice) labels.push(...noticeLabels(notice.title, notice.value));
   if (capture) labels.push(...captureMenuLabels(project));
@@ -467,12 +467,34 @@ function bucket(index: number, count: number, size: number): [number, number] {
   return [Math.min(size - 1, start), Math.min(size, Math.max(start + 1, end))];
 }
 
-/** Rate value: BLOCK or the division. Direction: the order name. Digits stay numeric. */
+/** Pitch and octave show the resting note. Chord rate shows BLOCK or a division. */
 function figureHeader(project: Project, context: ContextId, focus: string | null): string | null {
+  if ((context === "bass" || context === "lead") && focus === "PITCH V") {
+    return restingPitchLabel(context, readControl(project, context, "pitch.value"), readControl(project, context, "octave.value"), project.global);
+  }
+  if ((context === "bass" || context === "lead") && focus === "OCTAVE V") {
+    return `OCT ${restingOctave(readControl(project, context, "octave.value"))}`;
+  }
+  if (context === "global" && focus === "ROOT") return pitchClassName(project.global.root);
+  if (context === "global" && focus === "SCALE") return scaleTitle(project.global.scale);
   if (context !== "chords") return null;
   if (focus === "RATE V") return chordFigure(readControl(project, "chords", "rate.value")).label.slice(0, LINE_LIMIT);
   if (focus === "DIR") return directionLabel(readControl(project, "chords", "direction")).slice(0, LINE_LIMIT);
   return null;
+}
+
+function knobAmount(project: Project, context: ContextId, binding: Binding): DisplayAmount {
+  if ((context === "bass" || context === "lead") && binding.path === "octave.value") {
+    const n = restingOctave(readControl(project, context, "octave.value"));
+    return { kind: "big", n: Math.abs(n), negative: n < 0 };
+  }
+  if (context === "global" && binding.path === "root") {
+    return { kind: "wide", text: pitchClassName(project.global.root), negative: false };
+  }
+  if (context === "global" && binding.path === "scale") {
+    return { kind: "wide", text: scaleShort(project.global.scale), negative: false };
+  }
+  return displayAmount(readControl(project, context, binding.path), binding);
 }
 
 function stepAt(_project: Project, tick: number): number {
@@ -532,12 +554,13 @@ function drawLabels(
   context: ContextId,
   page: Page | undefined,
   focus: string | null,
+  header: string,
 ): Label[] {
   const labels: Label[] = [];
   const tag = laneTag(project, context);
   labels.push({ x: rightEdgeX(tag), y: TITLE_Y, text: tag });
   if (focus) {
-    labels.push({ x: 1, y: TITLE_Y, text: fullName(focus).slice(0, LINE_LIMIT) });
+    labels.push({ x: 1, y: TITLE_Y, text: header.slice(0, LINE_LIMIT) });
   } else {
     const [left, right] = page?.groups ?? [null, null];
     if (left) labels.push({ x: halfLeftX(0), y: TITLE_Y, text: left });
@@ -547,7 +570,7 @@ function drawLabels(
     if (!binding || index >= PARAM_COLS) return;
     const name = shortName(binding.label);
     const lit = focus === binding.label;
-    const amount = displayAmount(readControl(project, context, binding.path), binding);
+    const amount = knobAmount(project, context, binding);
     if (amount.kind === "wide") {
       labels.push({
         x: cellTextX(index, amount.text),
@@ -567,7 +590,7 @@ function paramDigits(project: Project, context: ContextId, page: Page, focus: st
   const digits: DigitCell[] = [];
   page.bindings.forEach((binding, index) => {
     if (!binding || index >= PARAM_COLS) return;
-    const amount = displayAmount(readControl(project, context, binding.path), binding);
+    const amount = knobAmount(project, context, binding);
     if (amount.kind !== "big") return;
     digits.push({
       cell: index,

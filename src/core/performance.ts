@@ -329,7 +329,7 @@ function patternPages(lane: LaneId): string[][] {
 
 function notePages(lane: LaneId): string[][] {
   if (lane === "bass" || lane === "lead") {
-    return [[...vpcaPaths("degree"), "range.value", "range.amount", "follow"], vpcaPaths("length")];
+    return [[...vpcaPaths("pitch"), ...vpcaPaths("octave")], [...vpcaPaths("length"), "follow"]];
   }
   if (lane !== "chords") return [];
   return [
@@ -731,8 +731,8 @@ function randomizeNotes(
 ): void {
   if (lane === "bass" || lane === "lead") {
     const pitched = lanes[lane];
-    pitched.degree = touchModulated(pitched.degree, roll, "degree", intensity, depth);
-    pitched.range = touchModulated(pitched.range, roll, "range", intensity, depth);
+    pitched.pitch = touchModulated(pitched.pitch, roll, "pitch", intensity, depth);
+    pitched.octave = touchModulated(pitched.octave, roll, "octave", intensity, depth);
     pitched.length = touchModulated(pitched.length, roll, "length", intensity, depth);
     if (movesValues(depth)) pitched.follow = intensity === "clear" ? 0 : roll("follow");
     return;

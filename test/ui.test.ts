@@ -31,8 +31,9 @@ describe("pages and leds", () => {
     assert.equal(lanePages("kick")[2].title.includes("COUNT"), true);
     assert.equal(lanePages("bass")[2].bindings[0]?.label, "REPEAT V");
     assert.equal(lanePages("bass")[2].groups[1], "STEP");
-    assert.equal(lanePages("bass")[3].bindings[0]?.label, "DEGREE V");
-    assert.equal(lanePages("bass")[3].bindings[6]?.label, "FOLLOW");
+    assert.equal(lanePages("bass")[3].bindings[0]?.label, "PITCH V");
+    assert.equal(lanePages("bass")[3].bindings[4]?.label, "OCTAVE V");
+    assert.equal(lanePages("bass")[4].bindings[4]?.label, "FOLLOW");
     assert.equal(pageGroup("bass", 2), "pattern");
     assert.equal(pageGroupColor("bass", 2), pageGroupColor("bass", 0));
     assert.equal(pageGroup("bass", 3), "notes");
@@ -320,8 +321,7 @@ describe("surface", () => {
     project.working.bass.follow = 0;
     project.working.bass.repeat = modulated(unitForIndex(1, 8));
     project.working.bass.step = modulated(1);
-    project.working.bass.degree = modulated(0.2);
-    project.working.bass.range = modulated(0.8);
+    project.working.bass.pitch = modulated(0.2);
     const ticks = new Map<number, number>();
     for (const event of generatePhrase(project).lanes.bass) {
       ticks.set(event.tick, (ticks.get(event.tick) ?? 0) + 1);
@@ -413,9 +413,23 @@ describe("surface", () => {
     assert.equal(mix.viz, "mixer");
     assert.ok(mix.labels.some((label) => label.text === "KCK" && label.y === HEIGHT - FONT_H - 1));
     const bassProject = defaultProject();
-    bassProject.working.bass.degree = modulated(0.5, 0, 8, 1);
+    bassProject.working.bass.pitch = modulated(0.5, 0, 8, 1);
     bassProject.working.bass.follow = 0;
     bassProject.working.bass.gen1.hits = 8;
+    const pitchPage = renderScreen(defaultProject(), { ...defaultUi(), context: "bass", page: 3 }, 0);
+    assert.ok(pitchPage.digits.some((digit) => digit.cell === 0 && digit.amount.kind === "big" && digit.amount.n === 50));
+    assert.ok(pitchPage.digits.some((digit) => digit.cell === 4 && digit.amount.kind === "big" && digit.amount.n === 2));
+    const leadPitch = renderScreen(defaultProject(), { ...defaultUi(), context: "lead", page: 3 }, 0);
+    assert.ok(leadPitch.digits.some((digit) => digit.cell === 4 && digit.amount.kind === "big" && digit.amount.n === 4));
+    const pitchHeld = renderScreen(defaultProject(), {
+      ...defaultUi(),
+      context: "bass",
+      page: 3,
+      focus: { label: "PITCH V", generator: null, showPattern: false, held: true, untilTick: 0 },
+    }, 0);
+    assert.equal(pitchHeld.header, "C2");
+    const lengthPage = renderScreen(defaultProject(), { ...defaultUi(), context: "bass", page: 4 }, 0);
+    assert.ok(lengthPage.labels.some((label) => label.text === "FOL"));
     const bass = renderScreen(bassProject, { ...defaultUi(), context: "bass" }, 0);
     assert.ok(columnSpan(bass, 0) <= VIZ_H / 2);
     assert.ok(pitchSpread(bass) > columnSpan(bass, 0));
@@ -501,6 +515,18 @@ describe("surface", () => {
     const global = renderScreen(defaultProject(), { ...defaultUi(), context: "global" }, 0);
     assert.equal(global.digits.some((d) => d.cell === 0), false);
     assert.ok(global.labels.some((label) => label.y === VALUE_Y && label.text === "120" && label.cell === 0));
+    assert.ok(global.labels.some((label) => label.y === VALUE_Y && label.text === "C" && label.cell === 2));
+    assert.ok(global.labels.some((label) => label.y === VALUE_Y && label.text === "MIN" && label.cell === 3));
+    const keyed = defaultProject();
+    keyed.global.root = 2;
+    keyed.global.scale = "dorian";
+    const mode = renderScreen(keyed, {
+      ...defaultUi(),
+      context: "global",
+      focus: { label: "SCALE", generator: null, showPattern: false, held: true, untilTick: 0 },
+    }, 0);
+    assert.ok(mode.labels.some((label) => label.y === VALUE_Y && label.text === "D" && label.cell === 2));
+    assert.ok(mode.labels.some((label) => label.y === TITLE_Y && label.text === "DORIAN"));
   });
 
   it("shows a modulated generator while its knob is held and the lane phrase after release", () => {
@@ -684,7 +710,7 @@ describe("surface", () => {
     notes = reduce(notes, { kind: "cc", data1: 52, data2: 127 });
     notes = reduce(notes, { kind: "cc", data1: 52, data2: 0 });
     assert.equal(notes.ui.page, 3);
-    assert.notDeepEqual(notes.project.working.bass.degree, bass.degree);
+    assert.notDeepEqual(notes.project.working.bass.pitch, bass.pitch);
     assert.deepEqual(notes.project.working.bass.gen1, bass.gen1);
     assert.deepEqual(notes.project.working.bass.sound, bass.sound);
 

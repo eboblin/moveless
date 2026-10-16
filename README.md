@@ -43,7 +43,7 @@ Page pads are colored by group. The current page blinks.
 
 **Drums** — two groups. Orange: Event A, Event B, Form, Count/Rate. Violet: four sound pages.
 
-**Bass and Lead** — three groups. Orange: Event A, Event B, Form. Teal: Degree/Range, Length/Velocity, Repeat/Step. Violet: four sound pages.
+**Bass and Lead** — three groups. Orange: generators, repeat. Teal: Pitch/Octave, Length/Follow. Violet: four sound pages.
 
 **Chords** — two groups. Teal: Change/Length, Motion/Variation, Mood/Tension, Play. Violet: four sound pages.
 

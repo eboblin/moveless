@@ -11,7 +11,7 @@ import {
 import { blendPhrases } from "./blend.ts";
 import { generateHits, phraseStepsOf, type Hit } from "./events.ts";
 import { morphEndpoints } from "./morph.ts";
-import { applyFollowMidi, chordTonePitchClasses, degreeToMidi, generateHarmony, harmonyAt, scaleOf } from "./harmony.ts";
+import { applyFollowMidi, chordTonePitchClasses, degreeToMidi, generateHarmony, harmonyAt, pitchClassName, scaleOf } from "./harmony.ts";
 import { hash01 } from "./hash.ts";
 import { bipolarFromUnit, evalModulated, withMacro } from "./modulate.ts";
 import { mod } from "./motif.ts";
@@ -37,7 +37,56 @@ let endCache: { key: string; fromPhrase: Phrase; toPhrase: Phrase; from: Lanes; 
 
 const BASS_OCTAVE = 2;
 const LEAD_OCTAVE = 4;
+/** Pitch value walks the selected scale ± one octave (seven degrees). */
+const SCALE_REACH = 7;
+/**
+ * Absolute tonic octave. 0 is C0 (MIDI 0). 9 is the piano's top C in this
+ * numbering (MIDI 108). A0 sits in octave 1. Same ends on bass and lead.
+ */
+export const OCTAVE_MIN = 0;
+export const OCTAVE_MAX = 9;
 const CHORD_OCTAVE = 4;
+
+export function homeOctave(lane: "bass" | "lead"): number {
+  return lane === "bass" ? BASS_OCTAVE : LEAD_OCTAVE;
+}
+
+/** Unit 0 is octave 0, unit 1 is octave 9. */
+export function unitForOctave(octave: number): number {
+  const span = OCTAVE_MAX - OCTAVE_MIN;
+  const n = Math.max(OCTAVE_MIN, Math.min(OCTAVE_MAX, Math.round(octave)));
+  return (n - OCTAVE_MIN) / span;
+}
+
+/** Scale degrees from the tonic. 0.5 is the tonic, the edges are one octave of the scale away. */
+export function scaleOffset(unit: number): number {
+  const u = Math.max(0, Math.min(1, unit));
+  return Math.round((u - 0.5) * (SCALE_REACH * 2));
+}
+
+/** Absolute octave of the tonic, 0..9. */
+export function octaveNumber(unit: number): number {
+  const u = Math.max(0, Math.min(1, unit));
+  return OCTAVE_MIN + Math.round(u * (OCTAVE_MAX - OCTAVE_MIN));
+}
+
+/** Resting scale note for the pitch knob, before pattern motion and follow. */
+export function restingPitchLabel(lane: "bass" | "lead", pitch: number, octave: number, global: GlobalSettings): string {
+  const scale = scaleOf(global.scale);
+  const rootPc = mod(global.root + global.transpose, 12);
+  const degree = scaleOffset(pitch);
+  const midi = degreeToMidi(degree, scale, rootPc, octaveNumber(octave));
+  return noteLabel(midi);
+}
+
+function noteLabel(midi: number): string {
+  const note = Math.max(0, Math.min(127, Math.round(midi)));
+  return `${pitchClassName(note)}${Math.floor(note / 12)}`;
+}
+
+export function restingOctave(octave: number): number {
+  return octaveNumber(octave);
+}
 
 export function generatePhrase(project: Project): Phrase {
   const morph = project.morph;
@@ -153,21 +202,20 @@ function pitchedEvents(
   const hits = generateHits(lane.gen1, lane.gen2, steps, global.seed, id, macro(macros, "velocity"), macro(macros, "probability"));
   const scale = scaleOf(global.scale);
   const rootPc = mod(global.root + global.transpose, 12);
-  const octave = id === "bass" ? BASS_OCTAVE : LEAD_OCTAVE;
   const out: TimedEvent[] = [];
   hits.forEach((hit) => {
     const reps = countFromUnit(evalModulated(withMacro(lane.repeat, macro(macros, "repeat")), hit.step));
     const shift = Math.round(bipolarFromUnit(evalModulated(withMacro(lane.step, macro(macros, "step")), hit.step), 7));
     for (let r = 0; r < reps; r++) {
       const step = hit.step + r;
-      const degreeU = evalModulated(withMacro(lane.degree, macro(macros, "degree")), step);
-      const rangeU = evalModulated(withMacro(lane.range, macro(macros, "range")), step);
-      const desired = (degreeU - 0.5) * 2 * rangeU * 7 + r * shift;
+      const pitchU = evalModulated(withMacro(lane.pitch, macro(macros, "pitch")), step);
+      const octaveU = evalModulated(withMacro(lane.octave, macro(macros, "octave")), step);
+      const degree = scaleOffset(pitchU) + r * shift;
+      const desiredMidi = degreeToMidi(degree, scale, rootPc, octaveNumber(octaveU));
       const tick = swungStepTick(step, global.swing);
       const harm = harmonyAt(harmony, tick);
       const chordPcs = harm ? chordTonePitchClasses(harm, scale, rootPc) : [];
-      const desiredMidi = degreeToMidi(Math.round(desired), scale, rootPc, octave);
-      const note = Math.round(applyFollowMidi(desiredMidi, lane.follow, chordPcs));
+      const note = Math.max(0, Math.min(127, Math.round(applyFollowMidi(desiredMidi, lane.follow, chordPcs))));
       const lengthTicks = Math.max(1, Math.round(evalModulated(withMacro(lane.length, macro(macros, "length")), step) * global.bar * SIXTEENTH_TICKS));
       const sound = soundValues(lane.sound, step, macros);
       out.push(place(hit.step, r * SIXTEENTH_TICKS, global, id, note, hit.velocity, lengthTicks, sound));

@@ -99,6 +99,27 @@ export function harmonyAt(events: readonly HarmonicEvent[], tick: number): Harmo
 }
 
 const NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"] as const;
+const SCALE_TITLE: Record<ScaleId, string> = {
+  minor: "MINOR",
+  major: "MAJOR",
+  dorian: "DORIAN",
+  mixolydian: "MIXOLYDIAN",
+};
+
+/** Pitch-class letter, sharps included. 0 is C. */
+export function pitchClassName(pc: number): string {
+  return NOTE_NAMES[mod(Math.round(pc), 12)] ?? "C";
+}
+
+/** Full mode name for the global scale knob. */
+export function scaleTitle(id: ScaleId): string {
+  return SCALE_TITLE[id];
+}
+
+/** Three letters that fit a parameter cell: MIN, MAJ, DOR, MIX. */
+export function scaleShort(id: ScaleId): string {
+  return SCALE_TITLE[id].slice(0, 3);
+}
 const QUALITY_SUFFIX = ["", "m", "sus2", "sus4", "7", "m7", "dim", "aug"] as const;
 const DEGREE_NUMERAL = ["I", "II", "III", "IV", "V", "VI", "VII"] as const;
 

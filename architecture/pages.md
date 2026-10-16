@@ -4,13 +4,13 @@
 
 Drums, 7 страниц в двух группах. Pattern, оранжевый: GEN 1, GEN 2, COUNT/RATE. Sound, фиолетовый: четыре sound-пары. На GEN: LENGTH, HITS, ROTATE, PROBABILITY, VEL V/P/C/A.
 
-Bass и Lead, 9 страниц в трёх группах. Pattern, оранжевый: GEN 1, GEN 2, REPEAT/STEP. Notes, бирюзовый: PITCH (DEGREE, RANGE V/A, FOLLOW), LENGTH. Sound, фиолетовый: четыре sound-пары. Страница 9 — первый пад второго ряда сверху при wheel-touch или при удержании lane.
+Bass и Lead, 9 страниц в трёх группах. Pattern, оранжевый: GEN 1, GEN 2, REPEAT/STEP. Notes, бирюзовый: PITCH (генераторы PITCH и OCTAVE), LENGTH (генератор LENGTH и FOLLOW). Sound, фиолетовый: четыре sound-пары. Страница 9 — первый пад второго ряда сверху при wheel-touch или при удержании lane. Pitch 50 — тоника выбранной гаммы, края — октава гаммы в стороны. Octave — абсолютная октава 0..9 у обоих лейнов (рояль: ля большой октавы в 1, верхнее до в 9). По умолчанию бас 2, лид 4. Follow 0 оставляет ноту гаммы, follow 100 сажает её на ноту аккорда. Pitch value в покое — 50, тоника. Пока ручка зажата, шапка показывает имя ноты. Octave value показывает номер октавы.
 
 Chords, 7 страниц в двух группах. Notes, бирюзовый: PROG (START, COUNT, LENGTH, MOTION, VARIATION, MOOD, TENSION, WAY), PLAY (генераторы RATE и GATE), VOICE (SPREAD, FLOW, OCT, DIR). Sound, фиолетовый: четыре sound-пары. PROG показывает имена аккордов и блоки длительности. PLAY, VOICE и sound — пиано-ролл сыгранных нот. RATE 0 — блок. Выше нуля — арпеджио от 1/8 до 1/64, длина ноты от GATE. Касание value у RATE пишет в шапку BLOCK или деление (1/8 … 1/64).
 
 Mixer — одна страница: восемь вертикальных фейдеров (семь lane и master). Под фейдером — mute (`M`) / lock (`L`), в самом низу трёхбуквенный код lane (`MST` у master).
 
-Global — одна страница TEMPO, SWING, ROOT, SCALE, TRANS, BAR, PHRASE, SEED.
+Global — одна страница TEMPO, SWING, ROOT, SCALE, TRANS, BAR, PHRASE, SEED. ROOT показывает имя ноты (C, C#, …), SCALE — лад: в клетке MIN / MAJ / DOR / MIX, в шапке при касании полное имя MINOR, MAJOR, DORIAN, MIXOLYDIAN.
 
 Perf FX — step сразу после Global, фиолетовый, код `PFX`. Не lane: нет mute, lock и Capture. Две страницы bipolar-сдвига `-1..1`, ноль оставляет сцену как записана. Сдвиг лежит в `project.macros` и слышен во всех lane, у которых есть это поле; Record его не запекает, locked lane его не слышит. PLAY: DENS (probability обоих евклидов), REP (repeat bass/lead и ratchet count ударных), STEP, VEL, LEN, GATE, RATE (ratchet ударных и арпеджио аккордов), DECAY. TONE: CUT, RES, DRV, NSE, ATK, SHAPE, DET, TONE — только у lane с таким sound id. Отдельных Energy и Complexity нет.
 

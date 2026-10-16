@@ -111,7 +111,26 @@ describe("project persist", () => {
     assert.equal(parsed.project.journal[0].id, "001");
   });
 
-  it("folds a saved strum into rate", () => {
+  it("resets a bass lane that still stores degree and range", () => {
+    const project = defaultProject();
+    const bass = {
+      ...project.working.bass,
+      degree: { value: 0.5, pattern: 4, cycle: 8, amount: 0.2 },
+      range: { value: 1, pattern: 0, cycle: 3, amount: 0 },
+    };
+    delete (bass as { pitch?: unknown }).pitch;
+    delete (bass as { octave?: unknown }).octave;
+    const parsed = parseStored(JSON.stringify({
+      version: 1,
+      project: { ...project, working: { ...project.working, bass } },
+      ui: { context: "bass", page: 3, mode: "journal" },
+    }));
+    assert.ok(parsed);
+    assert.deepEqual(parsed.project.working.bass, defaultProject().working.bass);
+    assert.equal("degree" in parsed.project.working.bass, false);
+  });
+
+  it("drops an unread strum instead of copying it into rate", () => {
     const project = defaultProject();
     const chords = {
       ...project.working.chords,
@@ -124,7 +143,7 @@ describe("project persist", () => {
       ui: { context: "chords", page: 0, mode: "journal" },
     }));
     assert.ok(parsed);
-    assert.equal(parsed.project.working.chords.rate.value, 0.8);
+    assert.equal(parsed.project.working.chords.rate.value, 0);
     assert.equal("strum" in parsed.project.working.chords, false);
   });
 

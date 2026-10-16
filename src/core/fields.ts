@@ -75,7 +75,7 @@ function pushPitched(out: Field[], id: string, lane: PitchedLane): void {
   pushEuclid(out, `${id}.gen1`, lane.gen1);
   pushEuclid(out, `${id}.gen2`, lane.gen2);
   out.push({ path: `${id}.follow`, kind: "lerp", value: lane.follow });
-  for (const key of ["degree", "range", "length", "repeat", "step"] as const) {
+  for (const key of ["pitch", "octave", "length", "repeat", "step"] as const) {
     pushMod(out, `${id}.${key}`, lane[key]);
   }
   pushSound(out, id, lane.sound);

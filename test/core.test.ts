@@ -28,7 +28,9 @@ import {
   audibleEvents,
 } from "../src/core/performance.ts";
 import { chordOrder, generatePhrase, previewPhrase } from "../src/core/phrase.ts";
+import { pitchClassOfDegree, scaleOf } from "../src/core/harmony.ts";
 import { chordLabels, textPreview } from "../src/core/text-preview.ts";
+import type { ScaleId } from "../src/core/types.ts";
 import { punch } from "../src/core/morph.ts";
 import type { Project } from "../src/core/types.ts";
 
@@ -510,7 +512,7 @@ describe("morph, journal, macros", () => {
     const bassDegree = morphPair(
       () => {},
       (project) => {
-        project.working.bass.degree.value = 0.85;
+        project.working.bass.pitch.value = 0.85;
         project.working.bass.gen1.hits = 5;
       },
     );
@@ -589,8 +591,7 @@ describe("harmony", () => {
     const project = bar(defaultProject());
     project.working.bass.gen1 = { ...project.working.bass.gen1, length: 16, hits: 2, rotate: 0, probability: 1 };
     project.working.bass.gen2.hits = 0;
-    project.working.bass.degree = modulated(0.5 + 1 / 14);
-    project.working.bass.range = modulated(1);
+    project.working.bass.pitch = modulated(0.5 + 1 / 14);
     project.working.bass.follow = 1;
     project.working.chords.mood = 0;
     project.working.chords.tension = 0;
@@ -632,8 +633,7 @@ describe("harmony", () => {
     project.working.chords.tension = 0;
     project.working.chords.count = 1;
     project.working.bass.follow = 1;
-    project.working.bass.degree = modulated(0.5 + 2 / 14);
-    project.working.bass.range = modulated(1);
+    project.working.bass.pitch = modulated(0.5 + 1 / 7);
     project.working.bass.gen1 = { ...project.working.bass.gen1, length: 16, hits: 4, rotate: 0 };
     project.working.bass.gen2.hits = 0;
     const phrase = generatePhrase(project);
@@ -740,6 +740,42 @@ describe("harmony", () => {
     for (const length of [...even, ...passed]) assert.equal(length % 4, 0);
   });
 
+  it("places every chord root on the selected key and mode", () => {
+    const project = defaultProject();
+    project.working.chords.start = 0;
+    project.working.chords.motion = 1;
+    project.working.chords.way = 0;
+    project.working.chords.count = 7;
+    project.working.chords.variation = 0;
+    project.global.phrase = 4;
+    project.global.bar = 4;
+
+    const roots = (scale: ScaleId, root: number, transpose = 0) => {
+      project.global.scale = scale;
+      project.global.root = root;
+      project.global.transpose = transpose;
+      const phrase = generatePhrase(project);
+      const steps = scaleOf(scale);
+      const tonic = ((root + transpose) % 12 + 12) % 12;
+      const pcs = phrase.harmony.map((event) => pitchClassOfDegree(event.root, steps, tonic));
+      for (const event of phrase.harmony) {
+        const pc = pitchClassOfDegree(event.root, steps, tonic);
+        const played = phrase.lanes.chords.filter(
+          (note) => note.tick >= event.startTick && note.tick < event.startTick + event.lengthTicks,
+        );
+        assert.ok(played.some((note) => ((note.note % 12) + 12) % 12 === pc), `${scale} chord should sound degree ${event.root}`);
+      }
+      return pcs;
+    };
+
+    assert.deepEqual(roots("minor", 0), [0, 2, 3, 5, 7, 8, 10]);
+    assert.deepEqual(roots("major", 0), [0, 2, 4, 5, 7, 9, 11]);
+    assert.deepEqual(roots("dorian", 0), [0, 2, 3, 5, 7, 9, 10]);
+    assert.deepEqual(roots("mixolydian", 0), [0, 2, 4, 5, 7, 9, 10]);
+    assert.deepEqual(roots("minor", 2), [2, 4, 5, 7, 9, 10, 0]);
+    assert.deepEqual(roots("minor", 0, 2), roots("minor", 2));
+  });
+
   it("walks repeats along the scale", () => {
     const project = bar(defaultProject());
     project.working.bass.gen1 = { ...project.working.bass.gen1, length: 16, hits: 2, rotate: 0, probability: 1 };
@@ -747,8 +783,7 @@ describe("harmony", () => {
     project.working.bass.repeat = modulated(0.4);
     project.working.bass.step = modulated(1);
     project.working.bass.follow = 0;
-    project.working.bass.degree = modulated(0.5);
-    project.working.bass.range = modulated(1);
+    project.working.bass.pitch = modulated(0.5);
     const notes = generatePhrase(project).lanes.bass.filter((event) => event.step === 0).map((event) => event.note);
     assert.equal(notes.length, 4);
     assert.deepEqual(notes, [24, 36, 48, 60]);
@@ -769,7 +804,7 @@ describe("capture, wander, sets", () => {
 
     const bass = defaultProject();
     const notes = captureLane(bass, "bass", "notes");
-    assert.notDeepEqual(notes.working.bass.degree, bass.working.bass.degree);
+    assert.notDeepEqual(notes.working.bass.pitch, bass.working.bass.pitch);
     assert.deepEqual(notes.working.bass.gen1, bass.working.bass.gen1);
     assert.deepEqual(notes.working.bass.sound, bass.working.bass.sound);
     const sound = captureLane(bass, "kick", "sound");
@@ -777,7 +812,7 @@ describe("capture, wander, sets", () => {
     assert.deepEqual(sound.working.kick.gen1, bass.working.kick.gen1);
     const pattern = captureLane(bass, "bass", "pattern");
     assert.notDeepEqual(pattern.working.bass.gen1, bass.working.bass.gen1);
-    assert.deepEqual(pattern.working.bass.degree, bass.working.bass.degree);
+    assert.deepEqual(pattern.working.bass.pitch, bass.working.bass.pitch);
     assert.deepEqual(pattern.working.bass.sound, bass.working.bass.sound);
   });
 
@@ -792,7 +827,7 @@ describe("capture, wander, sets", () => {
     const beforeBass = clone(bass.working.bass);
     const allBass = captureLane(bass, "bass", "all");
     assert.notDeepEqual(allBass.working.bass.gen1, beforeBass.gen1);
-    assert.notDeepEqual(allBass.working.bass.degree, beforeBass.degree);
+    assert.notDeepEqual(allBass.working.bass.pitch, beforeBass.pitch);
     assert.notDeepEqual(allBass.working.bass.sound, beforeBass.sound);
   });
 
@@ -800,14 +835,14 @@ describe("capture, wander, sets", () => {
     const bass = setCaptureDepth(setCaptureIntensity(defaultProject(), "hard"), "generators");
     const before = clone(bass.working.bass);
     const notes = captureLane(bass, "bass", "notes");
-    assert.equal(notes.working.bass.degree.value, before.degree.value);
+    assert.equal(notes.working.bass.pitch.value, before.pitch.value);
     assert.equal(notes.working.bass.follow, before.follow);
-    assert.notDeepEqual(notes.working.bass.degree, before.degree);
+    assert.notDeepEqual(notes.working.bass.pitch, before.pitch);
     const cleared = captureLane(setCaptureIntensity(bass, "clear"), "bass", "notes");
-    assert.equal(cleared.working.bass.degree.value, before.degree.value);
-    assert.equal(cleared.working.bass.degree.pattern, 0);
-    assert.equal(cleared.working.bass.degree.cycle, 0);
-    assert.equal(cleared.working.bass.degree.amount, 0);
+    assert.equal(cleared.working.bass.pitch.value, before.pitch.value);
+    assert.equal(cleared.working.bass.pitch.pattern, 0);
+    assert.equal(cleared.working.bass.pitch.cycle, 0);
+    assert.equal(cleared.working.bass.pitch.amount, 0);
     assert.equal(cleared.working.bass.follow, before.follow);
 
     const chords = setCaptureDepth(setCaptureIntensity(defaultProject(), "hard"), "generators");
@@ -818,15 +853,16 @@ describe("capture, wander, sets", () => {
 
   it("moves values and euclid shape but leaves pattern cycle amount when depth is values", () => {
     const bass = setCaptureDepth(setCaptureIntensity(defaultProject(), "hard"), "values");
-    bass.working.bass.degree = modulated(0.4, 9, 6, 0.3);
+    bass.working.bass.pitch = modulated(0.4, 9, 6, 0.3);
     bass.working.bass.gen1.velocity = modulated(0.7, 4, 5, 0.2);
     const before = clone(bass.working.bass);
     const notes = captureLane(bass, "bass", "notes");
-    assert.notEqual(notes.working.bass.degree.value, before.degree.value);
-    assert.equal(notes.working.bass.degree.pattern, before.degree.pattern);
-    assert.equal(notes.working.bass.degree.cycle, before.degree.cycle);
-    assert.equal(notes.working.bass.degree.amount, before.degree.amount);
-    assert.notEqual(notes.working.bass.follow, before.follow);
+    assert.notEqual(notes.working.bass.pitch.value, before.pitch.value);
+    assert.equal(notes.working.bass.pitch.pattern, before.pitch.pattern);
+    assert.equal(notes.working.bass.pitch.cycle, before.pitch.cycle);
+    assert.equal(notes.working.bass.pitch.amount, before.pitch.amount);
+    const followed = capturePaths(bass, "bass", ["follow"]);
+    assert.notEqual(followed.working.bass.follow, before.follow);
 
     const pattern = captureLane(bass, "bass", "pattern");
     const shaped =
@@ -841,10 +877,10 @@ describe("capture, wander, sets", () => {
     assert.notEqual(pattern.working.bass.gen1.velocity.value, before.gen1.velocity.value);
 
     const cleared = captureLane(setCaptureIntensity(bass, "clear"), "bass", "all");
-    assert.equal(cleared.working.bass.degree.value, 0);
-    assert.equal(cleared.working.bass.degree.pattern, 9);
-    assert.equal(cleared.working.bass.degree.cycle, 6);
-    assert.equal(cleared.working.bass.degree.amount, 0.3);
+    assert.equal(cleared.working.bass.pitch.value, 0);
+    assert.equal(cleared.working.bass.pitch.pattern, 9);
+    assert.equal(cleared.working.bass.pitch.cycle, 6);
+    assert.equal(cleared.working.bass.pitch.amount, 0.3);
     assert.equal(cleared.working.bass.follow, 0);
     assert.equal(cleared.working.bass.gen1.length, 0);
     assert.equal(cleared.working.bass.gen1.velocity.value, 0);

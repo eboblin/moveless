@@ -9,7 +9,6 @@ import {
   type CaptureDepth,
   type CaptureIntensity,
   type CaptureScope,
-  type ChordLane,
   type ContextId,
   type Lanes,
   type Project,
@@ -76,7 +75,7 @@ export function parseStored(raw: string): StoredBundle | null {
   if (root.version !== STORE_VERSION) return null;
   if (!root.project || typeof root.project !== "object") return null;
   const source = root.project as Record<string, unknown>;
-  const project = resetStaleChords(mergeProject(source), source);
+  const project = mergeProject(source);
   const ui = mergeUi(root.ui, project);
   return { project: sanitizeProject(project), ui };
 }
@@ -113,7 +112,7 @@ function mergeProject(raw: Record<string, unknown>): Project {
     ...base,
     motifBankVersion: asInt(raw.motifBankVersion, base.motifBankVersion),
     nextSceneId: Math.max(1, asInt(raw.nextSceneId, base.nextSceneId)),
-    journal: journal as Project["journal"],
+    journal: acceptJournal(journal),
     sets: sets as Project["sets"],
     activeSetId: typeof raw.activeSetId === "string" || raw.activeSetId === null ? (raw.activeSetId as string | null) : base.activeSetId,
     mixer: { ...base.mixer, ...(isRecord(raw.mixer) ? (raw.mixer as Project["mixer"]) : {}) },
@@ -122,7 +121,7 @@ function mergeProject(raw: Record<string, unknown>): Project {
     bookmarks,
     mute: { ...base.mute, ...(isRecord(raw.mute) ? (raw.mute as Project["mute"]) : {}) },
     lock: { ...base.lock, ...(isRecord(raw.lock) ? (raw.lock as Project["lock"]) : {}) },
-    working: mergeWorking(base.working, raw.working),
+    working: acceptLanes(raw.working),
     transition: asTransition(raw.transition) ?? base.transition,
     wander: raw.wander === null ? null : asWander(raw.wander) ?? base.wander,
     wanderPreviousTarget:
@@ -144,31 +143,6 @@ function mergeProject(raw: Record<string, unknown>): Project {
     captureScope: asScope(raw.captureScope) ?? base.captureScope,
     captureDepth: asDepth(raw.captureDepth) ?? base.captureDepth,
   };
-}
-
-function currentChords(raw: unknown): ChordLane {
-  const base = clone(defaultProject().working.chords);
-  if (!isRecord(raw) || typeof raw.start !== "number") return base;
-  const merged = deepMerge(base, raw) as ChordLane & { strum?: { value?: number } };
-  const strumValue = merged.strum?.value;
-  delete merged.strum;
-  if (typeof strumValue === "number" && strumValue > 0 && merged.rate.value <= 0) {
-    merged.rate = { ...merged.rate, value: Math.min(1, strumValue) };
-  }
-  return merged;
-}
-
-/** A chord lane without `start` is the previous shape. Replace it; do not translate fields. */
-function resetStaleChords(project: Project, raw: Record<string, unknown>): Project {
-  if (isRecord(raw.working)) project.working.chords = currentChords(raw.working.chords);
-  if (Array.isArray(raw.journal)) {
-    raw.journal.forEach((scene, index) => {
-      const saved = project.journal[index];
-      if (!isRecord(scene) || !isRecord(scene.lanes) || !saved?.lanes) return;
-      saved.lanes.chords = currentChords(scene.lanes.chords);
-    });
-  }
-  return project;
 }
 
 function mergeUi(raw: unknown, project: Project): StoredUi {
@@ -198,21 +172,50 @@ function mergeGlobal(base: Project["global"], raw: unknown): Project["global"] {
   };
 }
 
-function mergeWorking(base: Lanes, raw: unknown): Lanes {
-  if (!isRecord(raw)) return clone(base);
-  const out = clone(base) as unknown as Record<string, unknown>;
+function hasValue(value: unknown): boolean {
+  return isRecord(value) && typeof value.value === "number";
+}
+
+/** Current lane shape only. Anything older is unreadable and stays at the factory lane. */
+function laneCurrent(id: (typeof LANES)[number], raw: unknown): boolean {
+  if (!isRecord(raw)) return false;
+  if (id === "chords") return typeof raw.start === "number" && hasValue(raw.rate);
+  if (id === "bass" || id === "lead") return hasValue(raw.pitch) && hasValue(raw.octave);
+  return isRecord(raw.gen1) && typeof raw.gen1.hits === "number" && isRecord(raw.ratchet) && hasValue(raw.ratchet.count);
+}
+
+function acceptLanes(raw: unknown): Lanes {
+  const base = clone(defaultProject().working);
+  if (!isRecord(raw)) return base;
+  const out = base as unknown as Record<string, unknown>;
   for (const lane of LANES) {
-    if (isRecord(raw[lane])) out[lane] = deepMerge(out[lane], raw[lane]);
+    if (!laneCurrent(lane, raw[lane])) continue;
+    out[lane] = mergeKnown(out[lane], raw[lane]);
   }
   return out as unknown as Lanes;
 }
 
-function deepMerge(base: unknown, raw: unknown): unknown {
+function acceptJournal(raw: unknown): Project["journal"] {
+  if (!Array.isArray(raw)) return [];
+  const scenes: Project["journal"] = [];
+  for (const scene of raw) {
+    if (!isRecord(scene) || typeof scene.id !== "string") continue;
+    scenes.push({
+      id: scene.id,
+      color: typeof scene.color === "number" ? scene.color : undefined,
+      lanes: acceptLanes(scene.lanes),
+    });
+  }
+  return scenes;
+}
+
+/** Copy only keys the current value already has. Unrecognized fields are dropped. */
+function mergeKnown(base: unknown, raw: unknown): unknown {
   if (Array.isArray(base)) return Array.isArray(raw) ? raw : base;
   if (!isRecord(base) || !isRecord(raw)) return raw === undefined ? base : raw;
-  const out: Record<string, unknown> = { ...base };
-  for (const key of Object.keys(raw)) {
-    out[key] = key in base ? deepMerge(base[key], raw[key]) : raw[key];
+  const out: Record<string, unknown> = {};
+  for (const key of Object.keys(base)) {
+    out[key] = key in raw ? mergeKnown(base[key], raw[key]) : base[key];
   }
   return out;
 }
