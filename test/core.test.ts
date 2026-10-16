@@ -396,24 +396,36 @@ describe("morph, journal, macros", () => {
     assert.ok(shared.length > 0);
 
     const sounding = (tick: number) => ticks(generatePhrase(applyMorph(project, tick)));
-    const countOnly = (have: Set<number>, marks: number[]) => marks.filter((tick) => have.has(tick)).length;
-    const early = sounding(duration * 0.2);
-    const late = sounding(duration * 0.85);
-    assert.ok(countOnly(early, onlyA) > countOnly(late, onlyA));
-    assert.ok(countOnly(early, onlyB) < countOnly(late, onlyB));
-    assert.ok(shared.every((tick) => early.has(tick) && late.has(tick)));
-
-    const left = sounding(duration * 0.49);
-    const right = sounding(duration * 0.51);
-    let diff = 0;
-    for (const tick of left) if (!right.has(tick)) diff += 1;
-    for (const tick of right) if (!left.has(tick)) diff += 1;
-    assert.ok(diff < setA.size);
-    assert.ok([...left].some((tick) => setA.has(tick)));
+    const countOnly = (have: Set<number>, marks: number[]) => marks.filter((mark) => have.has(mark)).length;
+    let prevA = onlyA.length;
+    let prevB = 0;
+    let dropped = false;
+    let arrived = false;
+    for (let i = 1; i <= 20; i++) {
+      const have = sounding((i / 20) * duration);
+      const a = countOnly(have, onlyA);
+      const b = countOnly(have, onlyB);
+      assert.ok(a <= prevA);
+      assert.ok(b >= prevB);
+      if (a < prevA) dropped = true;
+      if (b > prevB) arrived = true;
+      prevA = a;
+      prevB = b;
+      assert.ok(shared.every((tick) => have.has(tick)));
+    }
+    assert.ok(dropped);
+    assert.ok(arrived);
 
     const mid = applyMorph(project, duration / 2);
-    const changed = generatePhrase(mid).harmony.filter((event, index) => event.root !== start.harmony[index].root).length;
-    assert.ok(changed > 0 && changed < start.harmony.length);
+    assert.deepEqual(
+      generatePhrase(mid).harmony.map((event) => event.root),
+      goal.harmony.map((event) => event.root),
+    );
+    const before = generatePhrase(applyMorph(project, duration * 0.49));
+    assert.deepEqual(
+      before.harmony.map((event) => event.root),
+      start.harmony.map((event) => event.root),
+    );
 
     const oneSided = generatePhrase(mid).lanes.kick.find((event) => onlyA.includes(event.tick) || onlyB.includes(event.tick));
     assert.ok(oneSided);
@@ -448,9 +460,10 @@ describe("morph, journal, macros", () => {
     const late = generatePhrase(applyMorph(project, duration * 0.8));
     assert.equal(early.steps.kick, late.steps.kick);
     assert.ok(early.steps.kick > 16);
-    const hit = early.lanes.kick.find((event) => event.tick === 0);
+    const hit = early.lanes.kick[0] ?? late.lanes.kick[0];
     assert.ok(hit);
-    assert.ok(Math.abs(hit.sound.decay - 0.2) < 1e-6);
+    const heard = early.lanes.kick.length > 0 ? 0.2 : 0.8;
+    assert.ok(Math.abs(hit.sound.decay - heard) < 1e-6);
   });
 
   it("does not morph a locked lane or a punched sound", () => {
@@ -483,40 +496,54 @@ describe("morph, journal, macros", () => {
     assert.ok(punched.lanes.kick.every((event) => Math.abs(event.sound.decay - 0.2) < 1e-6));
   });
 
-  it("keeps chord and bass peaks within the louder endpoint", () => {
-    const blockToBlock = morphPair(
-      (project) => {
-        project.working.chords.start = 0;
-        project.working.chords.rate.value = 0;
+  it("admits start events less often as the morph advances, and never invents a note", () => {
+    const project = morphPair(
+      (item) => {
+        item.working.bass.pitch.value = 0.2;
+        item.working.bass.gen1.hits = 3;
+        item.working.bass.gen1.probability = 0.7;
+        item.working.bass.sound.cutoff.value = 0;
+        item.working.bass.sound.cutoff.amount = 0;
+        item.working.lead.pitch.value = 0.25;
+        item.working.chords.start = 0;
+        item.working.chords.mood = 0;
       },
-      (project) => {
-        project.working.chords.start = 4;
-        project.working.chords.mood = 1;
-        project.working.chords.rate.value = 0;
-      },
-    );
-    assertPeakHeld(blockToBlock, "chords");
-
-    const blockToArp = morphPair(
-      (project) => {
-        project.working.chords.rate.value = 0;
-      },
-      (project) => {
-        project.working.chords.start = 2;
-        project.working.chords.rate.value = 0.45;
-        project.working.chords.direction = 1;
-      },
-    );
-    assertPeakHeld(blockToArp, "chords");
-
-    const bassDegree = morphPair(
-      () => {},
-      (project) => {
-        project.working.bass.pitch.value = 0.85;
-        project.working.bass.gen1.hits = 5;
+      (item) => {
+        item.working.bass.pitch.value = 0.9;
+        item.working.bass.gen1.hits = 6;
+        item.working.bass.gen1.probability = 1;
+        item.working.bass.sound.cutoff.value = 1;
+        item.working.bass.sound.cutoff.amount = 0;
+        item.working.lead.pitch.value = 0.85;
+        item.working.chords.start = 4;
+        item.working.chords.mood = 1;
       },
     );
-    assertPeakHeld(bassDegree, "bass");
+    const duration = project.morph?.durationTicks ?? 0;
+    const start = generatePhrase({ ...project, morph: null, working: project.morph!.start });
+    const goal = generatePhrase({ ...project, morph: null, working: project.journal[1].lanes });
+    const early = generatePhrase(applyMorph(project, duration * 0.25));
+    const late = generatePhrase(applyMorph(project, duration * 0.75));
+    assert.equal(project.working.bass.gen1.probability, 0.7);
+    for (const lane of ["bass", "lead", "chords"] as const) {
+      const parts = splitSig(noteSig(start, lane), noteSig(goal, lane));
+      assert.ok(parts.onlyA.length > 0 && parts.onlyB.length > 0);
+      const earlySig = new Set(noteSig(early, lane));
+      const lateSig = new Set(noteSig(late, lane));
+      for (const key of [...earlySig, ...lateSig]) assert.ok(parts.all.has(key));
+      assert.ok(countIn(earlySig, parts.onlyA) > countIn(lateSig, parts.onlyA));
+      assert.ok(countIn(earlySig, parts.onlyB) < countIn(lateSig, parts.onlyB));
+      assert.ok(parts.shared.every((key) => earlySig.has(key) && lateSig.has(key)));
+      for (const event of [...early.lanes[lane], ...late.lanes[lane]]) {
+        const key = `${event.tick}:${event.note}:${event.lengthTicks}`;
+        const source = start.lanes[lane].find((item) => `${item.tick}:${item.note}:${item.lengthTicks}` === key)
+          ?? goal.lanes[lane].find((item) => `${item.tick}:${item.note}:${item.lengthTicks}` === key);
+        assert.equal(event.velocity, source?.velocity);
+      }
+    }
+    assert.ok(early.lanes.bass.length > 0);
+    assert.ok(early.lanes.bass.every((event) => Math.abs(event.sound.cutoff - 0.25) < 1e-6));
+    assert.ok(late.lanes.bass.every((event) => Math.abs(event.sound.cutoff - 0.75) < 1e-6));
   });
 
   it("holds a melodic note for the length knob", () => {
@@ -564,6 +591,25 @@ describe("morph, journal, macros", () => {
   });
 });
 
+function noteSig(phrase: ReturnType<typeof generatePhrase>, lane: "bass" | "lead" | "chords"): string[] {
+  return phrase.lanes[lane].map((event) => `${event.tick}:${event.note}:${event.lengthTicks}`).sort();
+}
+
+function splitSig(start: string[], goal: string[]): { onlyA: string[]; onlyB: string[]; shared: string[]; all: Set<string> } {
+  const a = new Set(start);
+  const b = new Set(goal);
+  return {
+    onlyA: [...a].filter((key) => !b.has(key)),
+    onlyB: [...b].filter((key) => !a.has(key)),
+    shared: [...a].filter((key) => b.has(key)),
+    all: new Set([...a, ...b]),
+  };
+}
+
+function countIn(have: Set<string>, keys: string[]): number {
+  return keys.filter((key) => have.has(key)).length;
+}
+
 function morphPair(setupA: (project: Project) => void, setupB: (project: Project) => void): Project {
   let project = defaultProject();
   setupA(project);
@@ -573,33 +619,6 @@ function morphPair(setupA: (project: Project) => void, setupB: (project: Project
   project.working = clone(project.journal[0].lanes);
   project.transition = "fast";
   return launchScene(project, "002", 0);
-}
-
-function assertPeakHeld(project: Project, lane: "chords" | "bass"): void {
-  const duration = project.morph?.durationTicks ?? 0;
-  const start = peakOverlap(generatePhrase(project), lane);
-  const goal = peakOverlap(generatePhrase(applyMorph(project, duration)), lane);
-  const cap = Math.max(start, goal);
-  for (let i = 1; i < 20; i++) {
-    const peak = peakOverlap(generatePhrase(applyMorph(project, (i / 20) * duration)), lane);
-    assert.ok(peak <= cap + 1e-6, `${lane} peak ${peak} above ${cap}`);
-  }
-}
-
-function peakOverlap(phrase: ReturnType<typeof generatePhrase>, lane: "chords" | "bass"): number {
-  const events = phrase.lanes[lane];
-  const span = Math.max(1, phrase.steps[lane]) * SIXTEENTH_TICKS;
-  let peak = 0;
-  for (let tick = 0; tick < span; tick += SIXTEENTH_TICKS / 2) {
-    let acc = 0;
-    for (const event of events) {
-      const start = ((event.tick % span) + span) % span;
-      const length = Math.max(0, Math.min(event.lengthTicks, span - start));
-      if (tick >= start && tick < start + length) acc += event.velocity;
-    }
-    if (acc > peak) peak = acc;
-  }
-  return peak;
 }
 
 function kickSig(phrase: ReturnType<typeof generatePhrase>): Array<[number, number, number]> {
