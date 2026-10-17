@@ -20,6 +20,13 @@ export interface Notice {
   untilMs: number;
 }
 
+export interface DetentHold {
+  path: string;
+  dir: -1 | 1;
+  /** Clicks still to spend before this direction leaves the detent. */
+  left: number;
+}
+
 export interface UiState {
   context: ContextId;
   page: number;
@@ -39,6 +46,8 @@ export interface UiState {
   heldContext: ContextId | null;
   heldPage: number | null;
   focus: Focus | null;
+  /** Clicks of resistance still owed before leaving the current detent. */
+  detent: DetentHold | null;
   notice: Notice | null;
   trackDownTick: (number | null)[];
   trackDownMs: (number | null)[];
@@ -79,6 +88,7 @@ export function rememberPage(ui: UiState, context: ContextId, page: number): UiS
     page: clamped,
     lanePages: { ...ui.lanePages, [context]: clamped },
     focus: moved ? null : ui.focus,
+    detent: moved ? null : ui.detent,
   };
 }
 
@@ -100,6 +110,7 @@ export function defaultUi(): UiState {
     heldContext: null,
     heldPage: null,
     focus: null,
+    detent: null,
     notice: null,
     trackDownTick: [null, null, null, null],
     trackDownMs: [null, null, null, null],

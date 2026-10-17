@@ -232,7 +232,12 @@ function touchEncoder(session: Session, index: number, press: boolean): Session 
     const captured = captureFromEncoder(session, binding.path, true);
     if (captured) return captured;
   }
-  const ui = { ...session.ui, focus: focusFor(session, binding, true) };
+  const sameKnob = session.ui.detent?.path === binding.path;
+  const ui = {
+    ...session.ui,
+    focus: focusFor(session, binding, true),
+    detent: session.ui.shiftHeld || !sameKnob ? null : session.ui.detent,
+  };
   if (!session.ui.shiftHeld) return { ...session, ui };
   return { ...session, project: resetControl(session.project, session.ui.context, binding), ui };
 }
@@ -246,10 +251,11 @@ function turnEncoder(session: Session, index: number, value: number): Session {
     const captured = captureFromEncoder(session, binding.path, held);
     if (captured) return captured;
   }
+  const turned = writeControl(session.project, session.ui.context, binding, delta, session.ui.detent);
   return {
     ...session,
-    project: writeControl(session.project, session.ui.context, binding, delta),
-    ui: { ...session.ui, focus: focusFor(session, binding, held) },
+    project: turned.project,
+    ui: { ...session.ui, detent: turned.hold, focus: focusFor(session, binding, held) },
   };
 }
 

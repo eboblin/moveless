@@ -7,12 +7,13 @@ import { modulated } from "../src/core/modulate.ts";
 import { applyMorph } from "../src/core/morph.ts";
 import { createSet, launchScene, record } from "../src/core/performance.ts";
 import { generatePhrase } from "../src/core/phrase.ts";
-import { lanePages, pageCount, pageGroup, pageGroupColor, pagesFor } from "../src/core/pages.ts";
+import { bindingFor, lanePages, pageCount, pageGroup, pageGroupColor, pagesFor } from "../src/core/pages.ts";
 import { LED, blinkHalfMs, ledColorAt, menuLed, padLeds, shadeColor, stepLed, stepLeds, trackLeds } from "../src/ui/leds.ts";
 import { DIGIT_H, displayAmount, plotAmount } from "../src/ui/digits.ts";
 import { DIGIT_Y, FONT_H, HEADER_H, HEIGHT, NAME_Y, PAGER_Y, PARAM_COL_W, PARAM_H, SEP_Y, TITLE_Y, VALUE_Y, VIZ_H, pixel, renderScreen, type Screen } from "../src/ui/screen.ts";
 import { defaultUi, openSetMode } from "../src/ui/state.ts";
 import { reduce, relDelta, type Session } from "../src/ui/input.ts";
+import { DETENT_CLICKS, stepKnob } from "../src/ui/controls.ts";
 
 function session(): Session {
   return { project: defaultProject(), ui: defaultUi(), tick: 0, playing: false };
@@ -1308,3 +1309,71 @@ function pitchSpread(screen: Screen): number {
   }
   return max < 0 ? 0 : max - min + 1;
 }
+
+describe("virtual detents", () => {
+  function knob(path: string) {
+    const found = bindingFor(path);
+    assert.ok(found);
+    return found;
+  }
+
+  it("catches a power of two and holds it for several clicks", () => {
+    const cycle = knob("gen1.velocity.cycle");
+    assert.deepEqual(cycle.detents, [1, 2, 4, 8, 16, 32, 64]);
+    const caught = stepKnob(3, cycle, 1, null);
+    assert.equal(caught.value, 4);
+    assert.equal(caught.hold?.left, DETENT_CLICKS);
+    let hold = caught.hold;
+    for (let i = 0; i < DETENT_CLICKS; i++) {
+      const stuck = stepKnob(4, cycle, 1, hold);
+      assert.equal(stuck.value, 4);
+      hold = stuck.hold;
+    }
+    const left = stepKnob(4, cycle, 1, hold);
+    assert.equal(left.value, 5);
+    assert.equal(left.hold, null);
+    assert.equal(stepKnob(3, cycle, 7, null).value, 4);
+    assert.equal(stepKnob(4, cycle, 7, null).value, 4);
+    assert.equal(stepKnob(4, cycle, DETENT_CLICKS + 4, null).value, 8);
+    const turned = stepKnob(4, cycle, -1, { path: cycle.path, dir: 1, left: 0 });
+    assert.equal(turned.value, 4);
+    assert.equal(turned.hold?.dir, -1);
+    assert.equal(turned.hold?.left, DETENT_CLICKS - 1);
+  });
+
+  it("holds zero in the middle, fifty on cutoff, and nothing on a plain knob", () => {
+    const amount = knob("gen1.velocity.amount");
+    assert.deepEqual(amount.detents, [0]);
+    const onto = stepKnob(0.01, amount, -1, null);
+    assert.equal(onto.value, 0);
+    let hold = onto.hold;
+    for (let i = 0; i < DETENT_CLICKS; i++) {
+      const stuck = stepKnob(0, amount, -1, hold);
+      assert.equal(stuck.value, 0);
+      hold = stuck.hold;
+    }
+    const off = stepKnob(0, amount, -1, hold);
+    assert.ok(Math.abs(off.value + 0.01) < 1e-9);
+
+    const cutoff = knob("filter.cutoff.value");
+    assert.deepEqual(cutoff.detents, [0.5]);
+    const open = stepKnob(0.49, cutoff, 1, null);
+    assert.equal(open.value, 0.5);
+    const stay = stepKnob(open.value, cutoff, 1, open.hold);
+    assert.equal(stay.value, 0.5);
+    let cut = open.hold;
+    for (let i = 0; i < DETENT_CLICKS; i++) cut = stepKnob(0.5, cutoff, 1, cut).hold;
+    const past = stepKnob(0.5, cutoff, 1, cut);
+    assert.ok(Math.abs(past.value - 0.51) < 1e-9);
+
+    assert.deepEqual(knob("pitch.value").detents, [0.5]);
+    assert.deepEqual(knob("macro.probability").detents, [0]);
+    assert.deepEqual(knob("transpose").detents, [0]);
+    assert.deepEqual(knob("start").detents, [0]);
+
+    const length = knob("gen1.length");
+    assert.equal(length.detents, undefined);
+    assert.equal(stepKnob(16, length, 1, null).value, 17);
+  });
+});
+

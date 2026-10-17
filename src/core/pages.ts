@@ -37,6 +37,8 @@ export interface Binding {
   display: KnobDisplay;
   /** Macro keys that add into this knob. Absent when the knob is not shifted. */
   macro?: readonly string[];
+  /** Values the encoder holds for one extra click. Same units as the knob, not the 0..99 cell. */
+  detents?: readonly number[];
 }
 
 export type PageGroup = "pattern" | "notes" | "sound" | "fx" | "space" | "global" | "macro" | "mix";
@@ -160,6 +162,23 @@ function displayOf(path: string): KnobDisplay {
   return "number";
 }
 
+/** Powers of two inside the range, including an end when that end is itself a power of two. */
+function powersOfTwo(min: number, max: number): number[] {
+  const out: number[] = [];
+  for (let n = 1; n <= max; n *= 2) {
+    if (n >= min) out.push(n);
+    if (n > max / 2) break;
+  }
+  return out;
+}
+
+function detentsOf(path: string, min: number, max: number): readonly number[] | undefined {
+  if (path.endsWith(".cycle")) return powersOfTwo(min, max);
+  if (path === "filter.cutoff.value" || path === "pitch.value") return [0.5];
+  if (min < 0 && max > 0) return [0];
+  return undefined;
+}
+
 function macroOf(path: string): readonly string[] | undefined {
   if (path === "gen1.probability" || path === "gen2.probability") return ["probability"];
   if (!path.endsWith(".value")) return undefined;
@@ -176,8 +195,10 @@ function knob(
   step: number,
   integer = false,
   store: KnobStore = "lane",
+  detents?: readonly number[],
 ): Binding {
   const macro = macroOf(path);
+  const picked = (detents ?? detentsOf(path, min, max) ?? []).filter((value) => value >= min && value <= max);
   return {
     path,
     label,
@@ -192,6 +213,7 @@ function knob(
     weight: weightOf(path),
     display: displayOf(path),
     ...(macro ? { macro } : {}),
+    ...(picked.length ? { detents: picked } : {}),
   };
 }
 
