@@ -5,6 +5,7 @@ import { hash01 } from "./hash.ts";
 import { bindingFor, laneScopePaths, modulatorPaths } from "./pages.ts";
 import {
   LANES,
+  laneFamily,
   type CaptureDepth,
   type CaptureIntensity,
   type CaptureScope,
@@ -53,7 +54,6 @@ const BUDGET_CAP: Record<Exclude<CaptureIntensity, "clear">, number> = {
 
 const AWAY_COST = 3;
 const TOWARD_CHANCE = 0.75;
-const HEAVY_SOUND = new Set(["pitch", "cutoff", "tone", "decay", "snap"]);
 
 function depthAllows(path: string, depth: CaptureDepth): boolean {
   const shape = path.endsWith(".pattern") || path.endsWith(".cycle") || path.endsWith(".amount");
@@ -62,34 +62,18 @@ function depthAllows(path: string, depth: CaptureDepth): boolean {
   return true;
 }
 
-function weightFor(path: string): number {
-  if (path === "ratchet.count.value" || path === "repeat.value" || path === "ratchet.rate.value" || path === "rate.value") return 8;
-  if (path.endsWith(".pattern")) return 1;
-  if (path.endsWith(".amount")) return 1.2;
-  if (path.endsWith(".cycle")) return 1.5;
-  if (path.endsWith(".rotate")) return 2;
-  if (path.endsWith(".probability")) return 3;
-  if (path.endsWith(".hits")) return 5;
-  if (path.startsWith("gen") && path.endsWith(".length")) return 6;
-  if (path === "follow") return 6;
-  if (path.endsWith(".value")) {
-    const id = path.split(".").at(-2) ?? "";
-    return HEAVY_SOUND.has(id) ? 8 : 4;
-  }
-  return 4;
-}
-
 interface KnobSpec {
   min: number;
   max: number;
   step: number;
   integer: boolean;
+  weight: number;
 }
 
 function knobSpec(path: string): KnobSpec | null {
   const binding = bindingFor(path);
   if (!binding) return null;
-  return { min: binding.min, max: binding.max, step: binding.step, integer: binding.integer };
+  return { min: binding.min, max: binding.max, step: binding.step, integer: binding.integer, weight: binding.weight };
 }
 
 function scopePages(lane: LaneId, scope: LaneCapture): string[][] {
@@ -160,7 +144,7 @@ function applyBudget(
     }
     const room = Math.abs(targetUnit - unit);
     if (room <= 1e-9) continue;
-    const costPerUnit = weightFor(path) * (wantToward ? 1 : AWAY_COST);
+    const costPerUnit = spec.weight * (wantToward ? 1 : AWAY_COST);
     const affordable = Math.min(room, left / costPerUnit, cap / costPerUnit);
     const stepUnits = affordable * roll("frac", path);
     if (stepUnits * span + 1e-12 < spec.step) continue;
@@ -184,8 +168,8 @@ function readNumber(root: unknown, path: string): number | null {
 /** Reroll one page group, or the whole lane when scope is `all`. Each page spends its own budget. */
 export function captureLane(project: Project, lane: LaneId, scope: LaneCapture = "pattern"): Project {
   if (project.lock[lane]) return project;
-  if (scope === "notes" && lane !== "bass" && lane !== "lead" && lane !== "chords") return project;
-  if (scope === "pattern" && lane === "chords") return project;
+  if (scope === "notes" && laneFamily(lane) === "drum") return project;
+  if (scope === "pattern" && laneFamily(lane) === "chords") return project;
   if (project.captureIntensity === "clear") return clearLane(project, lane, scope);
   let next = project;
   scopePages(lane, scope).forEach((paths, index) => {

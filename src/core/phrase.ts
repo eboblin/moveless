@@ -15,6 +15,7 @@ import { getPath, mixFieldValues } from "./fields.ts";
 import { morphEndpoints } from "./morph.ts";
 import { applyFollowMidi, chordTonePitchClasses, degreeToMidi, generateHarmony, harmonyAt, pitchClassName, scaleOf } from "./harmony.ts";
 import { bipolarFromUnit, evalModulated, soundMacro, withMacro } from "./modulate.ts";
+import { macroOffset } from "./pages.ts";
 import { mod } from "./motif.ts";
 import {
   DRUM_NOTE,
@@ -317,7 +318,7 @@ function eventsFor(
 }
 
 function macro(macros: Record<string, number>, id: string): number {
-  return macros[id] ?? 0;
+  return macroOffset(id, macros);
 }
 
 function soundValues(
@@ -377,7 +378,7 @@ function drumEvents(lane: DrumLane, id: LaneId, global: GlobalSettings, macros: 
   const hits = generateHits(lane.gen1, lane.gen2, steps, global.seed, id, macro(macros, "velocity"), macro(macros, "probability"));
   const out: TimedEvent[] = [];
   hits.forEach((hit) => {
-    const count = countFromUnit(evalModulated(withMacro(lane.ratchet.count, macro(macros, "count") + macro(macros, "repeat")), hit.step));
+    const count = countFromUnit(evalModulated(withMacro(lane.ratchet.count, macro(macros, "count")), hit.step));
     const rate = rateFromUnit(evalModulated(withMacro(lane.ratchet.rate, macro(macros, "rate")), hit.step));
     for (let i = 0; i < count; i++) {
       const step = hit.step + (i * rate.ticks) / SIXTEENTH_TICKS;

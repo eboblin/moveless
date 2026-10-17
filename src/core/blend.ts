@@ -1,5 +1,6 @@
 import { clamp01, sampleOffset, SIXTEENTH_TICKS, sixteenthSteps, tickToSample, ticksPerBar } from "./clock.ts";
 import { evalModulated, soundMacro, withMacro } from "./modulate.ts";
+import { macroOffset } from "./pages.ts";
 import { isDrum, LANES, type LaneFilter, type LaneId, type LaneSend, type Lanes, type Modulated, type Phrase, type Project, type TimedEvent } from "./types.ts";
 
 /** Shared loop for two patterns. Prefers a common multiple that still lands on the target. */
@@ -149,12 +150,12 @@ function stampLane(
     ...event,
     sound: stampPitch(event, mixSound(event.step, t, soundFrom, soundTo, macros)),
     filter: {
-      cutoff: mixOne(event.step, t, filterFrom.cutoff, filterTo.cutoff, macros.cutoff ?? 0),
-      resonance: mixOne(event.step, t, filterFrom.resonance, filterTo.resonance, macros.resonance ?? 0),
+      cutoff: mixOne(event.step, t, filterFrom.cutoff, filterTo.cutoff, macroOffset("cutoff", macros)),
+      resonance: mixOne(event.step, t, filterFrom.resonance, filterTo.resonance, macroOffset("resonance", macros)),
     },
     send: {
-      reverb: mixOne(event.step, t, sendFrom.reverb, sendTo.reverb, macros.reverb ?? 0),
-      delay: mixOne(event.step, t, sendFrom.delay, sendTo.delay, macros.delay ?? 0),
+      reverb: mixOne(event.step, t, sendFrom.reverb, sendTo.reverb, macroOffset("reverb", macros)),
+      delay: mixOne(event.step, t, sendFrom.delay, sendTo.delay, macroOffset("delay", macros)),
     },
   }));
 }

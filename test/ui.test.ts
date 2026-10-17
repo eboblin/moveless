@@ -364,11 +364,8 @@ describe("surface", () => {
     assert.ok(marked.some((label) => label.text === "LEN"));
     assert.equal(screen.digits[0]?.invert, true);
     assert.deepEqual(screen.digits[0]?.amount, displayAmount(state.project.working.kick.gen1.length, {
-      path: "gen1.length",
-      label: "G1 LEN",
       min: 0,
       max: 64,
-      step: 1,
       integer: true,
     }));
     assert.equal(HEADER_H + VIZ_H + PARAM_H, 64);

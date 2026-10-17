@@ -21,9 +21,9 @@ import {
   toggleLock,
   toggleMute,
 } from "../core/performance.ts";
-import { CAPTURE_DEPTHS, CAPTURE_INTENSITIES, CAPTURE_SCOPES, isLane, LANES, MENU_CC, STEPS, TRANSITIONS, WANDERS, type LaneId, type Project } from "../core/types.ts";
+import { CAPTURE_DEPTHS, CAPTURE_INTENSITIES, CAPTURE_SCOPES, isLane, MENU_CC, STEPS, TRANSITIONS, WANDERS, type LaneId, type Project } from "../core/types.ts";
 import { resetControl, writeControl } from "./controls.ts";
-import { bindingPaths, pageCount, pageGroup, pagesFor } from "../core/pages.ts";
+import { bindingFor, bindingPaths, pageCount, pageGroup, pagesFor } from "../core/pages.ts";
 import { applyBookmark, FOCUS_HOLD_MS, focusHoldTicks, HOLD_MS, HOLD_TICKS, rememberPage, type Notice, type UiState } from "./state.ts";
 
 export interface MidiMsg {
@@ -259,7 +259,7 @@ function captureFromEncoder(session: Session, path: string, held: boolean): Sess
   if (context === "aux") {
     const kind = surfaceKind(path);
     if (!kind) return null;
-    const focusBinding = bindingByPath(context, path) ?? { path, label: path };
+    const focusBinding = bindingFor(path) ?? { path, label: path };
     return {
       ...session,
       project: captureSurface(session.project, kind, [path]),
@@ -272,7 +272,7 @@ function captureFromEncoder(session: Session, path: string, held: boolean): Sess
   }
   const target = generatorTarget(path);
   if (!target) return null;
-  const focusBinding = bindingByPath(context, path) ?? { path, label: target };
+  const focusBinding = bindingFor(path) ?? { path, label: target };
   return {
     ...session,
     project: captureGenerator(session.project, context, target),
@@ -297,7 +297,6 @@ function focusFor(session: Session, binding: { path: string; label: string }, he
 }
 
 export function modulatedBase(path: string): string | null {
-  if (path.includes(".g1.") || path.includes(".g2.")) return null;
   const suffixes = [".value", ".pattern", ".cycle", ".amount"];
   const suffix = suffixes.find((item) => path.endsWith(item));
   return suffix ? path.slice(0, -suffix.length) : null;
@@ -337,17 +336,10 @@ function onCapture(session: Session, press: boolean): Session {
   };
 }
 
-function bindingByPath(context: Session["ui"]["context"], path: string) {
-  for (const page of pagesFor(context)) {
-    const binding = page.bindings.find((item) => item?.path === path);
-    if (binding) return binding;
-  }
-  return undefined;
-}
-
 function surfaceKind(path: string): "mix" | "perf" | null {
-  if (path.startsWith("macro.")) return "perf";
-  if (path === "master" || (LANES as readonly string[]).includes(path)) return "mix";
+  const store = bindingFor(path)?.store;
+  if (store === "macro") return "perf";
+  if (store === "mixer") return "mix";
   return null;
 }
 

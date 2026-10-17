@@ -30,9 +30,11 @@ import {
 import { generatePhrase, unitForOctave } from "../src/core/phrase.ts";
 import { pitchClassOfDegree, scaleOf } from "../src/core/harmony.ts";
 import { chordLabels, textPreview } from "../src/core/text-preview.ts";
-import type { ScaleId } from "../src/core/types.ts";
+import { fieldsOf, getPath } from "../src/core/fields.ts";
+import { bindingFor, macroOffset, pagesFor } from "../src/core/pages.ts";
+import { LANES, SOUND, type Project, type ScaleId } from "../src/core/types.ts";
+import { hasSoundMap } from "../src/dsp/map.ts";
 import { punch } from "../src/core/morph.ts";
-import type { Project } from "../src/core/types.ts";
 
 function bar(project: Project, bars = 1): Project {
   const next = clone(project);
@@ -1274,5 +1276,75 @@ describe("capture, wander, sets", () => {
     const landed = applyMorph(held, duration);
     assert.ok(Math.abs(landed.space.reverb.size - 0.2) < 1e-9);
     assert.equal(landed.morph, null);
+  });
+});
+
+describe("surface catalog", () => {
+  it("keeps lane fields, knobs, defaults and engine maps in step", () => {
+    const project = defaultProject();
+    const fields = fieldsOf(project.working);
+    const fieldPaths = new Set(fields.map((field) => field.path));
+    for (const lane of LANES) {
+      const seen = new Set<string>();
+      for (const item of pagesFor(lane)) {
+        for (const binding of item.bindings) {
+          if (!binding) continue;
+          assert.equal(binding.store, "lane");
+          const full = `${lane}.${binding.path}`;
+          assert.equal(fieldPaths.has(full), true, full);
+          assert.equal(typeof getPath(project.working, full), "number");
+          assert.equal(bindingFor(binding.path)?.path, binding.path);
+          seen.add(full);
+        }
+      }
+      for (const field of fields) {
+        if (!field.path.startsWith(`${lane}.`)) continue;
+        assert.equal(seen.has(field.path), true, field.path);
+        const rel = field.path.slice(lane.length + 1);
+        assert.equal(bindingFor(rel)?.morph, field.kind);
+      }
+      for (const id of SOUND[lane]) {
+        assert.equal(typeof project.working[lane].sound[id]?.value, "number");
+        assert.equal(hasSoundMap(lane, id), true);
+      }
+    }
+    const macroKeys = new Set<string>();
+    const fed = new Set<string>();
+    for (const item of pagesFor("aux")) {
+      for (const binding of item.bindings) {
+        if (binding?.store === "macro") macroKeys.add(binding.path.slice("macro.".length));
+      }
+    }
+    for (const lane of LANES) {
+      for (const item of pagesFor(lane)) {
+        for (const binding of item.bindings) {
+          for (const key of binding?.macro ?? []) fed.add(key);
+        }
+      }
+    }
+    for (const key of macroKeys) assert.equal(fed.has(key), true, key);
+    assert.equal(fed.has("count"), true);
+    assert.equal(fed.has("reverb"), true);
+    assert.equal(fed.has("delay"), true);
+    assert.equal(macroOffset("count", { count: 0.2, repeat: 0.3 }), 0.5);
+    assert.equal(macroOffset("release", { release: 0.2, decay: 0.3 }), 0.5);
+    assert.equal(macroOffset("repeat", { repeat: 0.3 }), 0.3);
+    assert.equal(bindingFor("gen1.velocity.value")?.morph, "switch");
+    assert.equal(bindingFor("gen1.velocity.amount")?.morph, "switch");
+    assert.equal(bindingFor("sound.wave.value")?.morph, "lerp");
+    assert.equal(bindingFor("sound.wave.amount")?.morph, "lerp");
+    assert.equal(bindingFor("sound.wave.pattern")?.morph, "switch");
+    assert.equal(bindingFor("filter.cutoff.value")?.morph, "lerp");
+    assert.equal(bindingFor("pitch.value")?.morph, "switch");
+    assert.equal(bindingFor("follow")?.morph, "switch");
+    assert.equal(bindingFor("gen1.length")?.morph, "switch");
+    assert.equal(bindingFor("repeat.value")?.weight, 8);
+    assert.equal(bindingFor("macro.probability")?.weight, 3);
+    assert.equal(bindingFor("follow")?.weight, 6);
+    assert.equal(bindingFor("sound.snap.value")?.weight, 8);
+    assert.equal(bindingFor("sound.wave.value")?.weight, 4);
+    assert.equal(bindingFor("length.value")?.weight, 4);
+    assert.equal(bindingFor("gen1.length")?.title, "GEN 1 LENGTH");
+    assert.equal(bindingFor("follow")?.short, "FOL");
   });
 });

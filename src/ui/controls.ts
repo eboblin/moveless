@@ -1,38 +1,13 @@
 import { clone } from "../core/clone.ts";
 import { punch, writeSpace } from "../core/morph.ts";
+import { bindingFor, type Binding } from "../core/pages.ts";
 import { setMacro, setMixer } from "../core/performance.ts";
-import { LANES, SCALE_IDS, PROGRESSION_KEYS, type ContextId, type LaneId, type Progression, type Project } from "../core/types.ts";
-import type { Binding } from "../core/pages.ts";
-
-const MIXER_PATHS = new Set<string>([...LANES, "master"]);
-
-function readAux(project: Project, path: string): number {
-  if (path.startsWith("macro.")) return project.macros[path.slice(6)] ?? 0;
-  if (path.startsWith("reverb.") || path.startsWith("delay.")) return readSpace(project, path);
-  if ((PROGRESSION_KEYS as readonly string[]).includes(path)) return readProgression(project, path);
-  if (MIXER_PATHS.has(path)) return project.mixer[path as LaneId | "master"];
-  if (path === "scale") return SCALE_IDS.indexOf(project.global.scale);
-  return project.global[path as keyof typeof project.global] as number;
-}
-
-function writeAux(project: Project, path: string, value: number): Project {
-  if (path.startsWith("macro.")) return setMacro(project, path.slice(6), value);
-  if (path.startsWith("reverb.") || path.startsWith("delay.")) return writeSpace(project, path, value);
-  if ((PROGRESSION_KEYS as readonly string[]).includes(path)) return writeProgression(project, path, value);
-  if (MIXER_PATHS.has(path)) return setMixer(project, path as LaneId | "master", value);
-  if (path === "scale") {
-    const next = clone(project);
-    next.global.scale = SCALE_IDS[value] ?? SCALE_IDS[0];
-    return next;
-  }
-  const next = clone(project);
-  (next.global as unknown as Record<string, number>)[path] = value;
-  return next;
-}
+import { SCALE_IDS, type ContextId, type LaneId, type Progression, type Project } from "../core/types.ts";
 
 export function readControl(project: Project, context: ContextId, path: string): number {
-  if (context === "aux") return readAux(project, path);
-  return readWorking(project, `${context}.${path}`);
+  const binding = bindingFor(path);
+  if (!binding || binding.store === "lane") return readWorking(project, context === "aux" ? path : `${context}.${path}`);
+  return readStored(project, binding);
 }
 
 export function writeControl(project: Project, context: ContextId, binding: Binding, delta: number): Project {
@@ -51,17 +26,48 @@ function storeControl(project: Project, context: ContextId, binding: Binding, ra
   if (value < binding.min) value = binding.min;
   if (value > binding.max) value = binding.max;
   if (binding.integer) value = Math.round(value);
-  if (context === "aux") return writeAux(project, binding.path, value);
-  return punch(project, `${context}.${binding.path}`, value);
+  switch (binding.store) {
+    case "lane":
+      return punch(project, `${context}.${binding.path}`, value);
+    case "macro":
+      return setMacro(project, binding.path.slice("macro.".length), value);
+    case "space":
+      return writeSpace(project, binding.path, value);
+    case "progression":
+      return writeProgression(project, binding.path, value);
+    case "mixer":
+      return setMixer(project, binding.path as LaneId | "master", value);
+    case "global":
+      return writeGlobal(project, binding.path, value);
+  }
 }
 
-function readProgression(project: Project, path: string): number {
-  if (!(PROGRESSION_KEYS as readonly string[]).includes(path)) return 0;
-  return project.progression[path as keyof Progression];
+function readStored(project: Project, binding: Binding): number {
+  switch (binding.store) {
+    case "macro":
+      return project.macros[binding.path.slice("macro.".length)] ?? 0;
+    case "space":
+      return readSpace(project, binding.path);
+    case "progression":
+      return project.progression[binding.path as keyof Progression];
+    case "mixer":
+      return project.mixer[binding.path as LaneId | "master"];
+    case "global":
+      if (binding.path === "scale") return SCALE_IDS.indexOf(project.global.scale);
+      return project.global[binding.path as keyof typeof project.global] as number;
+    case "lane":
+      return 0;
+  }
+}
+
+function writeGlobal(project: Project, path: string, value: number): Project {
+  const next = clone(project);
+  if (path === "scale") next.global.scale = SCALE_IDS[value] ?? SCALE_IDS[0];
+  else (next.global as unknown as Record<string, number>)[path] = value;
+  return next;
 }
 
 function writeProgression(project: Project, path: string, value: number): Project {
-  if (!(PROGRESSION_KEYS as readonly string[]).includes(path)) return project;
   const next = clone(project);
   next.progression[path as keyof Progression] = value;
   return next;

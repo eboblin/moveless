@@ -340,3 +340,12 @@ export function isDrum(lane: LaneId): lane is DrumId {
 export function isPitched(lane: LaneId): lane is PitchedId {
   return lane === "bass" || lane === "lead";
 }
+
+export type LaneFamily = "drum" | "pitched" | "chords";
+
+/** Which page list a lane uses. Drums share one list shape; sound ids still differ. */
+export function laneFamily(lane: LaneId): LaneFamily {
+  if (lane === "chords") return "chords";
+  if (isPitched(lane)) return "pitched";
+  return "drum";
+}

@@ -109,6 +109,12 @@ export function mapKick(sound: Record<string, number>): EngineParam[] {
   return mapSound("kick", sound);
 }
 
+/** True when this semantic id has an engine name in the lane's table. */
+export function hasSoundMap(lane: LaneId, id: string): boolean {
+  if (lane === "bass" || lane === "lead" || lane === "chords") return id in MELODY;
+  return id in DRUM_SUFFIX[lane];
+}
+
 function clamp(value: number): number {
   if (value < 0) return 0;
   if (value > 1) return 1;

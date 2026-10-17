@@ -7,7 +7,7 @@ import { evalModulated } from "../core/modulate.ts";
 import { CAPTURE_DEPTHS, CAPTURE_INTENSITIES, CAPTURE_SCOPES, isPitched, LANES, LANE_CODE, type AuxId, type CaptureDepth, type CaptureIntensity, type CaptureScope, type ContextId, type HarmonicEvent, type LaneId, type Phrase, type Project, type TimedEvent } from "../core/types.ts";
 import { DIGIT_H, displayAmount, type BigAmount, type DisplayAmount } from "./digits.ts";
 import { readControl } from "./controls.ts";
-import { pagesFor, type Binding, type Page } from "../core/pages.ts";
+import { bindingFor, pagesFor, type Binding, type Page } from "../core/pages.ts";
 import { focusVisible, type UiState } from "./state.ts";
 
 export const WIDTH = 128;
@@ -74,7 +74,11 @@ export function renderScreen(
   const notice = !capture && ui.notice && now < ui.notice.untilMs ? ui.notice : null;
   const focusState = !notice && !capture && focusVisible(ui.focus, tick, now) ? ui.focus : null;
   const focus = focusState?.label ?? null;
-  const header = figureHeader(project, context, focusState?.path ?? null) ?? (focus ? fullName(focus) : laneHeader(project, context, page));
+  const focusBinding = focusState ? bindingFor(focusState.path) : null;
+  const header =
+    (focusBinding ? figureHeader(project, context, focusBinding) : null) ??
+    focusBinding?.title ??
+    (focus ? focus : laneHeader(project, context, page));
   const vizLane: LaneId | null = isAux(context) ? null : context;
   const generator = vizLane && focusState?.generator ? focusState.generator : null;
   const mixer = !notice && !capture && page?.group === "mix";
@@ -574,34 +578,45 @@ function bucket(index: number, count: number, size: number): [number, number] {
 }
 
 /** Pitch and octave show the resting note. Chord rate shows BLOCK or a division. */
-function figureHeader(project: Project, context: ContextId, path: string | null): string | null {
-  if ((context === "bass" || context === "lead") && path === "pitch.value") {
-    return restingPitchLabel(context, readControl(project, context, "pitch.value"), readControl(project, context, "octave.value"), project.global);
+function figureHeader(project: Project, context: ContextId, binding: Binding): string | null {
+  switch (binding.display) {
+    case "pitch":
+      if (context !== "bass" && context !== "lead") return null;
+      return restingPitchLabel(context, readControl(project, context, "pitch.value"), readControl(project, context, "octave.value"), project.global);
+    case "octave":
+      if (context !== "bass" && context !== "lead" && context !== "chords") return null;
+      return `OCT ${octaveNumber(readControl(project, context, "octave.value"))}`;
+    case "note":
+      return pitchClassName(project.global.root);
+    case "scale":
+      return scaleTitle(project.global.scale);
+    case "chordTone":
+      if (context !== "chords") return null;
+      return restingChordToneLabel(project.working.chords, project.progression, project.global);
+    case "division":
+      if (context !== "chords") return null;
+      return chordFigure(readControl(project, "chords", "rate.value")).label.slice(0, LINE_LIMIT);
+    default:
+      return null;
   }
-  if ((context === "bass" || context === "lead" || context === "chords") && path === "octave.value") {
-    return `OCT ${octaveNumber(readControl(project, context, "octave.value"))}`;
-  }
-  if (path === "root") return pitchClassName(project.global.root);
-  if (path === "scale") return scaleTitle(project.global.scale);
-  if (context !== "chords") return null;
-  if (path === "tone.value") return restingChordToneLabel(project.working.chords, project.progression, project.global);
-  if (path === "rate.value") return chordFigure(readControl(project, "chords", "rate.value")).label.slice(0, LINE_LIMIT);
-  return null;
 }
 
 function knobAmount(project: Project, context: ContextId, binding: Binding): DisplayAmount {
-  if ((context === "bass" || context === "lead" || context === "chords") && binding.path === "octave.value") {
-    const n = octaveNumber(readControl(project, context, "octave.value"));
-    return { kind: "big", n: Math.abs(n), negative: n < 0 };
-  }
-  if (context === "chords" && binding.path === "tone.value") {
-    return { kind: "wide", text: restingChordToneLabel(project.working.chords, project.progression, project.global), negative: false };
-  }
-  if (binding.path === "root") {
-    return { kind: "wide", text: pitchClassName(project.global.root), negative: false };
-  }
-  if (binding.path === "scale") {
-    return { kind: "wide", text: scaleShort(project.global.scale), negative: false };
+  switch (binding.display) {
+    case "octave": {
+      if (context !== "bass" && context !== "lead" && context !== "chords") break;
+      const n = octaveNumber(readControl(project, context, "octave.value"));
+      return { kind: "big", n: Math.abs(n), negative: n < 0 };
+    }
+    case "chordTone":
+      if (context !== "chords") break;
+      return { kind: "wide", text: restingChordToneLabel(project.working.chords, project.progression, project.global), negative: false };
+    case "note":
+      return { kind: "wide", text: pitchClassName(project.global.root), negative: false };
+    case "scale":
+      return { kind: "wide", text: scaleShort(project.global.scale), negative: false };
+    default:
+      break;
   }
   return displayAmount(readControl(project, context, binding.path), binding);
 }
@@ -611,41 +626,6 @@ function stepAt(_project: Project, tick: number): number {
 }
 
 const LINE_LIMIT = 24;
-/** Expands each token of a binding label for the focus header. */
-const WORD: Record<string, string> = {
-  G1: "GEN 1",
-  G2: "GEN 2",
-  LEN: "LENGTH",
-  HIT: "HITS",
-  ROT: "ROTATE",
-  PRB: "PROB",
-  VEL: "VELOCITY",
-  V: "VALUE",
-  P: "PATTERN",
-  C: "CYCLE",
-  A: "AMOUNT",
-  TRANS: "TRANSPOSE",
-  KCK: "KICK",
-  SNR: "SNARE",
-  PRC: "PERC",
-  BAS: "BASS",
-  LEA: "LEAD",
-  CHD: "CHORDS",
-};
-
-function fullName(label: string): string {
-  return label
-    .trim()
-    .split(/\s+/)
-    .map((part) => WORD[part] ?? part)
-    .join(" ");
-}
-
-/** Last token, max 3 letters — fits a PARAM_COL_W cell at CHAR_W. */
-function shortName(label: string): string {
-  const parts = label.trim().split(/\s+/);
-  return (parts[parts.length - 1] ?? "").slice(0, 3);
-}
 
 /** Fallback center using CHAR_W; host paint re-centers with text_width. */
 export function cellTextX(cell: number, text: string, textWidth = text.length * CHAR_W): number {
@@ -672,7 +652,7 @@ function drawLabels(
   }
   page?.bindings.forEach((binding, index) => {
     if (!binding || index >= PARAM_COLS) return;
-    const name = shortName(binding.label);
+    const name = binding.short;
     const lit = focus === binding.label;
     const amount = knobAmount(project, context, binding);
     if (amount.kind === "wide") {

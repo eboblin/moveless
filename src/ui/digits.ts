@@ -1,5 +1,3 @@
-import type { Binding } from "../core/pages.ts";
-
 export const DIGIT_W = 6;
 export const DIGIT_H = 11;
 /** Gap between tens and ones. */
@@ -51,8 +49,15 @@ export interface WideAmount {
 
 export type DisplayAmount = BigAmount | WideAmount;
 
+/** The three fields a value cell needs from a knob. */
+interface AmountRange {
+  min: number;
+  max: number;
+  integer: boolean;
+}
+
 /** Same units as the old value label: integers as-is, floats as centi (×100). */
-export function naturalAmount(value: number, binding: Binding): number {
+export function naturalAmount(value: number, binding: AmountRange): number {
   return binding.integer ? Math.round(value) : Math.round(value * 100);
 }
 
@@ -60,7 +65,7 @@ export function naturalAmount(value: number, binding: Binding): number {
  * Big digits for 0..99; otherwise small-font text (true natural value, no scaling).
  * Bipolar keeps abs digits/text and a minus flag above the glyph.
  */
-export function displayAmount(value: number, binding: Binding): DisplayAmount {
+export function displayAmount(value: number, binding: AmountRange): DisplayAmount {
   const bipolar = binding.min < 0 && binding.max > 0;
   const negative = bipolar && value < 0;
   const natural = Math.abs(naturalAmount(value, binding));
