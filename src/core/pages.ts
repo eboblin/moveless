@@ -1,4 +1,4 @@
-import { isPitched, LANE_CODE, SCALE_IDS, SOUND, type ContextId, type LaneId } from "../core/types.ts";
+import { LANE_CODE, LANES, SCALE_IDS, SOUND, type ContextId, type LaneId } from "./types.ts";
 
 export interface Binding {
   path: string;
@@ -9,11 +9,15 @@ export interface Binding {
   integer: boolean;
 }
 
+export type PageGroup = "pattern" | "notes" | "sound" | "fx" | "global" | "macro" | "mix";
+
 export interface Page {
   id: string;
   title: string;
   /** Names for the left and right knob fours; shown right-aligned in each header half. */
   groups: [string | null, string | null];
+  /** Pad colour family. Lives on the page so it cannot drift from the page list. */
+  group: PageGroup;
   bindings: (Binding | null)[];
 }
 
@@ -40,11 +44,12 @@ function vpca(path: string, label: string): Binding[] {
   ];
 }
 
-function pair(aPath: string, aLabel: string, bPath: string, bLabel: string): Page {
+function pair(aPath: string, aLabel: string, bPath: string, bLabel: string, group: PageGroup): Page {
   return {
     id: aPath,
     title: `${aLabel} ${bLabel}`,
     groups: [aLabel, bLabel],
+    group,
     bindings: slots([...vpca(aPath, aLabel), ...vpca(bPath, bLabel)]),
   };
 }
@@ -56,6 +61,7 @@ function genPage(which: 1 | 2): Page {
     id: prefix,
     title: `GEN ${which}`,
     groups: [`GEN ${which}`, "VEL"],
+    group: "pattern",
     bindings: slots([
       num(`${prefix}.length`, `${tag} LEN`, 0, 64, 1, true),
       num(`${prefix}.hits`, `${tag} HIT`, 0, 64, 1, true),
@@ -67,7 +73,7 @@ function genPage(which: 1 | 2): Page {
 }
 
 function pitchPage(): Page {
-  return pair("pitch", "PITCH", "octave", "OCTAVE");
+  return pair("pitch", "PITCH", "octave", "OCTAVE", "notes");
 }
 
 function lengthPage(): Page {
@@ -75,6 +81,7 @@ function lengthPage(): Page {
     id: "length",
     title: "LENGTH",
     groups: ["LENGTH", "FOLLOW"],
+    group: "notes",
     bindings: slots([...vpca("length", "LENGTH"), num("follow", "FOLLOW", 0, 1, 0.01)]),
   };
 }
@@ -84,7 +91,7 @@ function soundPages(ids: readonly string[]): Page[] {
   for (let i = 0; i < ids.length; i += 2) {
     const a = ids[i];
     const b = ids[i + 1];
-    pages.push(pair(`sound.${a}`, a.toUpperCase(), `sound.${b}`, b.toUpperCase()));
+    pages.push(pair(`sound.${a}`, a.toUpperCase(), `sound.${b}`, b.toUpperCase(), "sound"));
   }
   return pages;
 }
@@ -94,6 +101,7 @@ function progPage(): Page {
     id: "prog",
     title: "PROG",
     groups: ["WALK", "TONE"],
+    group: "notes",
     bindings: slots([
       num("start", "START", -7, 7, 1, true),
       num("count", "COUNT", 1, 16, 1, true),
@@ -112,33 +120,39 @@ function playPage(): Page {
     id: "play",
     title: "PLAY",
     groups: ["RATE", "GATE"],
+    group: "notes",
     bindings: slots([...vpca("rate", "RATE"), ...vpca("gate", "GATE")]),
   };
 }
 
+function filterPage(): Page {
+  return pair("filter.cutoff", "CUTOFF", "filter.resonance", "RESO", "fx");
+}
+
 export function lanePages(lane: LaneId): Page[] {
   if (lane === "chords") {
-    return [progPage(), playPage(), pair("tone", "TONE", "octave", "OCTAVE"), ...soundPages(SOUND.chords)];
+    return [progPage(), playPage(), pair("tone", "TONE", "octave", "OCTAVE", "notes"), ...soundPages(SOUND.chords), filterPage()];
   }
   const pitched = lane === "bass" || lane === "lead";
   return [
     genPage(1),
     genPage(2),
     ...(pitched
-      ? [pair("repeat", "REPEAT", "step", "STEP"), pitchPage(), lengthPage()]
-      : [pair("ratchet.count", "COUNT", "ratchet.rate", "RATE")]),
+      ? [pair("repeat", "REPEAT", "step", "STEP", "pattern"), pitchPage(), lengthPage()]
+      : [pair("ratchet.count", "COUNT", "ratchet.rate", "RATE", "pattern")]),
     ...soundPages(SOUND[lane]),
+    filterPage(),
   ];
 }
 
 export function mixPage(): Page {
-  const lanes: LaneId[] = ["kick", "snare", "hat", "perc", "bass", "lead", "chords"];
   return {
     id: "mix",
     title: "MIXER",
     groups: [null, null],
+    group: "mix",
     bindings: slots([
-      ...lanes.map((lane) => num(lane, LANE_CODE[lane], 0, 1, 0.01)),
+      ...LANES.map((lane) => num(lane, LANE_CODE[lane], 0, 1, 0.01)),
       num("master", "MASTER", 0, 1, 0.01),
     ]),
   };
@@ -150,6 +164,7 @@ export function globalPages(): Page[] {
       id: "settings",
       title: "GLOBAL",
       groups: ["TIME", "FORM"],
+      group: "global",
       bindings: slots([
         num("tempo", "TEMPO", 40, 240, 1, true),
         num("swing", "SWING", 0, 1, 0.01),
@@ -169,6 +184,7 @@ function macroPage(id: string, title: string, knobs: readonly [string, string][]
     id,
     title,
     groups: [title, null],
+    group: "macro",
     bindings: slots(knobs.map(([key, label]) => num(`macro.${key}`, label, -1, 1, 0.01))),
   };
 }
@@ -225,13 +241,13 @@ export function bindingPaths(page: Page): string[] {
   return paths;
 }
 
-/** Pattern, notes, or sound pages for a lane, taken from the same pages the screen shows. */
-export function laneScopePaths(lane: LaneId, scope: "pattern" | "notes" | "sound" | "all"): string[][] {
+/** Pattern, notes, sound, or filter pages for a lane, taken from the same pages the screen shows. */
+export function laneScopePaths(lane: LaneId, scope: "pattern" | "notes" | "sound" | "fx" | "all"): string[][] {
   const pages = pagesFor(lane);
   const picked: string[][] = [];
   pages.forEach((page, index) => {
     const group = pageGroup(lane, index);
-    if (group !== "pattern" && group !== "notes" && group !== "sound") return;
+    if (group !== "pattern" && group !== "notes" && group !== "sound" && group !== "fx") return;
     if (scope !== "all" && group !== scope) return;
     picked.push(bindingPaths(page));
   });
@@ -254,31 +270,37 @@ export function modulatorPaths(lane: LaneId, target: string): string[] {
   return paths;
 }
 
-export type PageGroup = "pattern" | "notes" | "sound" | "global" | "macro" | "mix";
+export function pageGroup(context: ContextId, index: number): PageGroup {
+  const pages = pagesFor(context);
+  const page = pages[index] ?? pages[pages.length - 1];
+  return page?.group ?? "pattern";
+}
 
-/** Move pad colors. Pattern, notes and sound stay the same on every lane. */
+/** Move pad colors. Pattern, notes, sound and filter stay the same on every lane. */
 export const PAGE_GROUP_COLOR: Record<PageGroup, number> = {
   pattern: 3,
   notes: 14,
   sound: 20,
+  fx: 9,
   global: 8,
   macro: 22,
   mix: 120,
 };
 
-export function pageGroup(context: ContextId, index: number): PageGroup {
-  if (context === "mix") return "mix";
-  if (context === "global") return "global";
-  if (context === "perf") return "macro";
-  if (context === "chords") return index < 3 ? "notes" : "sound";
-  if (context === "bass" || context === "lead") {
-    if (index < 3) return "pattern";
-    if (index < 5) return "notes";
-    return "sound";
-  }
-  return index < 3 ? "pattern" : "sound";
-}
-
 export function pageGroupColor(context: ContextId, index: number): number {
   return PAGE_GROUP_COLOR[pageGroup(context, index)];
+}
+
+const CATALOG: readonly ContextId[] = [...LANES, "mix", "global", "perf"];
+
+/** First binding with this path. Ranges are the same on every lane that has the knob. */
+export function bindingFor(path: string): Binding | null {
+  for (const context of CATALOG) {
+    for (const page of pagesFor(context)) {
+      for (const binding of page.bindings) {
+        if (binding?.path === path) return binding;
+      }
+    }
+  }
+  return null;
 }

@@ -1,7 +1,8 @@
 import { clone } from "./clone.ts";
 import { defaultProject } from "./defaults.ts";
+import { nodeAt, setPath } from "./fields.ts";
 import { hash01 } from "./hash.ts";
-import { laneScopePaths, modulatorPaths } from "../ui/pages.ts";
+import { bindingFor, laneScopePaths, modulatorPaths } from "./pages.ts";
 import {
   LANES,
   type CaptureDepth,
@@ -14,7 +15,7 @@ import {
   type Project,
 } from "./types.ts";
 
-type LaneCapture = "pattern" | "notes" | "sound" | "all";
+type LaneCapture = "pattern" | "notes" | "sound" | "fx" | "all";
 
 export function setCaptureIntensity(project: Project, intensity: CaptureIntensity): Project {
   return { ...project, captureIntensity: intensity };
@@ -89,21 +90,9 @@ interface KnobSpec {
 }
 
 function knobSpec(path: string): KnobSpec | null {
-  if (path.endsWith(".value")) return { min: 0, max: 1, step: 0.01, integer: false };
-  if (path.endsWith(".pattern")) return { min: 0, max: 63, step: 1, integer: true };
-  if (path.endsWith(".cycle")) return { min: 1, max: 64, step: 1, integer: true };
-  if (path.endsWith(".amount")) return { min: -1, max: 1, step: 0.01, integer: false };
-  if (path.startsWith("gen") && (path.endsWith(".length") || path.endsWith(".hits") || path.endsWith(".rotate"))) {
-    return { min: 0, max: 64, step: 1, integer: true };
-  }
-  if (path.endsWith(".probability")) return { min: 0, max: 1, step: 0.01, integer: false };
-  if (path === "follow") return { min: 0, max: 1, step: 0.01, integer: false };
-  if (path.startsWith("macro.")) return { min: -1, max: 1, step: 0.01, integer: false };
-  if (path === "master" || (LANES as readonly string[]).includes(path)) return { min: 0, max: 1, step: 0.01, integer: false };
-  const chord = CHORD_RANGE[path];
-  if (!chord) return null;
-  const [min, max, integer] = chord;
-  return { min, max, step: integer ? 1 : 0.01, integer };
+  const binding = bindingFor(path);
+  if (!binding) return null;
+  return { min: binding.min, max: binding.max, step: binding.step, integer: binding.integer };
 }
 
 function scopePages(lane: LaneId, scope: LaneCapture): string[][] {
@@ -114,7 +103,12 @@ function generatorFields(target: string, lane: LaneId): string[] {
   return modulatorPaths(lane, target);
 }
 
-/** Spend one page budget on these knobs. Delete does not come here. */
+let factoryLanes: Lanes | null = null;
+
+function factoryLane(lane: LaneId): Lanes[LaneId] {
+  factoryLanes ??= defaultProject().working;
+  return factoryLanes[lane];
+}
 function spendPage(project: Project, lane: LaneId, paths: string[], tag: string): Project {
   const depth = project.captureDepth;
   const intensity = project.captureIntensity;
@@ -125,7 +119,7 @@ function spendPage(project: Project, lane: LaneId, paths: string[], tag: string)
   const working = clone(project.working);
   const roll = (...parts: (string | number)[]) =>
     hash01(project.global.seed, "capture", nonce, lane, tag, intensity, depth, ...parts);
-  applyBudget(working[lane], defaultProject().working[lane], eligible, roll, PAGE_BUDGET[intensity], BUDGET_CAP[intensity]);
+  applyBudget(working[lane], factoryLane(lane), eligible, roll, PAGE_BUDGET[intensity], BUDGET_CAP[intensity]);
   return { ...project, working, captureNonce: nonce };
 }
 
@@ -180,25 +174,14 @@ function applyBudget(
     if (next > spec.max) next = spec.max;
     const traveled = Math.abs(next - current) / span;
     if (traveled * span + 1e-12 < spec.step) continue;
-    writeNumber(root, path, next);
+    setPath(root, path, next);
     left -= traveled * costPerUnit;
   }
 }
 
 function readNumber(root: unknown, path: string): number | null {
-  const value = readNode(root, path);
+  const value = nodeAt(root, path);
   return typeof value === "number" ? value : null;
-}
-
-function writeNumber(root: unknown, path: string, value: number): void {
-  const parts = path.split(".");
-  let current = root;
-  for (let i = 0; i < parts.length - 1; i++) {
-    if (current === null || typeof current !== "object") return;
-    current = (current as Record<string, unknown>)[parts[i]];
-  }
-  if (current === null || typeof current !== "object") return;
-  (current as Record<string, unknown>)[parts[parts.length - 1]] = value;
 }
 
 /** Reroll one page group, or the whole lane when scope is `all`. Each page spends its own budget. */
@@ -224,8 +207,10 @@ function clearLane(project: Project, lane: LaneId, scope: LaneCapture): Project 
   if (scope === "all") {
     if (lane !== "chords") randomizePattern(working, lane, roll, intensity, depth);
     if (lane === "bass" || lane === "lead" || lane === "chords") randomizeNotes(working, lane, roll, intensity, depth);
-    randomizeSound(working[lane].sound, roll, intensity, depth);
-  } else if (scope === "sound") randomizeSound(working[lane].sound, roll, intensity, depth);
+    randomizeSound(working[lane].sound, intensity, depth);
+    randomizeFilter(working[lane].filter, intensity, depth);
+  } else if (scope === "sound") randomizeSound(working[lane].sound, intensity, depth);
+  else if (scope === "fx") randomizeFilter(working[lane].filter, intensity, depth);
   else if (scope === "notes") randomizeNotes(working, lane, roll, intensity, depth);
   else randomizePattern(working, lane, roll, intensity, depth);
   return { ...project, working, captureNonce: nonce };
@@ -273,25 +258,20 @@ export function captureSurface(project: Project, kind: "mix" | "perf", paths: st
 /** Reroll one euclid (`gen1`), its velocity, or another 4-param modulator. */
 export function captureGenerator(project: Project, lane: LaneId, target: string): Project {
   if (project.lock[lane]) return project;
-  const node = readNode(project.working[lane], target);
+  const node = nodeAt(project.working[lane], target);
   if (!isEuclidGen(node) && !isModulated(node)) return project;
   if (project.captureIntensity !== "clear") return spendPage(project, lane, generatorFields(target, lane), target);
   const intensity = project.captureIntensity;
   const depth = project.captureDepth;
   const working = clone(project.working);
-  const live = readNode(working[lane], target);
+  const live = nodeAt(working[lane], target);
   const nonce = project.captureNonce + 1;
-  const roll = (...parts: (string | number)[]) =>
-    hash01(project.global.seed, "capture", nonce, lane, target, intensity, depth, ...parts);
-  if (isEuclidGen(live)) Object.assign(live, touchEuclid(live, roll, "", intensity, depth));
-  else if (isModulated(live)) Object.assign(live, touchMaybeExpensive(live, roll, target, intensity, isRatchetPath(target), depth));
+  if (isEuclidGen(live)) Object.assign(live, touchEuclid(live, intensity, depth));
+  else if (isModulated(live)) Object.assign(live, touchModulated(live, intensity, depth));
   return { ...project, working, captureNonce: nonce };
 }
 
-/**
- * Reroll only the parameters listed on one page (binding paths). Avoids importing pages.ts.
- * Non-clear spends one page budget across the knobs. Clear still zeros the grouped targets.
- */
+/** Reroll only the parameters listed on one page. Non-clear spends one page budget. Clear zeros those targets. */
 export function capturePaths(project: Project, lane: LaneId, paths: string[]): Project {
   if (project.lock[lane]) return project;
   if (!paths.length) return project;
@@ -359,15 +339,13 @@ function applyCaptureTarget(
   depth: CaptureDepth,
 ): void {
   if (target.kind === "euclid") {
-    const node = readNode(root, target.path);
-    if (isEuclidGen(node)) Object.assign(node, touchEuclid(node, roll, target.path, intensity, depth));
+    const node = nodeAt(root, target.path);
+    if (isEuclidGen(node)) Object.assign(node, touchEuclid(node, intensity, depth));
     return;
   }
   if (target.kind === "modulated") {
-    const node = readNode(root, target.path);
-    if (isModulated(node)) {
-      Object.assign(node, touchMaybeExpensive(node, roll, target.path, intensity, isRatchetPath(target.path), depth));
-    }
+    const node = nodeAt(root, target.path);
+    if (isModulated(node)) Object.assign(node, touchModulated(node, intensity, depth));
     return;
   }
   if (!movesValues(depth)) return;
@@ -380,15 +358,6 @@ function applyCaptureTarget(
   root[target.path] = target.path in CHORD_RANGE ? rollChordScalar(target.path, unit) : unit;
 }
 
-function readNode(root: unknown, path: string): unknown {
-  let current = root;
-  for (const part of path.split(".")) {
-    if (current === null || typeof current !== "object") return undefined;
-    current = (current as Record<string, unknown>)[part];
-  }
-  return current;
-}
-
 function isEuclidGen(value: unknown): value is EuclidGen {
   return !!value && typeof value === "object" && "hits" in value && "length" in value && "rotate" in value && "probability" in value && "velocity" in value;
 }
@@ -397,29 +366,7 @@ function isModulated(value: unknown): value is Modulated {
   return !!value && typeof value === "object" && "amount" in value && "pattern" in value && "cycle" in value && "value" in value;
 }
 
-function isRatchetPath(path: string): boolean {
-  return path === "ratchet.count" || path === "ratchet.rate" || path.startsWith("ratchet.");
-}
-
-/** Ratchet (and other gated modulators): whole touch is expensive, like euclid structure. */
-function touchMaybeExpensive(
-  current: Modulated,
-  roll: (...parts: (string | number)[]) => number,
-  prefix: string,
-  intensity: CaptureIntensity,
-  _expensiveWhole: boolean,
-  depth: CaptureDepth,
-): Modulated {
-  return touchModulated(current, roll, prefix, intensity, depth);
-}
-
-function touchModulated(
-  current: Modulated,
-  _roll: (...parts: (string | number)[]) => number,
-  _prefix: string,
-  intensity: CaptureIntensity,
-  depth: CaptureDepth,
-): Modulated {
+function touchModulated(current: Modulated, intensity: CaptureIntensity, depth: CaptureDepth): Modulated {
   if (intensity === "clear") return clearedModulated(current, depth);
   return current;
 }
@@ -434,13 +381,7 @@ function clearedModulated(current: Modulated, depth: CaptureDepth): Modulated {
   };
 }
 
-function touchEuclid(
-  current: EuclidGen,
-  _roll: (...parts: (string | number)[]) => number,
-  _prefix: string,
-  intensity: CaptureIntensity,
-  depth: CaptureDepth,
-): EuclidGen {
+function touchEuclid(current: EuclidGen, intensity: CaptureIntensity, depth: CaptureDepth): EuclidGen {
   const values = movesValues(depth);
   if (intensity !== "clear") return current;
   return {
@@ -452,12 +393,6 @@ function touchEuclid(
   };
 }
 
-function clamp01(value: number): number {
-  if (value < 0) return 0;
-  if (value > 1) return 1;
-  return value;
-}
-
 function randomizePattern(
   lanes: Lanes,
   lane: LaneId,
@@ -467,18 +402,18 @@ function randomizePattern(
 ): void {
   if (lane === "chords") return;
   const target = lanes[lane];
-  target.gen1 = touchEuclid(target.gen1, roll, "gen1", intensity, depth);
-  target.gen2 = touchEuclid(target.gen2, roll, "gen2", intensity, depth);
+  target.gen1 = touchEuclid(target.gen1, intensity, depth);
+  target.gen2 = touchEuclid(target.gen2, intensity, depth);
   if (lane === "bass" || lane === "lead") {
     const pitched = lanes[lane];
-    pitched.repeat = touchModulated(pitched.repeat, roll, "repeat", intensity, depth);
-    pitched.step = touchModulated(pitched.step, roll, "step", intensity, depth);
+    pitched.repeat = touchModulated(pitched.repeat, intensity, depth);
+    pitched.step = touchModulated(pitched.step, intensity, depth);
     if (movesValues(depth)) pitched.follow = intensity === "clear" ? 0 : roll("follow");
     return;
   }
   const drum = lanes[lane];
-  drum.ratchet.count = touchMaybeExpensive(drum.ratchet.count, roll, "ratchet.count", intensity, true, depth);
-  drum.ratchet.rate = touchMaybeExpensive(drum.ratchet.rate, roll, "ratchet.rate", intensity, true, depth);
+  drum.ratchet.count = touchModulated(drum.ratchet.count, intensity, depth);
+  drum.ratchet.rate = touchModulated(drum.ratchet.rate, intensity, depth);
 }
 
 function randomizeNotes(
@@ -490,18 +425,18 @@ function randomizeNotes(
 ): void {
   if (lane === "bass" || lane === "lead") {
     const pitched = lanes[lane];
-    pitched.pitch = touchModulated(pitched.pitch, roll, "pitch", intensity, depth);
-    pitched.octave = touchModulated(pitched.octave, roll, "octave", intensity, depth);
-    pitched.length = touchModulated(pitched.length, roll, "length", intensity, depth);
+    pitched.pitch = touchModulated(pitched.pitch, intensity, depth);
+    pitched.octave = touchModulated(pitched.octave, intensity, depth);
+    pitched.length = touchModulated(pitched.length, intensity, depth);
     if (movesValues(depth)) pitched.follow = intensity === "clear" ? 0 : roll("follow");
     return;
   }
   if (lane !== "chords") return;
   const chords = lanes.chords;
-  chords.tone = touchModulated(chords.tone, roll, "tone", intensity, depth);
-  chords.octave = touchModulated(chords.octave, roll, "octave", intensity, depth);
-  chords.rate = touchModulated(chords.rate, roll, "rate", intensity, depth);
-  chords.gate = touchModulated(chords.gate, roll, "gate", intensity, depth);
+  chords.tone = touchModulated(chords.tone, intensity, depth);
+  chords.octave = touchModulated(chords.octave, intensity, depth);
+  chords.rate = touchModulated(chords.rate, intensity, depth);
+  chords.gate = touchModulated(chords.gate, intensity, depth);
   if (!movesValues(depth)) return;
   const plain = chords as unknown as Record<string, number>;
   for (const key of Object.keys(CHORD_RANGE)) {
@@ -509,11 +444,11 @@ function randomizeNotes(
   }
 }
 
-function randomizeSound(
-  sound: Record<string, Modulated>,
-  roll: (...parts: (string | number)[]) => number,
-  intensity: CaptureIntensity,
-  depth: CaptureDepth,
-): void {
-  for (const id of Object.keys(sound)) sound[id] = touchModulated(sound[id], roll, id, intensity, depth);
+function randomizeSound(sound: Record<string, Modulated>, intensity: CaptureIntensity, depth: CaptureDepth): void {
+  for (const id of Object.keys(sound)) sound[id] = touchModulated(sound[id], intensity, depth);
+}
+
+function randomizeFilter(filter: { cutoff: Modulated; resonance: Modulated }, intensity: CaptureIntensity, depth: CaptureDepth): void {
+  filter.cutoff = touchModulated(filter.cutoff, intensity, depth);
+  filter.resonance = touchModulated(filter.resonance, intensity, depth);
 }

@@ -1,7 +1,7 @@
 import { countFromUnit } from "./clock.ts";
 import { generateHits } from "./events.ts";
 import { evalModulated } from "./modulate.ts";
-import { generatePhrase, laneSteps } from "./phrase.ts";
+import { generatePhrase } from "./phrase.ts";
 import { chordSymbol } from "./harmony.ts";
 import { isDrum, LANE_CODE, LANES, SCALES, type LaneId, type Phrase, type Project } from "./types.ts";
 
@@ -59,8 +59,4 @@ function degreeChar(note: number, octave: number, project: Project): string {
 
 export function chordLabels(project: Project): string[] {
   return generatePhrase(project).harmony.map((event) => chordSymbol(event, project.global));
-}
-
-export function phraseStepsOf(project: Project, lane: LaneId): number {
-  return laneSteps(project.working, lane, project.global);
 }

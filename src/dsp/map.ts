@@ -62,8 +62,8 @@ const DRUM_SUFFIX: Record<DrumId, Record<string, string>> = {
 };
 
 /**
- * Cutoff, resonance, attack, decay and release use the stock chain names.
  * Shape, detune, FM, noise and width are osc_shape, osc_detune, osc_fm, noise, osc_width on our voice.
+ * Attack, decay and release use the stock chain names. Cutoff and resonance are the lane filter, not sound.
  */
 const SURGE: Record<"bass" | "lead" | "chords", Record<string, string>> = {
   bass: {
@@ -71,8 +71,6 @@ const SURGE: Record<"bass" | "lead" | "chords", Record<string, string>> = {
     detune: "osc_detune",
     fm: "osc_fm",
     noise: "noise",
-    cutoff: "cutoff",
-    resonance: "resonance",
     attack: "attack",
     decay: "decay",
   },
@@ -81,8 +79,6 @@ const SURGE: Record<"bass" | "lead" | "chords", Record<string, string>> = {
     detune: "osc_detune",
     fm: "osc_fm",
     noise: "noise",
-    cutoff: "cutoff",
-    resonance: "resonance",
     attack: "attack",
     release: "release",
   },
@@ -91,8 +87,6 @@ const SURGE: Record<"bass" | "lead" | "chords", Record<string, string>> = {
     detune: "osc_detune",
     fm: "osc_fm",
     width: "osc_width",
-    cutoff: "cutoff",
-    resonance: "resonance",
     attack: "attack",
     release: "release",
   },
@@ -109,6 +103,14 @@ export function mapSound(lane: LaneId, sound: Record<string, number>): EnginePar
     id: `${voice}_${table[id] ?? id}`,
     value: clamp(sound[id] ?? 0),
   }));
+}
+
+/** Lane filter. Plain ids so drums do not pick up a voice prefix. */
+export function mapFilter(filter: { cutoff: number; resonance: number }): EngineParam[] {
+  return [
+    { id: "cutoff", value: clamp(filter.cutoff) },
+    { id: "resonance", value: clamp(filter.resonance) },
+  ];
 }
 
 export function mapKick(sound: Record<string, number>): EngineParam[] {

@@ -7,7 +7,7 @@ import { modulated } from "../src/core/modulate.ts";
 import { applyMorph } from "../src/core/morph.ts";
 import { createSet, launchScene, record } from "../src/core/performance.ts";
 import { generatePhrase } from "../src/core/phrase.ts";
-import { lanePages, pageCount, pageGroup, pageGroupColor, pagesFor } from "../src/ui/pages.ts";
+import { lanePages, pageCount, pageGroup, pageGroupColor, pagesFor } from "../src/core/pages.ts";
 import { LED, blinkHalfPeriod, ledColorAt, menuLed, padLeds, shadeColor, stepLed, stepLeds, trackLeds } from "../src/ui/leds.ts";
 import { DIGIT_H, displayAmount, plotAmount } from "../src/ui/digits.ts";
 import { DIGIT_Y, FONT_H, HEADER_H, HEIGHT, NAME_Y, PAGER_Y, PARAM_COL_W, PARAM_H, SEP_Y, TITLE_Y, VALUE_Y, VIZ_H, pixel, renderScreen, type Screen } from "../src/ui/screen.ts";
@@ -19,11 +19,17 @@ function session(): Session {
 }
 
 describe("pages and leds", () => {
-  it("gives drums seven pages and bass nine", () => {
-    assert.equal(pageCount("kick"), 7);
+  it("gives drums eight pages and bass nine", () => {
+    assert.equal(pageCount("kick"), 8);
     assert.equal(pageCount("bass"), 9);
     assert.equal(pageCount("lead"), 9);
     assert.equal(pageCount("chords"), 7);
+    assert.equal(pageGroup("kick", 7), "fx");
+    assert.equal(pageGroup("bass", 8), "fx");
+    assert.equal(pageGroup("chords", 6), "fx");
+    assert.equal(pageGroupColor("kick", 7), 9);
+    assert.equal(lanePages("bass").at(-1)?.groups[0], "CUTOFF");
+    assert.equal(lanePages("bass").at(-1)?.groups[1], "RESO");
     assert.equal(lanePages("kick")[0].title, "GEN 1");
     assert.deepEqual(lanePages("kick")[0].groups, ["GEN 1", "VEL"]);
     assert.deepEqual(lanePages("kick")[2].groups, ["COUNT", "RATE"]);
@@ -142,7 +148,7 @@ describe("pages and leds", () => {
     assert.equal(bass[24].color, 3);
     assert.equal(bass[27].color, 14);
     assert.equal(bass[30].color, 20);
-    assert.equal(bass[16].color, 20);
+    assert.equal(bass[16].color, 9);
     const chords = padLeds(project, "journal", { ...defaultUi(), wheelTouch: true, context: "chords" });
     assert.equal(chords[24].color, 14);
     assert.equal(chords[28].color, 20);
@@ -499,7 +505,7 @@ describe("surface", () => {
       ...defaultUi(),
       context: "bass",
       page: 3,
-      focus: { label: "PITCH V", generator: null, showPattern: false, held: true, untilTick: 0 },
+      focus: { label: "PITCH V", path: "pitch.value", generator: null, showPattern: false, held: true, untilTick: 0 },
     }, 0);
     assert.equal(pitchHeld.header, "C2");
     const lengthPage = renderScreen(defaultProject(), { ...defaultUi(), context: "bass", page: 4 }, 0);
@@ -577,19 +583,19 @@ describe("surface", () => {
       ...defaultUi(),
       context: "chords",
       page: 2,
-      focus: { label: "TONE V", generator: "tone.value", showPattern: false, held: true, untilTick: 0 },
+      focus: { label: "TONE V", path: "tone.value", generator: "tone.value", showPattern: false, held: true, untilTick: 0 },
     }, 0);
     assert.equal(toneHeld.header, "C4");
     const octaveHeld = renderScreen(project, {
       ...defaultUi(),
       context: "chords",
       page: 2,
-      focus: { label: "OCTAVE V", generator: "octave.value", showPattern: false, held: true, untilTick: 0 },
+      focus: { label: "OCTAVE V", path: "octave.value", generator: "octave.value", showPattern: false, held: true, untilTick: 0 },
     }, 0);
     assert.equal(octaveHeld.header, "OCT 4");
     const zone = (rate: number) => renderScreen(
       { ...project, working: { ...project.working, chords: { ...project.working.chords, rate: modulated(rate) } } },
-      { ...defaultUi(), context: "chords", page: 1, focus: { label: "RATE V", generator: "rate.value", showPattern: false, held: true, untilTick: 0 } },
+      { ...defaultUi(), context: "chords", page: 1, focus: { label: "RATE V", path: "rate.value", generator: "rate.value", showPattern: false, held: true, untilTick: 0 } },
       0,
     ).header;
     assert.equal(zone(0), "BLOCK");
@@ -647,7 +653,7 @@ describe("surface", () => {
     const mode = renderScreen(keyed, {
       ...defaultUi(),
       context: "global",
-      focus: { label: "SCALE", generator: null, showPattern: false, held: true, untilTick: 0 },
+      focus: { label: "SCALE", path: "scale", generator: null, showPattern: false, held: true, untilTick: 0 },
     }, 0);
     assert.ok(mode.labels.some((label) => label.y === VALUE_Y && label.text === "D" && label.cell === 2));
     assert.ok(mode.labels.some((label) => label.y === TITLE_Y && label.text === "DORIAN"));
@@ -683,7 +689,7 @@ describe("surface", () => {
       project.working.kick.ratchet.count = { value: 0.5, pattern: 0, cycle, amount: 1 };
       const ui = {
         ...defaultUi(),
-        focus: { label: "COUNT C", generator: "ratchet.count", showPattern: false, held: true, untilTick: 0 },
+        focus: { label: "COUNT C", path: "ratchet.count.cycle", generator: "ratchet.count", showPattern: false, held: true, untilTick: 0 },
       };
       return renderScreen(project, ui, 0);
     };
@@ -846,6 +852,17 @@ describe("surface", () => {
     assert.equal(sound.ui.page, 4);
     assert.notDeepEqual(sound.project.working.kick.sound, heard.sound);
     assert.deepEqual(sound.project.working.kick.gen1, heard.gen1);
+    assert.deepEqual(sound.project.working.kick.filter, heard.filter);
+
+    let fx = session();
+    for (let n = 0; n < 7; n++) fx = reduce(fx, { kind: "cc", data1: 14, data2: 1 });
+    const open = fx.project.working.kick;
+    fx = reduce(fx, { kind: "cc", data1: 52, data2: 127 });
+    fx = reduce(fx, { kind: "cc", data1: 52, data2: 0 });
+    assert.equal(fx.ui.page, 7);
+    assert.notDeepEqual(fx.project.working.kick.filter, open.filter);
+    assert.deepEqual(fx.project.working.kick.sound, open.sound);
+    assert.deepEqual(fx.project.working.kick.gen1, open.gen1);
   });
 
   it("keeps page-group capture when Shift is held", () => {
@@ -997,7 +1014,7 @@ describe("surface", () => {
     state.project.working.bass.pitch.value = 0.9;
     state.project.working.bass.gen1.hits = 7;
     state.project.working.bass.follow = 0.1;
-    state.project.working.bass.sound.cutoff.value = 0.15;
+    state.project.working.bass.filter.cutoff.value = 0.15;
     state.project.working.lead.pitch.value = 0.2;
     state.project.mute.bass = true;
     state.project.lock.bass = true;
@@ -1008,7 +1025,7 @@ describe("surface", () => {
     assert.equal(state.project.working.bass.pitch.value, factory.pitch.value);
     assert.equal(state.project.working.bass.gen1.hits, factory.gen1.hits);
     assert.equal(state.project.working.bass.follow, factory.follow);
-    assert.equal(state.project.working.bass.sound.cutoff.value, factory.sound.cutoff.value);
+    assert.equal(state.project.working.bass.filter.cutoff.value, factory.filter.cutoff.value);
     assert.equal(state.project.working.lead.pitch.value, 0.2);
     assert.equal(state.project.mute.bass, true);
     assert.equal(state.project.lock.bass, true);

@@ -6,6 +6,8 @@ import {
   CAPTURE_SCOPES,
   LANES,
   SCALE_IDS,
+  TRANSITIONS,
+  WANDERS,
   type CaptureDepth,
   type CaptureIntensity,
   type CaptureScope,
@@ -15,7 +17,7 @@ import {
   type TransitionId,
   type WanderId,
 } from "./types.ts";
-import { pageCount } from "../ui/pages.ts";
+import { pageCount } from "./pages.ts";
 
 export const STORE_VERSION = 1;
 export const PROJECT_DIR = "/data/UserData/schwung/ptnmove";
@@ -41,8 +43,6 @@ export interface HostFiles {
 }
 
 const CONTEXTS: readonly ContextId[] = [...LANES, "mix", "global", "perf"];
-const TRANSITIONS: readonly TransitionId[] = ["now", "fast", "medium", "slow"];
-const WANDERS: readonly WanderId[] = ["fast", "medium", "slow", "glacial"];
 
 /** Drop tick-bound runtime before save/load. */
 export function sanitizeProject(project: Project): Project {
@@ -76,7 +76,7 @@ export function parseStored(raw: string): StoredBundle | null {
   if (!root.project || typeof root.project !== "object") return null;
   const source = root.project as Record<string, unknown>;
   const project = mergeProject(source);
-  const ui = mergeUi(root.ui, project);
+  const ui = mergeUi(root.ui);
   return { project: sanitizeProject(project), ui };
 }
 
@@ -145,14 +145,13 @@ function mergeProject(raw: Record<string, unknown>): Project {
   };
 }
 
-function mergeUi(raw: unknown, project: Project): StoredUi {
+function mergeUi(raw: unknown): StoredUi {
   const base: StoredUi = { context: "kick", page: 0, mode: "journal" };
   if (!isRecord(raw)) return base;
   const context = asContext(raw.context) ?? base.context;
   const mode = raw.mode === "set" || raw.mode === "journal" ? raw.mode : base.mode;
   const count = Math.max(1, pageCount(context));
   const page = Math.min(Math.max(0, asInt(raw.page, 0)), count - 1);
-  void project;
   return { context, page, mode };
 }
 

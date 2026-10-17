@@ -1,4 +1,4 @@
-import type { ChordLane, DrumLane, EuclidGen, Lanes, Modulated, PitchedLane } from "./types.ts";
+import type { ChordLane, DrumLane, EuclidGen, LaneFilter, LaneId, Lanes, Modulated, PitchedLane } from "./types.ts";
 
 export type MorphKind = "lerp" | "switch";
 
@@ -34,84 +34,107 @@ const CHORD_PLAIN = {
   way: "switch",
 } as const;
 
+type Sink = (path: string, kind: MorphKind, value: number) => void;
+
+function emitMod(sink: Sink, prefix: string, value: Modulated, timbre: boolean): void {
+  for (const key of MOD_KEYS) {
+    const kind = !timbre && (key === "value" || key === "amount") ? "switch" : MOD_KIND[key];
+    sink(`${prefix}.${key}`, kind, value[key]);
+  }
+}
+
+function emitEuclid(sink: Sink, prefix: string, gen: EuclidGen): void {
+  for (const key of Object.keys(EUCLID_KIND) as (keyof typeof EUCLID_KIND)[]) {
+    sink(`${prefix}.${key}`, EUCLID_KIND[key], gen[key]);
+  }
+  emitMod(sink, `${prefix}.velocity`, gen.velocity, false);
+}
+
+function emitSound(sink: Sink, prefix: string, sound: Record<string, Modulated>): void {
+  for (const id of Object.keys(sound).sort()) emitMod(sink, `${prefix}.sound.${id}`, sound[id], true);
+}
+
+function emitFilter(sink: Sink, prefix: string, filter: LaneFilter): void {
+  emitMod(sink, `${prefix}.filter.cutoff`, filter.cutoff, true);
+  emitMod(sink, `${prefix}.filter.resonance`, filter.resonance, true);
+}
+
+function emitDrum(sink: Sink, id: string, lane: DrumLane): void {
+  emitEuclid(sink, `${id}.gen1`, lane.gen1);
+  emitEuclid(sink, `${id}.gen2`, lane.gen2);
+  emitMod(sink, `${id}.ratchet.count`, lane.ratchet.count, false);
+  emitMod(sink, `${id}.ratchet.rate`, lane.ratchet.rate, false);
+  emitSound(sink, id, lane.sound);
+  emitFilter(sink, id, lane.filter);
+}
+
+function emitPitched(sink: Sink, id: string, lane: PitchedLane): void {
+  emitEuclid(sink, `${id}.gen1`, lane.gen1);
+  emitEuclid(sink, `${id}.gen2`, lane.gen2);
+  sink(`${id}.follow`, "switch", lane.follow);
+  for (const key of ["pitch", "octave", "length", "repeat", "step"] as const) {
+    emitMod(sink, `${id}.${key}`, lane[key], false);
+  }
+  emitSound(sink, id, lane.sound);
+  emitFilter(sink, id, lane.filter);
+}
+
+function emitChords(sink: Sink, lane: ChordLane): void {
+  for (const key of Object.keys(CHORD_PLAIN) as (keyof typeof CHORD_PLAIN)[]) {
+    sink(`chords.${key}`, CHORD_PLAIN[key], lane[key]);
+  }
+  emitMod(sink, "chords.tone", lane.tone, false);
+  emitMod(sink, "chords.octave", lane.octave, false);
+  emitMod(sink, "chords.rate", lane.rate, false);
+  emitMod(sink, "chords.gate", lane.gate, false);
+  emitSound(sink, "chords", lane.sound);
+  emitFilter(sink, "chords", lane.filter);
+}
+
+function walkLanes(lanes: Lanes, sink: Sink, only?: LaneId): void {
+  if (!only || only === "kick") emitDrum(sink, "kick", lanes.kick);
+  if (!only || only === "snare") emitDrum(sink, "snare", lanes.snare);
+  if (!only || only === "hat") emitDrum(sink, "hat", lanes.hat);
+  if (!only || only === "perc") emitDrum(sink, "perc", lanes.perc);
+  if (!only || only === "bass") emitPitched(sink, "bass", lanes.bass);
+  if (!only || only === "lead") emitPitched(sink, "lead", lanes.lead);
+  if (!only || only === "chords") emitChords(sink, lanes.chords);
+}
+
 export function fieldsOf(lanes: Lanes): Field[] {
   const out: Field[] = [];
-  for (const id of ["kick", "snare", "hat", "perc"] as const) pushDrum(out, id, lanes[id]);
-  for (const id of ["bass", "lead"] as const) pushPitched(out, id, lanes[id]);
-  pushChords(out, lanes.chords);
+  walkLanes(lanes, (path, kind, value) => out.push({ path, kind, value }));
   return out;
 }
 
-function pushMod(out: Field[], prefix: string, value: Modulated, timbre: boolean): void {
-  for (const key of MOD_KEYS) {
-    const kind = !timbre && (key === "value" || key === "amount") ? "switch" : MOD_KIND[key];
-    out.push({ path: `${prefix}.${key}`, kind, value: value[key] });
+/** Mix field values into a stamp. No Field objects. */
+export function mixFieldValues(lanes: Lanes, mix: (n: number) => void, only?: LaneId): void {
+  walkLanes(lanes, (_path, _kind, value) => mix(value), only);
+}
+
+/** Dotted path. Missing nodes are `undefined`; callers that require a number use {@link getPath}. */
+export function nodeAt(root: unknown, path: string): unknown {
+  let current = root;
+  for (const part of path.split(".")) {
+    if (current === null || typeof current !== "object") return undefined;
+    current = (current as Record<string, unknown>)[part];
   }
-}
-
-function pushEuclid(out: Field[], prefix: string, gen: EuclidGen): void {
-  for (const key of Object.keys(EUCLID_KIND) as (keyof typeof EUCLID_KIND)[]) {
-    out.push({ path: `${prefix}.${key}`, kind: EUCLID_KIND[key], value: gen[key] });
-  }
-  pushMod(out, `${prefix}.velocity`, gen.velocity, false);
-}
-
-function pushSound(out: Field[], prefix: string, sound: Record<string, Modulated>): void {
-  for (const id of Object.keys(sound).sort()) pushMod(out, `${prefix}.sound.${id}`, sound[id], true);
-}
-
-function pushDrum(out: Field[], id: string, lane: DrumLane): void {
-  pushEuclid(out, `${id}.gen1`, lane.gen1);
-  pushEuclid(out, `${id}.gen2`, lane.gen2);
-  pushMod(out, `${id}.ratchet.count`, lane.ratchet.count, false);
-  pushMod(out, `${id}.ratchet.rate`, lane.ratchet.rate, false);
-  pushSound(out, id, lane.sound);
-}
-
-function pushPitched(out: Field[], id: string, lane: PitchedLane): void {
-  pushEuclid(out, `${id}.gen1`, lane.gen1);
-  pushEuclid(out, `${id}.gen2`, lane.gen2);
-  out.push({ path: `${id}.follow`, kind: "switch", value: lane.follow });
-  for (const key of ["pitch", "octave", "length", "repeat", "step"] as const) {
-    pushMod(out, `${id}.${key}`, lane[key], false);
-  }
-  pushSound(out, id, lane.sound);
-}
-
-function pushChords(out: Field[], lane: ChordLane): void {
-  for (const key of Object.keys(CHORD_PLAIN) as (keyof typeof CHORD_PLAIN)[]) {
-    out.push({ path: `chords.${key}`, kind: CHORD_PLAIN[key], value: lane[key] });
-  }
-  pushMod(out, "chords.tone", lane.tone, false);
-  pushMod(out, "chords.octave", lane.octave, false);
-  pushMod(out, "chords.rate", lane.rate, false);
-  pushMod(out, "chords.gate", lane.gate, false);
-  pushSound(out, "chords", lane.sound);
+  return current;
 }
 
 export function getPath(root: unknown, path: string): number {
-  const found = walk(root, path);
-  return found.value;
+  const value = nodeAt(root, path);
+  if (typeof value !== "number") throw new Error(`missing ${path}`);
+  return value;
 }
 
 export function setPath(root: unknown, path: string, value: number): void {
-  const found = walk(root, path);
-  found.parent[found.key] = value;
-}
-
-function walk(root: unknown, path: string): { parent: Record<string, number>; key: string; value: number } {
   const parts = path.split(".");
-  let current: unknown = root;
-  for (let i = 0; i < parts.length - 1; i++) {
-    if (current === null || typeof current !== "object") {
-      throw new Error(`missing ${path}`);
-    }
-    current = (current as Record<string, unknown>)[parts[i]];
-  }
-  if (current === null || typeof current !== "object") throw new Error(`missing ${path}`);
-  const key = parts[parts.length - 1];
-  const parent = current as Record<string, number>;
-  return { parent, key, value: parent[key] };
+  const key = parts.pop();
+  if (!key) throw new Error(`missing ${path}`);
+  const parent = parts.length ? nodeAt(root, parts.join(".")) : root;
+  if (parent === null || typeof parent !== "object") throw new Error(`missing ${path}`);
+  (parent as Record<string, number>)[key] = value;
 }
 
 export function morphValue(kind: MorphKind, from: number, to: number, t: number): number {

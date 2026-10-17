@@ -40,11 +40,18 @@ export interface EuclidGen {
   velocity: Modulated;
 }
 
+/** One high-pass / low-pass on the lane. Cutoff 0.5 leaves the signal alone. */
+export interface LaneFilter {
+  cutoff: Modulated;
+  resonance: Modulated;
+}
+
 export interface DrumLane {
   gen1: EuclidGen;
   gen2: EuclidGen;
   ratchet: { count: Modulated; rate: Modulated };
   sound: Record<string, Modulated>;
+  filter: LaneFilter;
 }
 
 export interface PitchedLane {
@@ -57,6 +64,7 @@ export interface PitchedLane {
   repeat: Modulated;
   step: Modulated;
   sound: Record<string, Modulated>;
+  filter: LaneFilter;
 }
 
 export interface ChordLane {
@@ -81,6 +89,7 @@ export interface ChordLane {
   rate: Modulated;
   gate: Modulated;
   sound: Record<string, Modulated>;
+  filter: LaneFilter;
 }
 
 export interface Lanes {
@@ -133,6 +142,11 @@ export const CAPTURE_SCOPES: readonly CaptureScope[] = ["lane", "group", "page"]
 /** `all` moves everything. `generators` only pattern/cycle/amount. `values` skips those three. */
 export type CaptureDepth = "all" | "generators" | "values";
 export const CAPTURE_DEPTHS: readonly CaptureDepth[] = ["all", "generators", "values"];
+
+export const TRANSITIONS: readonly TransitionId[] = ["now", "fast", "medium", "slow"];
+export const WANDERS: readonly WanderId[] = ["fast", "medium", "slow", "glacial"];
+/** Menu button under the jog wheel. */
+export const MENU_CC = 50;
 
 export const TRANSITION_BARS: Record<TransitionId, number> = {
   now: 0,
@@ -216,6 +230,7 @@ export interface TimedEvent {
   lengthTicks: number;
   step: number;
   sound: Record<string, number>;
+  filter: { cutoff: number; resonance: number };
 }
 
 export interface Phrase {
@@ -231,9 +246,9 @@ export const SOUND: Record<LaneId, readonly string[]> = {
   snare: ["pitch", "body", "noise", "snap", "decay", "tail", "click", "drive"],
   hat: ["pitch", "click", "snap", "decay", "tone", "drive", "pan", "spread"],
   perc: ["pitch", "tone", "bend", "noise", "decay", "tail", "pan", "spread"],
-  bass: ["shape", "detune", "fm", "noise", "cutoff", "resonance", "attack", "decay"],
-  lead: ["shape", "detune", "fm", "noise", "cutoff", "resonance", "attack", "release"],
-  chords: ["shape", "detune", "fm", "width", "cutoff", "resonance", "attack", "release"],
+  bass: ["shape", "detune", "fm", "noise", "attack", "decay"],
+  lead: ["shape", "detune", "fm", "noise", "attack", "release"],
+  chords: ["shape", "detune", "fm", "width", "attack", "release"],
 };
 
 export const QUALITY_NAMES = ["maj", "min", "sus2", "sus4", "7", "m7", "dim", "aug"] as const;

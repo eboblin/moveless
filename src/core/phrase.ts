@@ -1,4 +1,5 @@
 import {
+  clamp01,
   countFromUnit,
   rateFromUnit,
   CHORD_RATES,
@@ -9,8 +10,8 @@ import {
   tickToSample,
 } from "./clock.ts";
 import { blendPhrases } from "./blend.ts";
-import { generateHits, phraseStepsOf, type Hit } from "./events.ts";
-import { fieldsOf, getPath } from "./fields.ts";
+import { generateHits, phraseStepsOf } from "./events.ts";
+import { getPath, mixFieldValues } from "./fields.ts";
 import { morphEndpoints } from "./morph.ts";
 import { applyFollowMidi, chordTonePitchClasses, degreeToMidi, generateHarmony, harmonyAt, pitchClassName, scaleOf } from "./harmony.ts";
 import { bipolarFromUnit, evalModulated, withMacro } from "./modulate.ts";
@@ -25,6 +26,7 @@ import {
   type DrumLane,
   type GlobalSettings,
   type HarmonicEvent,
+  type LaneFilter,
   type LaneId,
   type Lanes,
   type Phrase,
@@ -48,6 +50,9 @@ let idleProject: Project | null = null;
 let idleA = 0;
 let idleB = 0;
 let idlePhrase: Phrase | null = null;
+let blendSnap: EndSnap | null = null;
+let blendT = Number.NaN;
+let blendPhrase: Phrase | null = null;
 
 const floatBits = new Float32Array(1);
 const floatAsInt = new Int32Array(floatBits.buffer);
@@ -80,11 +85,7 @@ function stampPair(fill: (mix: (n: number) => void, text: (s: string) => void) =
 }
 
 function stampLanes(mix: (n: number) => void, lanes: Lanes, lane?: LaneId): void {
-  const prefix = lane ? `${lane}.` : "";
-  for (const field of fieldsOf(lanes)) {
-    if (prefix && !field.path.startsWith(prefix)) continue;
-    mix(field.value);
-  }
+  mixFieldValues(lanes, mix, lane);
 }
 
 function stampGlobal(mix: (n: number) => void, text: (s: string) => void, project: Project): void {
@@ -194,14 +195,12 @@ export function unitForOctave(octave: number): number {
 
 /** Scale degrees from the tonic. 0.5 is the tonic, the edges are one octave of the scale away. */
 export function scaleOffset(unit: number): number {
-  const u = Math.max(0, Math.min(1, unit));
-  return Math.round((u - 0.5) * (SCALE_REACH * 2));
+  return Math.round((clamp01(unit) - 0.5) * (SCALE_REACH * 2));
 }
 
 /** Absolute octave of the tonic, 0..9. */
 export function octaveNumber(unit: number): number {
-  const u = Math.max(0, Math.min(1, unit));
-  return OCTAVE_MIN + Math.round(u * (OCTAVE_MAX - OCTAVE_MIN));
+  return OCTAVE_MIN + Math.round(clamp01(unit) * (OCTAVE_MAX - OCTAVE_MIN));
 }
 
 /** Resting scale note for the pitch knob, before pattern motion and follow. */
@@ -218,16 +217,11 @@ function noteLabel(midi: number): string {
   return `${pitchClassName(note)}${Math.floor(note / 12)}`;
 }
 
-export function restingOctave(octave: number): number {
-  return octaveNumber(octave);
-}
-
 /** 0 picks the root, 1 picks the top tone of this chord. */
 export function chordToneIndex(unit: number, count: number): number {
   const n = Math.max(1, Math.round(count));
   if (n <= 1) return 0;
-  const u = Math.max(0, Math.min(1, unit));
-  return Math.round(u * (n - 1));
+  return Math.round(clamp01(unit) * (n - 1));
 }
 
 /** Resting note of the chord tone knob: first chord, value only, no pattern. */
@@ -240,16 +234,10 @@ export function restingChordToneLabel(lane: ChordLane, global: GlobalSettings): 
   return noteLabel(chordToneMidi(harm, scale, rootPc, lane.tone.value, lane.octave.value));
 }
 
-function chordPitchClasses(harm: HarmonicEvent, scale: readonly number[], rootPc: number): number[] {
-  const semis = QUALITY_SEMITONES[harm.quality] ?? QUALITY_SEMITONES[0];
-  const root = mod(degreeToMidi(harm.root, scale, rootPc, 0), 12);
-  return [...new Set(semis.map((semi) => mod(root + semi, 12)))].sort((a, b) => a - b);
-}
-
 /** Every chord of the phrase shares the selected octave, so a walking root does not drag the voicing. */
 function chordVoices(harm: HarmonicEvent, scale: readonly number[], rootPc: number, octaveUnit: number): number[] {
   const base = octaveNumber(octaveUnit) * 12;
-  return chordPitchClasses(harm, scale, rootPc).map((pc) => base + pc);
+  return chordTonePitchClasses(harm, scale, rootPc).map((pc) => base + pc);
 }
 
 function chordToneMidi(
@@ -278,7 +266,12 @@ export function generatePhrase(project: Project): Phrase {
     return phrase;
   }
   const snap = ensureEnds(project, target.lanes);
-  return blendPhrases(snap.fromPhrase, snap.toPhrase, snap.from, snap.to, project, project.morph.t);
+  const t = project.morph.t;
+  if (blendPhrase && blendSnap === snap && blendT === t) return blendPhrase;
+  blendSnap = snap;
+  blendT = t;
+  blendPhrase = blendPhrases(snap.fromPhrase, snap.toPhrase, snap.from, snap.to, project, t);
+  return blendPhrase;
 }
 
 function phraseOf(project: Project, working: Lanes): Phrase {
@@ -295,8 +288,6 @@ function phraseOf(project: Project, working: Lanes): Phrase {
   }
   return { lanes, harmony, steps };
 }
-
-export const previewPhrase = generatePhrase;
 
 export function laneSteps(lanes: Lanes, lane: LaneId, global: GlobalSettings): number {
   if (lane === "chords") return sixteenthSteps(global.phrase, global.bar);
@@ -318,7 +309,7 @@ function eventsFor(
 ): TimedEvent[] {
   if (isDrum(lane)) return drumEvents(lanes[lane], lane, global, macros, steps);
   if (isPitched(lane)) return pitchedEvents(lanes[lane], lane, global, macros, harmony, steps);
-  return chordAudio(lanes.chords, harmony, global, macros, lanes.chords.sound);
+  return chordAudio(lanes.chords, harmony, global, macros, lanes.chords.sound, lanes.chords.filter);
 }
 
 function macro(macros: Record<string, number>, id: string): number {
@@ -335,7 +326,14 @@ function soundValues(
   return out;
 }
 
-function place(step: number, extraTicks: number, global: GlobalSettings, lane: LaneId, note: number, velocity: number, lengthTicks: number, sound: Record<string, number>): TimedEvent {
+function filterValues(filter: LaneFilter, step: number, macros: Record<string, number>): TimedEvent["filter"] {
+  return {
+    cutoff: evalModulated(withMacro(filter.cutoff, macro(macros, "cutoff")), step),
+    resonance: evalModulated(withMacro(filter.resonance, macro(macros, "resonance")), step),
+  };
+}
+
+function place(step: number, extraTicks: number, global: GlobalSettings, lane: LaneId, note: number, velocity: number, lengthTicks: number, sound: Record<string, number>, filter: TimedEvent["filter"]): TimedEvent {
   const tick = swungStepTick(step, global.swing) + extraTicks;
   const sample = tickToSample(tick, global.tempo);
   return {
@@ -348,6 +346,7 @@ function place(step: number, extraTicks: number, global: GlobalSettings, lane: L
     lengthTicks,
     step,
     sound,
+    filter,
   };
 }
 
@@ -360,7 +359,8 @@ function drumEvents(lane: DrumLane, id: LaneId, global: GlobalSettings, macros: 
     for (let i = 0; i < count; i++) {
       const step = hit.step + (i * rate.ticks) / SIXTEENTH_TICKS;
       const sound = soundValues(lane.sound, step, macros);
-      out.push(place(hit.step, i * rate.ticks, global, id, DRUM_NOTE[id as keyof typeof DRUM_NOTE], hit.velocity, rate.ticks, sound));
+      const filter = filterValues(lane.filter, step, macros);
+      out.push(place(hit.step, i * rate.ticks, global, id, DRUM_NOTE[id as keyof typeof DRUM_NOTE], hit.velocity, rate.ticks, sound, filter));
     }
   });
   return out;
@@ -393,7 +393,8 @@ function pitchedEvents(
       const note = Math.max(0, Math.min(127, Math.round(applyFollowMidi(desiredMidi, lane.follow, chordPcs))));
       const lengthTicks = Math.max(1, Math.round(evalModulated(withMacro(lane.length, macro(macros, "length")), step) * global.bar * SIXTEENTH_TICKS));
       const sound = soundValues(lane.sound, step, macros);
-      out.push(place(hit.step, r * SIXTEENTH_TICKS, global, id, note, hit.velocity, lengthTicks, sound));
+      const filter = filterValues(lane.filter, step, macros);
+      out.push(place(hit.step, r * SIXTEENTH_TICKS, global, id, note, hit.velocity, lengthTicks, sound, filter));
     }
   });
   return out;
@@ -420,6 +421,7 @@ function chordAudio(
   global: GlobalSettings,
   macros: Record<string, number>,
   sound: ChordLaneSound,
+  filter: LaneFilter,
 ): TimedEvent[] {
   const scale = scaleOf(global.scale);
   const rootPc = mod(global.root + global.transpose, 12);
@@ -438,6 +440,7 @@ function chordAudio(
     hits.forEach(({ note, delay, lengthTicks }) => {
       const start = harm.startTick + delay;
       const rendered = soundValues(sound, start / SIXTEENTH_TICKS, macros);
+      const heard = filterValues(filter, start / SIXTEENTH_TICKS, macros);
       const sample = tickToSample(start, global.tempo);
       out.push({
         lane: "chords",
@@ -449,6 +452,7 @@ function chordAudio(
         lengthTicks,
         step: Math.floor(harm.startTick / SIXTEENTH_TICKS),
         sound: rendered,
+        filter: heard,
       });
     });
   });
@@ -507,9 +511,3 @@ function clampGate(gate: number): number {
   if (gate > 1) return 1;
   return gate;
 }
-
-export function hitsOn(phrase: Phrase, lane: LaneId): number[] {
-  return [...new Set(phrase.lanes[lane].map((event) => event.step))].sort((a, b) => a - b);
-}
-
-export type { Hit };

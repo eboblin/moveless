@@ -2,12 +2,12 @@ import { morphBarSide } from "../core/blend.ts";
 import { SIXTEENTH_TICKS } from "../core/clock.ts";
 import { phraseStepsOf } from "../core/events.ts";
 import { chordSymbol, degreeNumeral, pitchClassName, scaleShort, scaleTitle } from "../core/harmony.ts";
-import { chordFigure, endpointLanes, endpointPhrases, generatePhrase, laneSteps, restingChordToneLabel, restingOctave, restingPitchLabel } from "../core/phrase.ts";
+import { chordFigure, endpointLanes, endpointPhrases, generatePhrase, laneSteps, octaveNumber, restingChordToneLabel, restingPitchLabel } from "../core/phrase.ts";
 import { evalModulated } from "../core/modulate.ts";
-import { isPitched, LANE_CODE, type CaptureDepth, type CaptureIntensity, type CaptureScope, type ContextId, type HarmonicEvent, type LaneId, type Phrase, type Project, type TimedEvent } from "../core/types.ts";
+import { CAPTURE_DEPTHS, CAPTURE_INTENSITIES, CAPTURE_SCOPES, isPitched, LANES, LANE_CODE, type CaptureDepth, type CaptureIntensity, type CaptureScope, type ContextId, type HarmonicEvent, type LaneId, type Phrase, type Project, type TimedEvent } from "../core/types.ts";
 import { DIGIT_H, displayAmount, type BigAmount, type DisplayAmount } from "./digits.ts";
 import { readControl } from "./controls.ts";
-import { pagesFor, type Binding, type Page } from "./pages.ts";
+import { pagesFor, type Binding, type Page } from "../core/pages.ts";
 import type { UiState } from "./state.ts";
 
 export const WIDTH = 128;
@@ -52,29 +52,34 @@ export interface DigitCell {
 export interface Screen {
   header: string;
   viz: string;
-  params: string;
   pixels: Uint8Array;
   labels: Label[];
   digits: DigitCell[];
 }
 
-export function renderScreen(project: Project, ui: UiState, tick: number, playing = false, now = Date.now()): Screen {
+export function renderScreen(
+  project: Project,
+  ui: UiState,
+  tick: number,
+  playing = false,
+  now = Date.now(),
+  pixels: Uint8Array = new Uint8Array(WIDTH * HEIGHT),
+): Screen {
   const peek = ui.heldLane;
   const context = peek ?? ui.context;
   const pageIndex = peek ? ui.heldPage ?? ui.page : ui.page;
-  const pages = pagesFor(context === "mix" || context === "global" ? context : context);
+  const pages = pagesFor(context);
   const page = pages[Math.min(pageIndex, pages.length - 1)];
   const capture = ui.captureHeld;
   const notice = !capture && ui.notice && now < ui.notice.untilMs ? ui.notice : null;
   const focusState = !notice && !capture && ui.focus && (ui.focus.held || tick < ui.focus.untilTick) ? ui.focus : null;
   const focus = focusState?.label ?? null;
-  const header = figureHeader(project, context, focus) ?? (focus ? fullName(focus) : laneHeader(project, context, page));
+  const header = figureHeader(project, context, focusState?.path ?? null) ?? (focus ? fullName(focus) : laneHeader(project, context, page));
   const vizLane: LaneId | null = context === "mix" || context === "global" || context === "perf" ? null : context;
   const generator = vizLane && focusState?.generator ? focusState.generator : null;
   const mixer = !notice && !capture && context === "mix";
   const viz = capture ? "capture" : notice ? "notice" : mixer ? "mixer" : generator ? "generator" : vizLane ? "phrase" : "none";
-  const params = page ? page.bindings.map((binding) => binding?.label ?? "").filter(Boolean).join(" ") : "";
-  const pixels = new Uint8Array(WIDTH * HEIGHT);
+  pixels.fill(0);
   drawPager(pixels, Math.min(pageIndex, Math.max(0, pages.length - 1)), pages.length);
   if (!mixer) drawParamSeparator(pixels);
   const chordRoll = vizLane === "chords" && page?.id !== "prog" && !capture;
@@ -93,7 +98,7 @@ export function renderScreen(project: Project, ui: UiState, tick: number, playin
   if (notice) labels.push(...noticeLabels(notice.title, notice.value));
   if (capture) labels.push(...captureMenuLabels(project));
   const digits = mixer || !page ? [] : paramDigits(project, context, page, focus);
-  return { header, viz, params, pixels, labels, digits };
+  return { header, viz, pixels, labels, digits };
 }
 
 function fillViz(pixels: Uint8Array): void {
@@ -102,7 +107,7 @@ function fillViz(pixels: Uint8Array): void {
   }
 }
 
-const MIX_CHANNELS = ["kick", "snare", "hat", "perc", "bass", "lead", "chords", "master"] as const;
+const MIX_CHANNELS = [...LANES, "master"] as const;
 const MIX_COL_W = 16;
 /** Bottom strip: mute/lock, 1 px gap, lane code, 1 px pad. */
 const MIX_CODE_Y = HEIGHT - FONT_H - 1;
@@ -184,9 +189,9 @@ function captureMenuLabels(project: Project): Label[] {
   const step = FONT_H + 4;
   const y0 = HEADER_H + 4;
   return [
-    ...menuLine(["ALL", "GENERATORS", "VALUES"], DEPTH_WORD[project.captureDepth], y0),
-    ...menuLine(["LANE", "GROUP", "PAGE"], SCOPE_WORD[project.captureScope], y0 + step),
-    ...menuLine(["DELETE", "LOW", "MED", "HIGH"], INTENSITY_WORD[project.captureIntensity], y0 + step * 2),
+    ...menuLine(CAPTURE_DEPTHS.map((id) => DEPTH_WORD[id]), DEPTH_WORD[project.captureDepth], y0),
+    ...menuLine(CAPTURE_SCOPES.map((id) => SCOPE_WORD[id]), SCOPE_WORD[project.captureScope], y0 + step),
+    ...menuLine(CAPTURE_INTENSITIES.map((id) => INTENSITY_WORD[id]), INTENSITY_WORD[project.captureIntensity], y0 + step * 2),
   ];
 }
 
@@ -564,24 +569,24 @@ function bucket(index: number, count: number, size: number): [number, number] {
 }
 
 /** Pitch and octave show the resting note. Chord rate shows BLOCK or a division. */
-function figureHeader(project: Project, context: ContextId, focus: string | null): string | null {
-  if ((context === "bass" || context === "lead") && focus === "PITCH V") {
+function figureHeader(project: Project, context: ContextId, path: string | null): string | null {
+  if ((context === "bass" || context === "lead") && path === "pitch.value") {
     return restingPitchLabel(context, readControl(project, context, "pitch.value"), readControl(project, context, "octave.value"), project.global);
   }
-  if ((context === "bass" || context === "lead" || context === "chords") && focus === "OCTAVE V") {
-    return `OCT ${restingOctave(readControl(project, context, "octave.value"))}`;
+  if ((context === "bass" || context === "lead" || context === "chords") && path === "octave.value") {
+    return `OCT ${octaveNumber(readControl(project, context, "octave.value"))}`;
   }
-  if (context === "global" && focus === "ROOT") return pitchClassName(project.global.root);
-  if (context === "global" && focus === "SCALE") return scaleTitle(project.global.scale);
+  if (context === "global" && path === "root") return pitchClassName(project.global.root);
+  if (context === "global" && path === "scale") return scaleTitle(project.global.scale);
   if (context !== "chords") return null;
-  if (focus === "TONE V") return restingChordToneLabel(project.working.chords, project.global);
-  if (focus === "RATE V") return chordFigure(readControl(project, "chords", "rate.value")).label.slice(0, LINE_LIMIT);
+  if (path === "tone.value") return restingChordToneLabel(project.working.chords, project.global);
+  if (path === "rate.value") return chordFigure(readControl(project, "chords", "rate.value")).label.slice(0, LINE_LIMIT);
   return null;
 }
 
 function knobAmount(project: Project, context: ContextId, binding: Binding): DisplayAmount {
   if ((context === "bass" || context === "lead" || context === "chords") && binding.path === "octave.value") {
-    const n = restingOctave(readControl(project, context, "octave.value"));
+    const n = octaveNumber(readControl(project, context, "octave.value"));
     return { kind: "big", n: Math.abs(n), negative: n < 0 };
   }
   if (context === "chords" && binding.path === "tone.value") {
@@ -621,9 +626,6 @@ const WORD: Record<string, string> = {
   BAS: "BASS",
   LEA: "LEAD",
   CHD: "CHORDS",
-  LV: "LEVEL",
-  CY: "CYCLE",
-  OF: "OFFSET",
 };
 
 function fullName(label: string): string {

@@ -27,7 +27,7 @@ import {
   setMacro,
   audibleEvents,
 } from "../src/core/performance.ts";
-import { generatePhrase, previewPhrase, unitForOctave } from "../src/core/phrase.ts";
+import { generatePhrase, unitForOctave } from "../src/core/phrase.ts";
 import { pitchClassOfDegree, scaleOf } from "../src/core/harmony.ts";
 import { chordLabels, textPreview } from "../src/core/text-preview.ts";
 import type { ScaleId } from "../src/core/types.ts";
@@ -138,9 +138,8 @@ describe("euclid generator", () => {
     assert.deepEqual(generatePhrase(project).lanes.kick, generatePhrase(other).lanes.kick);
   });
 
-  it("matches preview to playback and repeats for the same seed", () => {
+  it("repeats for the same seed", () => {
     const project = defaultProject();
-    assert.deepEqual(previewPhrase(project), generatePhrase(project));
     assert.deepEqual(generatePhrase(project), generatePhrase(project));
   });
 
@@ -338,20 +337,20 @@ describe("morph, journal, macros", () => {
     let project = defaultProject();
     project = setMacro(project, "cutoff", 0.25);
     project.mixer.kick = 0.3;
-    project = punch(project, "bass.sound.cutoff.value", 0.2);
+    project = punch(project, "bass.filter.cutoff.value", 0.2);
     project = record(project);
-    project = punch(project, "bass.sound.cutoff.value", 0.9);
-    assert.equal(project.journal[0].lanes.bass.sound.cutoff.value, 0.2);
+    project = punch(project, "bass.filter.cutoff.value", 0.9);
+    assert.equal(project.journal[0].lanes.bass.filter.cutoff.value, 0.2);
     assert.equal(project.journal.length, 1);
     assert.equal(project.nextSceneId, 2);
-    const heard = generatePhrase(project).lanes.bass[0]?.sound.cutoff;
-    assert.equal(project.working.bass.sound.cutoff.value, 0.9);
+    const heard = generatePhrase(project).lanes.bass[0]?.filter.cutoff;
+    assert.equal(project.working.bass.filter.cutoff.value, 0.9);
     assert.ok(heard !== undefined && Math.abs(heard - 1) < 1e-9);
-    const saved = generatePhrase({ ...project, working: project.journal[0].lanes, macros: {} }).lanes.bass[0].sound.cutoff;
+    const saved = generatePhrase({ ...project, working: project.journal[0].lanes, macros: {} }).lanes.bass[0].filter.cutoff;
     assert.ok(Math.abs(saved - 0.2) < 1e-9);
     assert.equal(project.mixer.kick, 0.3);
     project.lock.bass = true;
-    const locked = generatePhrase(project).lanes.bass[0].sound.cutoff;
+    const locked = generatePhrase(project).lanes.bass[0].filter.cutoff;
     assert.ok(Math.abs(locked - 0.9) < 1e-9);
   });
 
@@ -554,8 +553,8 @@ describe("morph, journal, macros", () => {
         item.working.bass.follow = 0;
         item.working.bass.gen1.hits = 3;
         item.working.bass.gen1.probability = 0.7;
-        item.working.bass.sound.cutoff.value = 0;
-        item.working.bass.sound.cutoff.amount = 0;
+        item.working.bass.filter.cutoff.value = 0;
+        item.working.bass.filter.cutoff.amount = 0;
         item.working.bass.sound.detune.value = 0;
         item.working.bass.sound.detune.amount = 0;
         item.working.kick.sound.pitch.value = 0.15;
@@ -570,8 +569,8 @@ describe("morph, journal, macros", () => {
         item.working.bass.follow = 1;
         item.working.bass.gen1.hits = 6;
         item.working.bass.gen1.probability = 1;
-        item.working.bass.sound.cutoff.value = 1;
-        item.working.bass.sound.cutoff.amount = 0;
+        item.working.bass.filter.cutoff.value = 1;
+        item.working.bass.filter.cutoff.amount = 0;
         item.working.bass.sound.detune.value = 1;
         item.working.bass.sound.detune.amount = 0;
         item.working.kick.sound.pitch.value = 0.85;
@@ -620,8 +619,8 @@ describe("morph, journal, macros", () => {
     assert.deepEqual(late.harmony.map((event) => event.root), start.harmony.map((event) => event.root));
     assert.deepEqual(almost.harmony.map((event) => event.root), goal.harmony.map((event) => event.root));
     assert.ok(early.lanes.bass.length > 0);
-    assert.ok(early.lanes.bass.every((event) => Math.abs(event.sound.cutoff - 0.25) < 1e-6));
-    assert.ok(late.lanes.bass.every((event) => Math.abs(event.sound.cutoff - 0.75) < 1e-6));
+    assert.ok(early.lanes.bass.every((event) => Math.abs(event.filter.cutoff - 0.25) < 1e-6));
+    assert.ok(late.lanes.bass.every((event) => Math.abs(event.filter.cutoff - 0.75) < 1e-6));
     for (const event of early.lanes.kick) {
       const pitch = beatIndex(event.tick, beats, barTicks) === beats - 1 ? 0.85 : 0.15;
       assert.ok(Math.abs(event.sound.pitch - pitch) < 1e-6);

@@ -1,10 +1,12 @@
-import { ticksPerBar } from "./clock.ts";
+import { clamp01, ticksPerBar } from "./clock.ts";
 import { clone } from "./clone.ts";
 import { defaultProject } from "./defaults.ts";
 import { fieldsOf } from "./fields.ts";
 import { hash01 } from "./hash.ts";
 import { applyMorph, retarget } from "./morph.ts";
 import {
+  isDrum,
+  isPitched,
   SET_CAPACITY,
   WANDER_BARS,
   type LaneId,
@@ -122,7 +124,10 @@ export function toggleLock(project: Project, lane: LaneId): Project {
 /** Factory parameters for one lane. Mute, lock and the mixer stay. A running morph keeps the reset. */
 export function resetLane(project: Project, lane: LaneId): Project {
   const working = clone(project.working);
-  working[lane] = clone(defaultProject().working[lane]);
+  const home = clone(defaultProject().working);
+  if (isDrum(lane)) working[lane] = home[lane];
+  else if (isPitched(lane)) working[lane] = home[lane];
+  else working.chords = home.chords;
   if (!project.morph) return { ...project, working };
   const prefix = `${lane}.`;
   const punched = project.morph.punched.slice();
@@ -206,7 +211,5 @@ export function setMixer(project: Project, id: LaneId | "master", value: number)
 }
 
 function clampMixer(value: number): number {
-  if (value < 0) return 0;
-  if (value > 1) return 1;
-  return value;
+  return clamp01(value);
 }

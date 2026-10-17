@@ -2,7 +2,7 @@ import { clamp01, FRAMES_PER_BLOCK, SIXTEENTH_TICKS, tickToSample } from "../cor
 import { withMacro } from "../core/modulate.ts";
 import { generatePhrase, laneSteps, endpointLanes } from "../core/phrase.ts";
 import { LANES, type LaneId, type Phrase, type Project } from "../core/types.ts";
-import { mapSound, type EngineParam } from "./map.ts";
+import { mapFilter, mapSound, type EngineParam } from "./map.ts";
 
 export interface BlockEvent {
   sampleOffset: number;
@@ -56,7 +56,7 @@ export function phraseLoop(project: Project, phrase: Phrase = generatePhrase(pro
         note: event.note,
         velocity,
         lengthTicks: event.lengthTicks,
-        params: mapSound(lane, event.sound),
+        params: [...mapSound(lane, event.sound), ...mapFilter(event.filter)],
       });
     }
   }
@@ -108,6 +108,35 @@ export function soundMotions(project: Project, phrase?: Phrase): Motion[] {
       }
       out.push(motion);
     }
+    const filter = ends ? ends.from[lane].filter : project.working[lane].filter;
+    const otherFilter = ends ? ends.to[lane].filter : null;
+    for (const id of ["cutoff", "resonance"] as const) {
+      const heard = withMacro(filter[id], macros[id] ?? 0);
+      const motion: Motion = {
+        lane,
+        id,
+        value: heard.value,
+        pattern: Math.round(heard.pattern),
+        cycle: heard.cycle,
+        amount: heard.amount,
+        loop,
+      };
+      if (otherFilter) {
+        const toward = withMacro(otherFilter[id], macros[id] ?? 0);
+        if (heard.amount === 0 && toward.amount === 0) {
+          motion.value = clamp01((1 - t) * heard.value + t * toward.value);
+        } else {
+          motion.blend = {
+            value: toward.value,
+            pattern: Math.round(toward.pattern),
+            cycle: toward.cycle,
+            amount: toward.amount,
+            t,
+          };
+        }
+      }
+      out.push(motion);
+    }
   }
   return out;
 }
@@ -130,7 +159,7 @@ export function eventsInBlock(project: Project, tick: number): BlockEvent[] {
         note: event.note,
         velocity,
         lengthTicks: event.lengthTicks,
-        params: mapSound(lane, event.sound),
+        params: [...mapSound(lane, event.sound), ...mapFilter(event.filter)],
       });
     }
   }

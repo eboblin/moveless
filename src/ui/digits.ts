@@ -1,4 +1,4 @@
-import type { Binding } from "./pages.ts";
+import type { Binding } from "../core/pages.ts";
 
 export const DIGIT_W = 6;
 export const DIGIT_H = 11;

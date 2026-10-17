@@ -6,9 +6,9 @@ import { evalModulated } from "../src/core/modulate.ts";
 import { applyMorph } from "../src/core/morph.ts";
 import { clone } from "../src/core/clone.ts";
 import { launchScene, record } from "../src/core/performance.ts";
-import { mapKick, mapSound } from "../src/dsp/map.ts";
+import { mapFilter, mapKick, mapSound } from "../src/dsp/map.ts";
 import { eventsInBlock, phraseLoop, soundMotions } from "../src/dsp/schedule.ts";
-import { createEngine, loadPhrase, packBlock, packPhrase, renderBlock, renderClock } from "../src/dsp/voice.ts";
+import { createEngine, filterSample, loadPhrase, packBlock, packPhrase, renderBlock, renderClock } from "../src/dsp/voice.ts";
 
 describe("dsp adapter", () => {
   it("maps kick semantics onto v01 chain keys", () => {
@@ -29,11 +29,48 @@ describe("dsp adapter", () => {
     assert.equal(params.length, 8);
   });
 
-  it("uses surge chain keys for cutoff and keeps chords polyphonic params distinct", () => {
-    const bass = mapSound("bass", { cutoff: 0.4, shape: 0.5, decay: 0.2, attack: 0.1, resonance: 0.3, detune: 0, fm: 0, noise: 0 });
-    assert.ok(bass.some((param) => param.id === "cutoff" && param.value === 0.4));
-    const chords = mapSound("chords", { width: 0.6, cutoff: 0.2, shape: 0, detune: 0, fm: 0, resonance: 0, attack: 0, release: 0 });
+  it("maps the lane filter beside the surge chain and keeps chord width distinct", () => {
+    const bass = mapSound("bass", { shape: 0.5, decay: 0.2, attack: 0.1, detune: 0, fm: 0, noise: 0 });
+    assert.equal(bass.some((param) => param.id === "cutoff"), false);
+    const filter = mapFilter({ cutoff: 0.4, resonance: 0.3 });
+    assert.deepEqual(filter, [
+      { id: "cutoff", value: 0.4 },
+      { id: "resonance", value: 0.3 },
+    ]);
+    const chords = mapSound("chords", { width: 0.6, shape: 0, detune: 0, fm: 0, attack: 0, release: 0 });
     assert.ok(chords.some((param) => param.id === "osc_width"));
+  });
+
+  it("bypasses the lane filter at 50 and cuts lows or highs toward the ends", () => {
+    const dry = { low: 0.2, band: 0.4, inEnv: 0, outEnv: 0 };
+    assert.equal(filterSample(dry, 0.4, 0.5, 1), 0.4);
+    assert.equal(dry.low, 0);
+    assert.equal(dry.band, 0);
+    const tone = (freq: number, cutoff: number) => {
+      const state = { low: 0, band: 0, inEnv: 0, outEnv: 0 };
+      let energy = 0;
+      for (let i = 0; i < 8000; i++) {
+        const input = Math.sin((2 * Math.PI * freq * i) / 44100);
+        const out = filterSample(state, input, cutoff, 0);
+        if (i > 4000) energy += out * out;
+      }
+      return energy;
+    };
+    assert.ok(tone(80, 0) < tone(80, 0.5) * 0.25);
+    assert.ok(tone(8000, 1) < tone(8000, 0.5) * 0.25);
+    const saw = (cutoff: number) => {
+      const state = { low: 0, band: 0, inEnv: 0, outEnv: 0 };
+      let energy = 0;
+      for (let i = 0; i < 8000; i++) {
+        const input = ((i * 110) / 44100) % 1 * 2 - 1;
+        const out = filterSample(state, input, cutoff, 0);
+        if (i > 4000) energy += out * out;
+      }
+      return energy;
+    };
+    const open = saw(0.5);
+    assert.ok(saw(0.3) > open * 0.5);
+    assert.ok(saw(0.8) > open * 0.5);
   });
 
   it("schedules the downbeat kick inside the first audio block", () => {
@@ -218,10 +255,10 @@ describe("dsp adapter", () => {
 
   it("glides timbre during a morph and does not follow note pitch", () => {
     let project = defaultProject();
-    project.working.bass.sound.cutoff.value = 0;
-    project.working.bass.sound.cutoff.amount = 0;
+    project.working.bass.filter.cutoff.value = 0;
+    project.working.bass.filter.cutoff.amount = 0;
     project = record(project);
-    project.working.bass.sound.cutoff.value = 1;
+    project.working.bass.filter.cutoff.value = 1;
     project = record(project);
     project.working = clone(project.journal[0].lanes);
     project.transition = "fast";
@@ -234,13 +271,13 @@ describe("dsp adapter", () => {
     assert.ok(Math.abs((still?.value ?? 0) - 0.5) < 1e-9);
 
     project = defaultProject();
-    project.working.bass.sound.cutoff.value = 0.25;
-    project.working.bass.sound.cutoff.amount = 0;
+    project.working.bass.filter.cutoff.value = 0.25;
+    project.working.bass.filter.cutoff.amount = 0;
     project = record(project);
-    project.working.bass.sound.cutoff.amount = 1;
-    project.working.bass.sound.cutoff.pattern = 4;
-    project.working.bass.sound.cutoff.cycle = 4;
-    project.working.bass.sound.cutoff.value = 0.9;
+    project.working.bass.filter.cutoff.amount = 1;
+    project.working.bass.filter.cutoff.pattern = 4;
+    project.working.bass.filter.cutoff.cycle = 4;
+    project.working.bass.filter.cutoff.value = 0.9;
     project = record(project);
     project.working = clone(project.journal[0].lanes);
     project.transition = "fast";
@@ -412,7 +449,10 @@ describe("dsp adapter", () => {
     const engine = createEngine();
     loadPhrase(engine, [{
       sample: 0, loop: 100000, lane: "bass", note: 40, velocity: 100, lengthTicks: 192,
-      params: mapSound("bass", { shape: 0.8, detune: 0.9, fm: 0.7, noise: 0.4, cutoff: 0.6, resonance: 0.85, attack: 0.1, decay: 0.5 }),
+      params: [
+        ...mapSound("bass", { shape: 0.8, detune: 0.9, fm: 0.7, noise: 0.4, attack: 0.1, decay: 0.5 }),
+        ...mapFilter({ cutoff: 0.6, resonance: 0.85 }),
+      ],
     }], 120, true);
     renderClock(engine);
     const note = engine.notes[0];

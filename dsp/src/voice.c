@@ -19,7 +19,7 @@
 #define PHRASE_TEXT 65536
 #define PHRASE_CAP 512
 #define LANE_COUNT 8
-#define LANE_MOTION_CAP 8
+#define LANE_MOTION_CAP 10
 
 enum {
     P_NONE = 0,
@@ -51,6 +51,7 @@ typedef struct {
     int lane;
     float phase, phase2, env, noise_env, freq, decay, noise_decay;
     float noise, drive, tone, pan, spread, snap, bright, bend, body, low, base;
+    float cutoff, resonance, flt, band, in_env, out_env;
     float env_k, noise_k, click_k, click_env, click_tau;
     int age, loop;
 } Drum;
@@ -58,7 +59,7 @@ typedef struct {
 typedef struct {
     int on;
     float phase, phase2, env, freq, shape, detune, fm, noise, cutoff, resonance, attack, release, width, gain, low, band;
-    float release_k;
+    float in_env, out_env, release_k;
     int age, left, lane, loop;
 } Note;
 
@@ -327,6 +328,8 @@ static void apply_drum(Drum *drum, int param, float unit) {
         break;
     case P_MAMT: drum->bend = unit; break;
     case P_LVL: drum->body = unit; break;
+    case P_CUTOFF: drum->cutoff = unit; break;
+    case P_RESONANCE: drum->resonance = unit; break;
     default: break;
     }
 }
@@ -431,7 +434,13 @@ static void arm_drum(Engine *engine, int lane, int note, int velocity, const cha
     drum->bright = read_param(params, "nffrq", hat ? 0.7f : 0.4f);
     drum->bend = read_param(params, "mamt", idx == 0 ? 0.55f : (idx == 3 ? 0.35f : 0.1f));
     drum->body = read_param(params, "lvl", hat ? 0.12f : 1.0f);
+    drum->cutoff = read_param(params, "cutoff", 0.5f);
+    drum->resonance = read_param(params, "resonance", 0.0f);
     drum->low = 0;
+    drum->flt = 0;
+    drum->band = 0;
+    drum->in_env = 0;
+    drum->out_env = 0;
     drum->click_env = 1.0f;
     refresh_drum_env(drum);
     refresh_click(drum);
@@ -466,7 +475,7 @@ static Note *arm_note(Engine *engine, int note_num, int velocity, int ticks, con
     note->detune = read_param(params, "osc_detune", 0.5f);
     note->fm = read_param(params, "osc_fm", 0.0f);
     note->noise = read_param(params, "noise", 0.0f);
-    note->cutoff = read_param(params, "cutoff", 0.7f);
+    note->cutoff = read_param(params, "cutoff", 0.5f);
     note->resonance = read_param(params, "resonance", 0.0f);
     note->attack = read_param(params, "attack", 0.0f);
     note->release = read_param(params, "release", read_param(params, "decay", 0.4f));
@@ -474,9 +483,53 @@ static Note *arm_note(Engine *engine, int note_num, int velocity, int ticks, con
     note->gain = velocity / 127.0f;
     note->low = 0;
     note->band = 0;
+    note->in_env = 0;
+    note->out_env = 0;
     refresh_release(note);
     stamp_note(engine, note);
     return note;
+}
+
+/* 0.5 is dry. Below that a high-pass, above it a low-pass. Distance from center is squared.
+   A slow envelope trims level back toward the input, capped so the stopband stays quiet. */
+static float filter_sample(float *low, float *band, float *in_env, float *out_env, float input, float cutoff, float resonance) {
+    float offset = cutoff - 0.5f;
+    float amount = fabsf(offset) * 2.0f;
+    if (amount > 1.0f) amount = 1.0f;
+    if (amount < 1e-4f) {
+        float power = input * input;
+        *low = 0;
+        *band = 0;
+        *in_env = power;
+        *out_env = power;
+        return input;
+    }
+    float shaped = amount * amount;
+    float reso = resonance * resonance * amount;
+    float base;
+    if (offset > 0.0f) {
+        float coef = 1.0f - shaped * 0.985f;
+        *low += (input - *low) * coef;
+        base = *low;
+    } else {
+        float coef = 0.015f + shaped * 0.905f;
+        *low += (input - *low) * coef;
+        base = input - *low;
+    }
+    if (reso <= 1e-4f) {
+        *band = 0;
+    } else {
+        float diff = input - *low;
+        *band += (diff - *band) * (0.08f + reso * 0.45f);
+        base += *band * reso * 4.0f;
+    }
+    *in_env += (input * input - *in_env) * 0.001f;
+    *out_env += (base * base - *out_env) * 0.001f;
+    float denom = *out_env > 1e-8f ? *out_env : 1e-8f;
+    float gain = sqrtf(*in_env / denom);
+    if (gain > 8.0f) gain = 8.0f;
+    if (gain < 0.25f) gain = 0.25f;
+    return base * gain;
 }
 
 static float drum_sample(Engine *engine, Drum *drum) {
@@ -498,12 +551,13 @@ static float drum_sample(Engine *engine, Drum *drum) {
     float gain = 1.0f + drive * 8.0f;
     float driven = drum->low * gain;
     driven = driven / (1.0f + fabsf(driven));
+    float filtered = filter_sample(&drum->flt, &drum->band, &drum->in_env, &drum->out_env, driven, drum->cutoff, drum->resonance);
     drum->env *= drum->env_k;
     drum->noise_env *= drum->noise_k;
     drum->click_env *= drum->click_k;
     drum->age += 1;
     if (drum->env < 0.0008f && drum->noise_env < 0.0008f && (float)drum->age > drum->click_tau * 4.0f) drum->on = 0;
-    return driven;
+    return filtered;
 }
 
 static void note_sample(Engine *engine, Note *note, float *left, float *right) {
@@ -526,17 +580,7 @@ static void note_sample(Engine *engine, Note *note, float *left, float *right) {
     float noisy = primary;
     if (need_second) noisy += second * 0.35f * fabsf(det_off) * 2.0f;
     if (note->noise > 1e-3f) noisy += rng(engine) * note->noise * 0.85f;
-    float coef = 0.015f + note->cutoff * note->cutoff * 0.92f;
-    note->low += (noisy - note->low) * coef;
-    float diff = noisy - note->low;
-    float reso = note->resonance * note->resonance;
-    float resonated = note->low;
-    if (reso > 1e-4f) {
-        note->band += (diff - note->band) * (0.08f + reso * 0.45f);
-        resonated += note->band * reso * 4.0f;
-    } else {
-        note->band = 0;
-    }
+    float resonated = filter_sample(&note->low, &note->band, &note->in_env, &note->out_env, noisy, note->cutoff, note->resonance);
     float attack_samples = 1.0f + note->attack * 0.2f * SR;
     /* Hold full level for the whole note. Release is the tail after that length. */
     if (note->left > 0 && (float)note->age < attack_samples) note->env = ((float)note->age + 1.0f) / attack_samples;

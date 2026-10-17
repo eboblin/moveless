@@ -5,14 +5,14 @@ import {
   CAPTURE_INTENSITIES,
   CAPTURE_SCOPES,
   isDrum,
-  LANE_CODE,
+  LANES,
+  TRANSITIONS,
+  WANDERS,
   type ContextId,
   type LaneId,
   type Project,
-  type TransitionId,
-  type WanderId,
 } from "../core/types.ts";
-import { pageCount, pageGroupColor } from "./pages.ts";
+import { pageCount, pageGroupColor } from "../core/pages.ts";
 
 export const LED = {
   off: 0,
@@ -68,8 +68,7 @@ export function auxLed(current: boolean): Led {
 }
 
 export function stepLeds(project: Project, context: ContextId): Led[] {
-  const lanes: LaneId[] = ["kick", "snare", "hat", "perc", "bass", "lead", "chords"];
-  const out = lanes.map((lane) => stepLed(project, context, lane));
+  const out = LANES.map((lane) => stepLed(project, context, lane));
   out.push(auxLed(context === "mix"));
   out.push(auxLed(context === "global"));
   out.push(auxLed(context === "perf"));
@@ -93,8 +92,6 @@ export function trackLeds(project: Project, context: ContextId, page: number): L
   });
 }
 
-const TRANSITIONS: TransitionId[] = ["now", "fast", "medium", "slow"];
-const WANDERS: WanderId[] = ["fast", "medium", "slow", "glacial"];
 export interface PadSurface {
   wheelTouch?: boolean;
   captureHeld?: boolean;
@@ -202,12 +199,6 @@ function currentSceneLed(color: number): Led {
 
 function pageLed(context: ContextId, index: number, current: boolean): Led {
   return { family: "yellow", color: pageGroupColor(context, index), blink: current };
-}
-
-export const MENU_CC = 50;
-
-export function ledLabel(project: Project, context: ContextId): string {
-  return LANE_CODE[context];
 }
 
 /** Half-period in ticks for beat-locked blink (full on/off cycle = 1 quarter note). */

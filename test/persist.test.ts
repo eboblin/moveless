@@ -84,7 +84,7 @@ describe("project persist", () => {
     assert.equal(parsed.project.global.bar, defaultProject().global.bar);
     assert.ok(parsed.project.working.kick);
     assert.equal(parsed.ui.context, "snare");
-    assert.equal(parsed.ui.page, 6);
+    assert.equal(parsed.ui.page, 7);
   });
 
   it("replaces an old chord lane with defaults", () => {

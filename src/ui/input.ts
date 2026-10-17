@@ -21,9 +21,9 @@ import {
   toggleLock,
   toggleMute,
 } from "../core/performance.ts";
-import { CAPTURE_DEPTHS, CAPTURE_INTENSITIES, CAPTURE_SCOPES, LANES, type LaneId, type Project, type TransitionId, type WanderId } from "../core/types.ts";
+import { CAPTURE_DEPTHS, CAPTURE_INTENSITIES, CAPTURE_SCOPES, LANES, MENU_CC, TRANSITIONS, WANDERS, type LaneId, type Project } from "../core/types.ts";
 import { resetControl, writeControl } from "./controls.ts";
-import { pageCount, pageGroup, pagesFor } from "./pages.ts";
+import { bindingPaths, pageCount, pageGroup, pagesFor } from "../core/pages.ts";
 import { applyBookmark, focusHoldTicks, HOLD_MS, HOLD_TICKS, type Notice, type UiState } from "./state.ts";
 
 export interface MidiMsg {
@@ -40,10 +40,7 @@ export interface Session {
 }
 
 const LOOP = 58;
-const MENU = 50;
 const SHIFT = 49;
-const TRANSITIONS: TransitionId[] = ["now", "fast", "medium", "slow"];
-const WANDERS: WanderId[] = ["fast", "medium", "slow", "glacial"];
 
 export function reduce(session: Session, msg: MidiMsg): Session {
   const press = msg.data2 > 0;
@@ -63,7 +60,7 @@ function onCc(session: Session, cc: number, value: number, press: boolean): Sess
   if (cc === 88) return { ...session, ui: { ...session.ui, muteHeld: press } };
   if (cc === LOOP) return { ...session, ui: { ...session.ui, loopHeld: press } };
   if (cc === SHIFT) return { ...session, ui: { ...session.ui, shiftHeld: press } };
-  if (cc === MENU && press) {
+  if (cc === MENU_CC && press) {
     const mode = session.ui.mode === "set" ? "journal" : "set";
     return {
       ...session,
@@ -92,7 +89,7 @@ function onStep(session: Session, index: number, press: boolean): Session {
       return {
         ...session,
         project: resetLane(session.project, lane),
-        ui: { ...session.ui, heldLane: lane, laneDownTick: session.tick },
+        ui: { ...session.ui, heldLane: lane },
       };
     }
     if (session.ui.loopHeld && press) {
@@ -111,13 +108,12 @@ function onStep(session: Session, index: number, press: boolean): Session {
           ...session.ui,
           heldLane: null,
           heldPage: null,
-          laneDownTick: null,
           context: lane,
           page,
         },
       };
     }
-    return { ...session, ui: { ...session.ui, heldLane: lane, laneDownTick: session.tick } };
+    return { ...session, ui: { ...session.ui, heldLane: lane } };
   }
   if (!press) return session;
   if (index === 7) return { ...session, ui: { ...session.ui, context: "mix", page: 0, heldLane: null } };
@@ -264,9 +260,7 @@ function captureFromEncoder(session: Session, path: string, held: boolean): Sess
   const lane = session.ui.heldLane ?? session.ui.context;
   if (lane === "global") return null;
   if (lane === "mix" || lane === "perf") {
-    const focusBinding = pagesFor(lane)
-      .flatMap((page) => page.bindings)
-      .find((item) => item?.path === path) ?? { path, label: path };
+    const focusBinding = bindingByPath(lane, path) ?? { path, label: path };
     return {
       ...session,
       project: captureSurface(session.project, lane, [path]),
@@ -279,9 +273,7 @@ function captureFromEncoder(session: Session, path: string, held: boolean): Sess
   }
   const target = generatorTarget(path);
   if (!target) return null;
-  const focusBinding = pagesFor(session.ui.context)
-    .flatMap((page) => page.bindings)
-    .find((item) => item?.path === path) ?? { path, label: target };
+  const focusBinding = bindingByPath(session.ui.context, path) ?? { path, label: target };
   return {
     ...session,
     project: captureGenerator(session.project, lane, target),
@@ -295,6 +287,7 @@ function captureFromEncoder(session: Session, path: string, held: boolean): Sess
 
 function focusFor(session: Session, binding: { path: string; label: string }, held: boolean) {
   return {
+    path: binding.path,
     label: binding.label,
     generator: modulatedBase(binding.path),
     showPattern: binding.path.endsWith(".pattern"),
@@ -343,12 +336,20 @@ function onCapture(session: Session, press: boolean): Session {
   };
 }
 
+function bindingByPath(context: Session["ui"]["context"], path: string) {
+  for (const page of pagesFor(context)) {
+    const binding = page.bindings.find((item) => item?.path === path);
+    if (binding) return binding;
+  }
+  return undefined;
+}
+
 function surfacePaths(context: "mix" | "perf", scope: Project["captureScope"], page: number): string[] {
   const pages = pagesFor(context);
-  const ofPage = (index: number) =>
-    (pages[Math.min(index, Math.max(0, pages.length - 1))]?.bindings ?? [])
-      .filter((binding): binding is NonNullable<typeof binding> => !!binding)
-      .map((binding) => binding.path);
+  const ofPage = (index: number) => {
+    const current = pages[Math.min(index, Math.max(0, pages.length - 1))];
+    return current ? bindingPaths(current) : [];
+  };
   if (scope === "page") return ofPage(page);
   return pages.flatMap((_, index) => ofPage(index));
 }
@@ -358,13 +359,10 @@ function rerollCapture(project: Project, lane: LaneId, page: number): Project {
   if (project.captureScope === "page") {
     const pages = pagesFor(lane);
     const current = pages[Math.min(page, Math.max(0, pages.length - 1))];
-    const paths = (current?.bindings ?? [])
-      .filter((binding): binding is NonNullable<typeof binding> => !!binding)
-      .map((binding) => binding.path);
-    return capturePaths(project, lane, paths);
+    return capturePaths(project, lane, current ? bindingPaths(current) : []);
   }
   const scope = pageGroup(lane, page);
-  return captureLane(project, lane, scope === "sound" || scope === "notes" ? scope : "pattern");
+  return captureLane(project, lane, scope === "sound" || scope === "notes" || scope === "fx" ? scope : "pattern");
 }
 
 function onCopy(session: Session, press: boolean): Session {

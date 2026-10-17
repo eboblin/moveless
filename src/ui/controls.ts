@@ -2,7 +2,7 @@ import { clone } from "../core/clone.ts";
 import { punch } from "../core/morph.ts";
 import { setMacro, setMixer } from "../core/performance.ts";
 import { SCALE_IDS, type ContextId, type LaneId, type Project } from "../core/types.ts";
-import type { Binding } from "./pages.ts";
+import type { Binding } from "../core/pages.ts";
 
 export function readControl(project: Project, context: ContextId, path: string): number {
   if (context === "mix") return project.mixer[path as LaneId | "master"];

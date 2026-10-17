@@ -1,4 +1,4 @@
-import { clamp01, SIXTEENTH_TICKS } from "./clock.ts";
+import { clamp01, SIXTEENTH_TICKS, sixteenthSteps } from "./clock.ts";
 import { hash01 } from "./hash.ts";
 import { mod } from "./motif.ts";
 import {
@@ -35,35 +35,7 @@ export function degreeToMidi(degree: number, scale: readonly number[], rootPc: n
 export function chordTonePitchClasses(event: HarmonicEvent, scale: readonly number[], rootPc: number): number[] {
   const rootPcOfChord = pitchClassOfDegree(event.root, scale, rootPc);
   const semis = QUALITY_SEMITONES[event.quality] ?? QUALITY_SEMITONES[0];
-  return semis.map((semi) => mod(rootPcOfChord + semi, 12));
-}
-
-/**
- * Scale degrees whose pitch class matches a chord tone. Off-scale chord tones
- * (e.g. maj 3rd in a minor key) are absent — prefer {@link applyFollowMidi}.
- */
-export function chordToneDegrees(event: HarmonicEvent, scale: readonly number[], rootPc: number): number[] {
-  const tones = new Set(chordTonePitchClasses(event, scale, rootPc));
-  const out: number[] = [];
-  for (let degree = -21; degree <= 21; degree++) {
-    if (tones.has(pitchClassOfDegree(degree, scale, rootPc))) out.push(degree);
-  }
-  return out;
-}
-
-/** follow 0 keeps the desired degree. follow 1 lands on the nearest chord degree. Ties stay on the lower one. */
-export function applyFollow(desired: number, follow: number, targets: readonly number[]): number {
-  if (follow <= 0 || targets.length === 0) return desired;
-  let best = targets[0];
-  let bestDist = Math.abs(targets[0] - desired);
-  for (const target of targets) {
-    const dist = Math.abs(target - desired);
-    if (dist < bestDist || (dist === bestDist && target < best)) {
-      best = target;
-      bestDist = dist;
-    }
-  }
-  return desired + (best - desired) * clamp01(follow);
+  return [...new Set(semis.map((semi) => mod(rootPcOfChord + semi, 12)))].sort((a, b) => a - b);
 }
 
 /**
@@ -140,7 +112,7 @@ export function degreeNumeral(event: HarmonicEvent, global: GlobalSettings): str
 
 /** Sixteenths in one bar. */
 function barSixteenths(bar: number): number {
-  return Math.max(1, Math.round(bar)) * 4;
+  return sixteenthSteps(1, bar);
 }
 
 /** 0 sixteenth, 1 eighth, 2 beat, 3 half bar, 4 bar. Duplicates stay addressable. */
@@ -239,7 +211,7 @@ function walkSign(way: number, index: number, seed: number): number {
 }
 
 export function generateHarmony(chords: ChordLane, global: GlobalSettings, steps: number): HarmonicEvent[] {
-  const phraseSteps = Math.max(1, Math.round(global.phrase) * Math.max(1, Math.round(global.bar)) * 4);
+  const phraseSteps = sixteenthSteps(global.phrase, global.bar);
   const span = Math.max(phraseSteps, Math.round(steps));
   const variation = Math.max(0, Math.min(3, Math.round(chords.variation)));
   const lengths = chordLengths(chords.count, chords.length, variation, global.seed, span, global.bar);

@@ -1,6 +1,6 @@
 import { clamp01, sampleOffset, SIXTEENTH_TICKS, sixteenthSteps, tickToSample, ticksPerBar } from "./clock.ts";
 import { evalModulated, withMacro } from "./modulate.ts";
-import { isDrum, LANES, type LaneId, type Lanes, type Modulated, type Phrase, type Project, type TimedEvent } from "./types.ts";
+import { isDrum, LANES, type LaneFilter, type LaneId, type Lanes, type Modulated, type Phrase, type Project, type TimedEvent } from "./types.ts";
 
 /** Shared loop for two patterns. Prefers a common multiple that still lands on the target. */
 export function morphWindow(stepsA: number, stepsB: number, cap: number): number {
@@ -53,7 +53,16 @@ export function blendPhrases(
     const chosen = project.lock[lane]
       ? fromEvents
       : pickBeats(fromEvents, tile(toPhrase.lanes[lane], toPhrase.steps[lane], steps[lane], tempo), project);
-    lanes[lane] = stampLane(chosen, fromLanes[lane].sound, toLanes[lane].sound, project, lane, t);
+    lanes[lane] = stampLane(
+      chosen,
+      fromLanes[lane].sound,
+      toLanes[lane].sound,
+      fromLanes[lane].filter,
+      toLanes[lane].filter,
+      project,
+      lane,
+      t,
+    );
   }
   const harmony = project.lock.chords
     ? fromPhrase.harmony.slice()
@@ -140,6 +149,8 @@ function stampLane(
   events: readonly TimedEvent[],
   soundFrom: Record<string, Modulated>,
   soundTo: Record<string, Modulated>,
+  filterFrom: LaneFilter,
+  filterTo: LaneFilter,
   project: Project,
   lane: LaneId,
   t: number,
@@ -148,6 +159,10 @@ function stampLane(
   return events.map((event) => ({
     ...event,
     sound: stampPitch(event, mixSound(event.step, t, soundFrom, soundTo, macros)),
+    filter: {
+      cutoff: mixOne(event.step, t, filterFrom.cutoff, filterTo.cutoff, macros.cutoff ?? 0),
+      resonance: mixOne(event.step, t, filterFrom.resonance, filterTo.resonance, macros.resonance ?? 0),
+    },
   }));
 }
 
@@ -166,12 +181,15 @@ function mixSound(
   const out: Record<string, number> = {};
   for (const id of new Set([...Object.keys(soundFrom), ...Object.keys(soundTo)])) {
     if (id === "pitch") continue;
-    const macro = macros[id] ?? 0;
-    const from = heard(soundFrom[id] ?? soundTo[id], macro, step);
-    const to = heard(soundTo[id] ?? soundFrom[id], macro, step);
-    out[id] = clamp01(from + (to - from) * t);
+    out[id] = mixOne(step, t, soundFrom[id], soundTo[id], macros[id] ?? 0);
   }
   return out;
+}
+
+function mixOne(step: number, t: number, from: Modulated | undefined, to: Modulated | undefined, macro: number): number {
+  const a = heard(from ?? to, macro, step);
+  const b = heard(to ?? from, macro, step);
+  return clamp01(a + (b - a) * t);
 }
 
 function heard(modulated: Modulated | undefined, macro: number, step: number): number {

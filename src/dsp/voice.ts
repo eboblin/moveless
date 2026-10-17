@@ -9,7 +9,7 @@ const DRUM_COUNT = 4;
 const NOTE_COUNT = 12;
 const LANE_COUNT = 8;
 const CHORDS_LANE = LANES.indexOf("chords");
-const LANE_MOTION_CAP = 8;
+const LANE_MOTION_CAP = 10;
 
 const P_NONE = 0;
 const P_FREQ = 1;
@@ -71,6 +71,13 @@ interface DrumVoice {
   /** `lvl` / body — tonal oscillator level. */
   body: number;
   low: number;
+  /** Lane filter, after the drum synth. */
+  cutoff: number;
+  resonance: number;
+  flt: number;
+  band: number;
+  inEnv: number;
+  outEnv: number;
   base: number;
   loop: number;
   envK: number;
@@ -100,6 +107,8 @@ interface NoteVoice {
   gain: number;
   low: number;
   band: number;
+  inEnv: number;
+  outEnv: number;
   lane: number;
   loop: number;
   releaseK: number;
@@ -309,7 +318,13 @@ function armDrum(drum: DrumVoice, event: BlockEvent | LoopEvent, pitch: number, 
   drum.bright = read(event.params, ["nffrq"], hat ? 0.7 : 0.4);
   drum.bend = read(event.params, ["mamt"], lane === 0 ? 0.55 : lane === 3 ? 0.35 : 0.1);
   drum.body = read(event.params, ["lvl"], hat ? 0.12 : 1);
+  drum.cutoff = read(event.params, ["cutoff"], 0.5);
+  drum.resonance = read(event.params, ["resonance"], 0);
   drum.low = 0;
+  drum.flt = 0;
+  drum.band = 0;
+  drum.inEnv = 0;
+  drum.outEnv = 0;
   drum.clickEnv = 1;
   refreshDrumEnv(drum);
   refreshClick(drum);
@@ -329,7 +344,7 @@ function armNote(engine: Engine, note: NoteVoice, event: BlockEvent | LoopEvent,
   note.detune = read(event.params, ["osc_detune"], 0.5);
   note.fm = read(event.params, ["osc_fm"], 0);
   note.noise = read(event.params, ["noise"], 0);
-  note.cutoff = read(event.params, ["cutoff"], 0.7);
+  note.cutoff = read(event.params, ["cutoff"], 0.5);
   note.resonance = read(event.params, ["resonance"], 0);
   note.attack = read(event.params, ["attack"], 0);
   note.release = read(event.params, ["decay", "release"], 0.4);
@@ -337,6 +352,8 @@ function armNote(engine: Engine, note: NoteVoice, event: BlockEvent | LoopEvent,
   note.gain = event.velocity / 127;
   note.low = 0;
   note.band = 0;
+  note.inEnv = 0;
+  note.outEnv = 0;
   refreshRelease(note);
   stampNote(engine, note);
 }
@@ -359,13 +376,19 @@ function drumSample(engine: Engine, drum: DrumVoice): number {
   drum.low += (mixed - drum.low) * coef;
   // Drive is squared so the top of the knob stays the smash zone, not a dead plateau.
   const driven = shapeDrive(drum.low, drum.drive * drum.drive);
+  const slot = { low: drum.flt, band: drum.band, inEnv: drum.inEnv, outEnv: drum.outEnv };
+  const filtered = filterSample(slot, driven, drum.cutoff, drum.resonance);
+  drum.flt = slot.low;
+  drum.band = slot.band;
+  drum.inEnv = slot.inEnv;
+  drum.outEnv = slot.outEnv;
 
   drum.env *= drum.envK;
   drum.noiseEnv *= drum.noiseK;
   drum.clickEnv *= drum.clickK;
   drum.age += 1;
   if (drum.env < 0.0008 && drum.noiseEnv < 0.0008 && drum.age > drum.clickTau * 4) drum.on = false;
-  return driven;
+  return filtered;
 }
 
 function noteSample(engine: Engine, note: NoteVoice): [number, number] {
@@ -389,17 +412,7 @@ function noteSample(engine: Engine, note: NoteVoice): [number, number] {
   let noisy = primary;
   if (needSecond) noisy += second * 0.35 * Math.abs(detOff) * 2;
   if (note.noise > 1e-3) noisy += rng(engine) * note.noise * 0.85;
-  const coef = 0.015 + note.cutoff * note.cutoff * 0.92;
-  note.low += (noisy - note.low) * coef;
-  const diff = noisy - note.low;
-  const reso = note.resonance * note.resonance;
-  let resonated = note.low;
-  if (reso > 1e-4) {
-    note.band += (diff - note.band) * (0.08 + reso * 0.45);
-    resonated += note.band * reso * 4;
-  } else {
-    note.band = 0;
-  }
+  const resonated = filterSample(note, noisy, note.cutoff, note.resonance);
   const attackSamples = 1 + note.attack * 0.2 * SAMPLE_RATE;
   // Hold full level for the whole note. Release is the tail after that length, not a decay from the attack.
   if (note.left > 0 && note.age < attackSamples) note.env = (note.age + 1) / attackSamples;
@@ -485,8 +498,10 @@ function applyDrum(drum: DrumVoice, param: number, unit: number): void {
   } else if (param === P_ATK) {
     drum.snap = unit;
     refreshClick(drum);
-  } else if (param === P_MAMT) drum.bend = unit;
+  }   else if (param === P_MAMT) drum.bend = unit;
   else if (param === P_LVL) drum.body = unit;
+  else if (param === P_CUTOFF) drum.cutoff = unit;
+  else if (param === P_RESONANCE) drum.resonance = unit;
 }
 
 function applyNote(note: NoteVoice, param: number, unit: number): void {
@@ -516,6 +531,62 @@ function refreshClick(drum: DrumVoice): void {
 
 function refreshRelease(note: NoteVoice): void {
   note.releaseK = Math.exp(-1 / ((0.04 + note.release * 1.6) * SAMPLE_RATE));
+}
+
+/** ~23 ms. Slow enough that the trim does not reshape the wave. */
+const MAKEUP_K = 0.001;
+/** Stopband stays quiet. Eight times brings a thinned band back without undoing the cut. */
+const MAKEUP_MAX = 8;
+const MAKEUP_MIN = 0.25;
+
+/**
+ * One knob, two filters. 0.5 is dry. Below that a high-pass opens toward 0,
+ * above it a low-pass closes toward 1. Distance from the center is squared.
+ * Resonance is the band around that cutoff and falls silent at 0.5.
+ * A slow envelope trims the result toward the input level so the lane does not
+ * drop out of the mix. Drums keep this memory in `flt`, apart from the tone low-pass.
+ */
+export function filterSample(
+  state: { low: number; band: number; inEnv: number; outEnv: number },
+  input: number,
+  cutoff: number,
+  resonance: number,
+): number {
+  const offset = cutoff - 0.5;
+  const amount = Math.min(1, Math.abs(offset) * 2);
+  if (amount < 1e-4) {
+    state.low = 0;
+    state.band = 0;
+    const power = input * input;
+    state.inEnv = power;
+    state.outEnv = power;
+    return input;
+  }
+  const shaped = amount * amount;
+  const reso = resonance * resonance * amount;
+  let base: number;
+  if (offset > 0) {
+    const coef = 1 - shaped * 0.985;
+    state.low += (input - state.low) * coef;
+    base = state.low;
+  } else {
+    const coef = 0.015 + shaped * 0.905;
+    state.low += (input - state.low) * coef;
+    base = input - state.low;
+  }
+  if (reso <= 1e-4) {
+    state.band = 0;
+  } else {
+    const diff = input - state.low;
+    state.band += (diff - state.band) * (0.08 + reso * 0.45);
+    base += state.band * reso * 4;
+  }
+  state.inEnv += (input * input - state.inEnv) * MAKEUP_K;
+  state.outEnv += (base * base - state.outEnv) * MAKEUP_K;
+  let gain = Math.sqrt(state.inEnv / Math.max(state.outEnv, 1e-8));
+  if (gain > MAKEUP_MAX) gain = MAKEUP_MAX;
+  if (gain < MAKEUP_MIN) gain = MAKEUP_MIN;
+  return base * gain;
 }
 
 function evalMotion(motion: LaneMotion, step: number): number {
@@ -648,7 +719,7 @@ function emptyDrum(): DrumVoice {
   return {
     on: false, lane: 0, phase: 0, phase2: 0, env: 0, noiseEnv: 0, age: 0, freq: 0,
     decay: 0.2, noiseDecay: 0.15, noise: 0, drive: 0, tone: 0.5, pan: 0.5, spread: 0,
-    snap: 0, bright: 0.4, bend: 0, body: 1, low: 0, base: 0, loop: 0,
+    snap: 0, bright: 0.4, bend: 0, body: 1, low: 0, cutoff: 0.5, resonance: 0, flt: 0, band: 0, inEnv: 0, outEnv: 0, base: 0, loop: 0,
     envK: 1, noiseK: 1, clickK: 1, clickEnv: 1, clickTau: 10,
   };
 }
@@ -656,7 +727,7 @@ function emptyDrum(): DrumVoice {
 function emptyNote(): NoteVoice {
   return {
     on: false, phase: 0, phase2: 0, env: 0, age: 0, left: 0, freq: 0, shape: 0, detune: 0.5,
-    fm: 0, noise: 0, cutoff: 0.7, resonance: 0, attack: 0, release: 0.4, width: 0, gain: 0,
-    low: 0, band: 0, lane: 0, loop: 0, releaseK: 1,
+    fm: 0, noise: 0, cutoff: 0.5, resonance: 0, attack: 0, release: 0.4, width: 0, gain: 0,
+    low: 0, band: 0, inEnv: 0, outEnv: 0, lane: 0, loop: 0, releaseK: 1,
   };
 }

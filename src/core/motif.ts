@@ -1,5 +1,3 @@
-import { clamp01 } from "./clock.ts";
-
 export const MOTIF_COUNT = 64;
 export const MOTIF_BANK_VERSION = 1;
 
@@ -62,8 +60,4 @@ function euclidGate(steps: number, pulses: number, phase: number): number {
     if (Math.floor((p * steps) / hits) === idx) return 1;
   }
   return -1;
-}
-
-export function clampUnit(n: number): number {
-  return clamp01(n);
 }

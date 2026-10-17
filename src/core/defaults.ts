@@ -3,13 +3,13 @@ import { homeOctave, unitForOctave } from "./phrase.ts";
 import { modulated } from "./modulate.ts";
 import { MOTIF_BANK_VERSION } from "./motif.ts";
 import {
-  DRUMS,
   LANES,
   SOUND,
   type ChordLane,
   type DrumId,
   type DrumLane,
   type EuclidGen,
+  type LaneFilter,
   type LaneId,
   type Lanes,
   type PitchedLane,
@@ -94,8 +94,6 @@ const SOUND_VALUE: Record<LaneId, Record<string, number>> = {
     detune: 0.5,
     fm: 0.05,
     noise: 0.02,
-    cutoff: 0.48,
-    resonance: 0.1,
     attack: 0.015,
     decay: 0.4,
   },
@@ -104,8 +102,6 @@ const SOUND_VALUE: Record<LaneId, Record<string, number>> = {
     detune: 0.5,
     fm: 0.08,
     noise: 0.03,
-    cutoff: 0.7,
-    resonance: 0.08,
     attack: 0.01,
     release: 0.3,
   },
@@ -114,12 +110,17 @@ const SOUND_VALUE: Record<LaneId, Record<string, number>> = {
     detune: 0.5,
     fm: 0.5,
     width: 0.5,
-    cutoff: 0.5,
-    resonance: 0.5,
     attack: 0,
     release: 0,
   },
 };
+
+function laneFilter(lane: string): LaneFilter {
+  return {
+    cutoff: home(`${lane}.filter.cutoff`, 0.5),
+    resonance: home(`${lane}.filter.resonance`, 0),
+  };
+}
 
 function sound(lane: LaneId): Record<string, ReturnType<typeof modulated>> {
   const ids = SOUND[lane];
@@ -142,6 +143,7 @@ function drum(id: DrumId): DrumLane {
     gen2: scatteredGen(id, 2, 0.55),
     ratchet: { count: home(`${id}.ratchet.count`, 0), rate: home(`${id}.ratchet.rate`, 0) },
     sound: sound(id),
+    filter: laneFilter(id),
   };
 }
 
@@ -156,6 +158,7 @@ function pitched(lane: "bass" | "lead", follow: number): PitchedLane {
     repeat: home(`${lane}.repeat`, 0),
     step: home(`${lane}.step`, 0.5),
     sound: sound(lane),
+    filter: laneFilter(lane),
   };
 }
 
@@ -174,6 +177,7 @@ function chords(): ChordLane {
     rate: home("chords.rate", 0),
     gate: home("chords.gate", 0.7),
     sound: sound("chords"),
+    filter: laneFilter("chords"),
   };
 }
 
@@ -238,8 +242,4 @@ export function defaultProject(): Project {
     captureScope: "group",
     captureDepth: "all",
   };
-}
-
-export function drumIds(): readonly DrumId[] {
-  return DRUMS;
 }

@@ -6,7 +6,8 @@ import { loadStoredProject, saveStoredProject, type HostFiles, type StoredUi } f
 import { phraseLoop, soundMotions } from "../dsp/schedule.ts";
 import { packPhraseBody } from "../dsp/voice.ts";
 import { reduce, type MidiMsg, type Session } from "../ui/input.ts";
-import { MENU_CC, ledColorAt, menuLed, padLeds, stepLeds, trackLeds } from "../ui/leds.ts";
+import { MENU_CC } from "../core/types.ts";
+import { blinkHalfPeriod, ledColorAt, menuLed, padLeds, stepLeds, trackLeds } from "../ui/leds.ts";
 import { plotAmount, plotMinus } from "../ui/digits.ts";
 import {
   CHAR_W,
@@ -20,7 +21,7 @@ import {
   cellTextX,
   renderScreen,
 } from "../ui/screen.ts";
-import { defaultUi } from "../ui/state.ts";
+import { defaultUi, type UiState } from "../ui/state.ts";
 import type { Project } from "../core/types.ts";
 
 interface HostGlobals {
@@ -150,9 +151,53 @@ let sentPads: number[] = [];
 let sentTracks: number[] = [];
 let sentMenu = -1;
 const TRACK_CC = 40;
+const frame = new Uint8Array(WIDTH * HEIGHT);
+let paintProject: Project | null = null;
+let paintUi: UiState | null = null;
+let paintPlaying = false;
+let paintStep = -1;
+let paintNotice = false;
+let paintFocus = false;
+let ledPhase = -1;
+let ledProject: Project | null = null;
+let ledUi: UiState | null = null;
 
-function paint(): void {
-  const screen = renderScreen(session.project, session.ui, session.tick, session.playing);
+function screenChanged(): boolean {
+  const ui = session.ui;
+  const step = Math.floor(Math.max(0, session.tick) / 48);
+  const now = Date.now();
+  const notice = !!(ui.notice && now < ui.notice.untilMs);
+  const focus = !!(ui.focus && (ui.focus.held || session.tick < ui.focus.untilTick));
+  if (
+    paintProject === session.project &&
+    paintUi === ui &&
+    paintPlaying === session.playing &&
+    paintStep === step &&
+    paintNotice === notice &&
+    paintFocus === focus
+  ) {
+    return false;
+  }
+  paintProject = session.project;
+  paintUi = ui;
+  paintPlaying = session.playing;
+  paintStep = step;
+  paintNotice = notice;
+  paintFocus = focus;
+  return true;
+}
+
+function ledsChanged(): boolean {
+  const phase = Math.floor(session.tick / blinkHalfPeriod(PPQN));
+  if (ledPhase === phase && ledProject === session.project && ledUi === session.ui) return false;
+  ledPhase = phase;
+  ledProject = session.project;
+  ledUi = session.ui;
+  return true;
+}
+
+function paintScreen(): void {
+  const screen = renderScreen(session.project, session.ui, session.tick, session.playing, Date.now(), frame);
   blit(screen.pixels);
   const host = globalThis as HostGlobals;
   const invertedCells = new Set<number>();
@@ -195,6 +240,10 @@ function paint(): void {
     host.fill_rect?.(x0, y0, x1 - x0, y1 - y0, 1);
     host.print?.(x, label.y, label.text, 0);
   }
+}
+
+function paintLeds(): void {
+  const host = globalThis as HostGlobals;
   if (!host.move_midi_internal_send) return;
   const tick = session.tick;
   stepLeds(session.project, session.ui.context).forEach((led, index) => {
@@ -220,6 +269,11 @@ function paint(): void {
     sentPads[index] = color;
     host.move_midi_internal_send?.([0x09, 0x90, 68 + index, color]);
   });
+}
+
+function paint(): void {
+  if (screenChanged()) paintScreen();
+  if (ledsChanged()) paintLeds();
 }
 
 function advanceClock(): void {
@@ -259,6 +313,15 @@ export function init(): void {
   sentPads = [];
   sentTracks = [];
   sentMenu = -1;
+  paintProject = null;
+  paintUi = null;
+  paintPlaying = false;
+  paintStep = -1;
+  paintNotice = false;
+  paintFocus = false;
+  ledPhase = -1;
+  ledProject = null;
+  ledUi = null;
   const host = globalThis as HostGlobals;
   host.set_font?.(MODULE_FONT);
   syncVoice(true);
