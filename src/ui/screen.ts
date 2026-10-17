@@ -67,7 +67,7 @@ export function renderScreen(
 ): Screen {
   const peek = ui.heldContext;
   const context = peek ?? ui.context;
-  const pageIndex = peek ? ui.heldPage ?? ui.page : ui.page;
+  const pageIndex = peek ? ui.heldPage ?? ui.lanePages[peek] ?? 0 : ui.page;
   const pages = pagesFor(context);
   const page = pages[Math.min(pageIndex, pages.length - 1)];
   const capture = ui.captureHeld;

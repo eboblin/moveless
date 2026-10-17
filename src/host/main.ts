@@ -22,7 +22,7 @@ import {
   cellTextX,
   renderScreen,
 } from "../ui/screen.ts";
-import { defaultUi, type UiState } from "../ui/state.ts";
+import { defaultUi, rememberPage, type UiState } from "../ui/state.ts";
 import type { Project } from "../core/types.ts";
 
 interface HostGlobals {
@@ -65,7 +65,7 @@ function boot(): Session {
   if (!stored) return { project: defaultProject(), ui: defaultUi(), tick: 0, playing: true };
   return {
     project: stored.project,
-    ui: { ...defaultUi(), context: stored.ui.context, page: stored.ui.page, mode: stored.ui.mode },
+    ui: { ...rememberPage(defaultUi(), stored.ui.context, stored.ui.page), mode: stored.ui.mode },
     tick: 0,
     playing: true,
   };

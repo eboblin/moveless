@@ -94,8 +94,10 @@ export interface PadSurface {
   wheelTouch?: boolean;
   captureHeld?: boolean;
   heldContext?: ContextId | null;
+  heldPage?: number | null;
   context?: ContextId;
   page?: number;
+  lanePages?: Partial<Record<ContextId, number>>;
 }
 
 /**
@@ -109,7 +111,10 @@ export function padLeds(project: Project, mode: "journal" | "set", surface?: Pad
   if (surface?.captureHeld) return capturePadLeds(project);
   if (surface?.wheelTouch) return wheelPadLeds(project, context, page);
   const scenes = scenePadLeds(project, mode, tick);
-  if (surface?.heldContext) return pageOverlay(scenes, surface.heldContext, surface.heldContext === context ? page : -1);
+  if (surface?.heldContext) {
+    const shown = surface.heldPage ?? surface.lanePages?.[surface.heldContext] ?? (surface.heldContext === context ? page : -1);
+    return pageOverlay(scenes, surface.heldContext, shown);
+  }
   return scenes;
 }
 

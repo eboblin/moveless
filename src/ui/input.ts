@@ -24,7 +24,7 @@ import {
 import { CAPTURE_DEPTHS, CAPTURE_INTENSITIES, CAPTURE_SCOPES, isLane, LANES, MENU_CC, STEPS, TRANSITIONS, WANDERS, type LaneId, type Project } from "../core/types.ts";
 import { resetControl, writeControl } from "./controls.ts";
 import { bindingPaths, pageCount, pageGroup, pagesFor } from "../core/pages.ts";
-import { applyBookmark, focusHoldTicks, HOLD_MS, HOLD_TICKS, type Notice, type UiState } from "./state.ts";
+import { applyBookmark, focusHoldTicks, HOLD_MS, HOLD_TICKS, rememberPage, type Notice, type UiState } from "./state.ts";
 
 export interface MidiMsg {
   kind: "note" | "cc";
@@ -102,17 +102,10 @@ function onStep(session: Session, index: number, press: boolean): Session {
   }
   if (!press) {
     if (session.ui.heldContext !== step) return session;
-    const count = pageCount(step);
-    const page = Math.min(session.ui.heldPage ?? session.ui.page, count - 1);
+    const page = session.ui.heldPage ?? session.ui.lanePages[step] ?? 0;
     return {
       ...session,
-      ui: {
-        ...session.ui,
-        heldContext: null,
-        heldPage: null,
-        context: step,
-        page,
-      },
+      ui: { ...rememberPage(session.ui, step, page), heldContext: null, heldPage: null },
     };
   }
   return { ...session, ui: { ...session.ui, heldContext: step } };
@@ -132,7 +125,7 @@ function onPad(session: Session, index: number, press: boolean): Session {
     const page = top ? col : 8 + col;
     const held = session.ui.heldContext;
     if (page >= pageCount(held)) return session;
-    return { ...session, ui: { ...session.ui, context: held, page, heldPage: page } };
+    return { ...session, ui: { ...rememberPage(session.ui, held, page), heldContext: held, heldPage: page } };
   }
   if (session.ui.wheelTouch && top) {
     return selectPage(session, col);
@@ -199,9 +192,8 @@ function modeNotice(title: string, value: string): Notice {
 }
 
 function selectPage(session: Session, page: number): Session {
-  const count = pageCount(session.ui.context);
-  if (page >= count) return session;
-  return { ...session, ui: { ...session.ui, page } };
+  if (page >= pageCount(session.ui.context)) return session;
+  return { ...session, ui: rememberPage(session.ui, session.ui.context, page) };
 }
 
 function turnWheel(session: Session, value: number): Session {
@@ -211,7 +203,7 @@ function turnWheel(session: Session, value: number): Session {
   let page = session.ui.page + (delta > 0 ? 1 : -1);
   if (page < 0) page = 0;
   if (page >= count) page = count - 1;
-  return { ...session, ui: { ...session.ui, page } };
+  return { ...session, ui: rememberPage(session.ui, session.ui.context, page) };
 }
 
 function touchEncoder(session: Session, index: number, press: boolean): Session {

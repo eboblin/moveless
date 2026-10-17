@@ -222,6 +222,33 @@ describe("surface", () => {
     assert.equal(cleared.project.macros.cutoff, 0.8);
   });
 
+  it("restores each lane's own page", () => {
+    let state = session();
+    state = reduce(state, { kind: "cc", data1: 14, data2: 1 });
+    state = reduce(state, { kind: "cc", data1: 14, data2: 1 });
+    assert.equal(state.ui.page, 2);
+    state = reduce(state, { kind: "note", data1: 17, data2: 127 });
+    const peek = renderScreen(state.project, state.ui, 0);
+    assert.equal(peek.header.startsWith("SNR"), true);
+    assert.equal(peek.header.includes("COUNT"), false);
+    state = reduce(state, { kind: "note", data1: 17, data2: 0 });
+    assert.equal(state.ui.context, "snare");
+    assert.equal(state.ui.page, 0);
+    state = reduce(state, { kind: "cc", data1: 14, data2: 1 });
+    state = reduce(state, { kind: "cc", data1: 14, data2: 1 });
+    state = reduce(state, { kind: "cc", data1: 14, data2: 1 });
+    state = reduce(state, { kind: "cc", data1: 14, data2: 1 });
+    assert.equal(state.ui.page, 4);
+    state = reduce(state, { kind: "note", data1: 16, data2: 127 });
+    state = reduce(state, { kind: "note", data1: 16, data2: 0 });
+    assert.equal(state.ui.context, "kick");
+    assert.equal(state.ui.page, 2);
+    state = reduce(state, { kind: "note", data1: 17, data2: 127 });
+    state = reduce(state, { kind: "note", data1: 17, data2: 0 });
+    assert.equal(state.ui.context, "snare");
+    assert.equal(state.ui.page, 4);
+  });
+
   it("selects a lane on release whether the press was short or long", () => {
     let state = session();
     state = reduce(state, { kind: "note", data1: 20, data2: 127 });
@@ -259,7 +286,7 @@ describe("surface", () => {
     assert.equal(state.ui.context, "kick");
     const held = padLeds(state.project, "journal", state.ui);
     assert.deepEqual(held.slice(24, 32).map((led) => led.color), [14, 9, 9, 120, 8, 22, 22, 0]);
-    assert.equal(held[24].blink, false);
+    assert.equal(held[24].blink, true);
     state = reduce(state, { kind: "note", data1: 93, data2: 127 });
     assert.equal(state.ui.page, 1);
     assert.equal(state.ui.heldContext, "aux");

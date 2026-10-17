@@ -1,4 +1,5 @@
-import type { ContextId, PageRef } from "../core/types.ts";
+import { pageCount } from "../core/pages.ts";
+import { STEPS, type ContextId, type PageRef } from "../core/types.ts";
 
 export type UiMode = "journal" | "set";
 
@@ -20,6 +21,8 @@ export interface Notice {
 export interface UiState {
   context: ContextId;
   page: number;
+  /** Last page of each step. Switching back opens this, not the page you left. */
+  lanePages: Record<ContextId, number>;
   mode: UiMode;
   wheelTouch: boolean;
   muteHeld: boolean;
@@ -48,10 +51,29 @@ export function focusHoldTicks(tempo: number): number {
   return Math.max(1, Math.round(0.3 * (Math.max(1, tempo) / 60) * 192));
 }
 
+function blankLanePages(): Record<ContextId, number> {
+  const pages = {} as Record<ContextId, number>;
+  for (const id of STEPS) pages[id] = 0;
+  return pages;
+}
+
+/** Keep `page` and that step's memory on the same clamped index. */
+export function rememberPage(ui: UiState, context: ContextId, page: number): UiState {
+  const count = Math.max(1, pageCount(context));
+  const clamped = Math.min(Math.max(0, page), count - 1);
+  return {
+    ...ui,
+    context,
+    page: clamped,
+    lanePages: { ...ui.lanePages, [context]: clamped },
+  };
+}
+
 export function defaultUi(): UiState {
   return {
     context: "kick",
     page: 0,
+    lanePages: blankLanePages(),
     mode: "journal",
     wheelTouch: false,
     muteHeld: false,
@@ -76,5 +98,5 @@ export function openSetMode(ui: UiState): UiState {
 }
 
 export function applyBookmark(ui: UiState, ref: PageRef): UiState {
-  return { ...ui, context: ref.context, page: ref.page, heldContext: null };
+  return { ...rememberPage(ui, ref.context, ref.page), heldContext: null };
 }
