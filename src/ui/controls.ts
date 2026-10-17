@@ -1,11 +1,12 @@
 import { clone } from "../core/clone.ts";
-import { punch } from "../core/morph.ts";
+import { punch, writeSpace } from "../core/morph.ts";
 import { setMacro, setMixer } from "../core/performance.ts";
 import { SCALE_IDS, type ContextId, type LaneId, type Project } from "../core/types.ts";
 import type { Binding } from "../core/pages.ts";
 
 export function readControl(project: Project, context: ContextId, path: string): number {
   if (context === "mix") return project.mixer[path as LaneId | "master"];
+  if (context === "space") return readSpace(project, path);
   if (context === "perf") return project.macros[path.startsWith("macro.") ? path.slice(6) : path] ?? 0;
   if (context === "global") {
     if (path.startsWith("macro.")) return project.macros[path.slice(6)] ?? 0;
@@ -32,6 +33,7 @@ function storeControl(project: Project, context: ContextId, binding: Binding, ra
   if (value > binding.max) value = binding.max;
   if (binding.integer) value = Math.round(value);
   if (context === "mix") return setMixer(project, binding.path as LaneId | "master", value);
+  if (context === "space") return writeSpace(project, binding.path, value);
   if (context === "perf") return setMacro(project, binding.path.startsWith("macro.") ? binding.path.slice(6) : binding.path, value);
   if (context === "global") {
     if (binding.path.startsWith("macro.")) return setMacro(project, binding.path.slice(6), value);
@@ -45,6 +47,14 @@ function storeControl(project: Project, context: ContextId, binding: Binding, ra
     return next;
   }
   return punch(project, `${context}.${binding.path}`, value);
+}
+
+function readSpace(project: Project, path: string): number {
+  const [group, key] = path.split(".");
+  if (group !== "reverb" && group !== "delay") return 0;
+  const box = project.space[group] as unknown as Record<string, number>;
+  const value = box[key];
+  return typeof value === "number" ? value : 0;
 }
 
 function readWorking(project: Project, path: string): number {

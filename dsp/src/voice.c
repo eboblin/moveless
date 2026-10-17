@@ -19,7 +19,7 @@
 #define PHRASE_TEXT 65536
 #define PHRASE_CAP 512
 #define LANE_COUNT 8
-#define LANE_MOTION_CAP 10
+#define LANE_MOTION_CAP 12
 
 enum {
     P_NONE = 0,
@@ -43,7 +43,9 @@ enum {
     P_RESONANCE,
     P_ATTACK,
     P_RELEASE,
-    P_WIDTH
+    P_WIDTH,
+    P_REVERB,
+    P_DELAY
 };
 
 typedef struct {
@@ -51,14 +53,14 @@ typedef struct {
     int lane;
     float phase, phase2, env, noise_env, freq, decay, noise_decay;
     float noise, drive, tone, pan, spread, snap, bright, bend, body, low, base;
-    float cutoff, resonance, flt, band;
+    float cutoff, resonance, reverb, delay, flt, band;
     float env_k, noise_k, click_k, click_env, click_tau;
     int age, loop;
 } Drum;
 
 typedef struct {
     int on;
-    float phase, phase2, env, freq, shape, detune, fm, noise, cutoff, resonance, attack, release, width, gain, low, band;
+    float phase, phase2, env, freq, shape, detune, fm, noise, cutoff, resonance, reverb, delay, attack, release, width, gain, low, band;
     float release_k;
     int age, left, lane, loop;
 } Note;
@@ -86,12 +88,35 @@ typedef struct {
     int note;
     int velocity;
     int ticks;
-    char params[192];
+    char params[320];
 } PhraseEv;
+
+typedef struct {
+    float *buf;
+    int n;
+    int i;
+} Line;
+
+typedef struct {
+    Line pre, in0, in1, in2, in3, modL, modR, dL1, dL2, dR1, dR2, apL, apR;
+    float dampL, dampR, lowL, lowR, right, lfo;
+    int quiet;
+    float size, decay, damp, diff, predelay, width, low, level;
+} Plate;
+
+typedef struct {
+    Line l, r;
+    float lpL, lpR, hpL, hpR, phase;
+    int quiet;
+    float time, feed, hi, lo, width, mod, rate, level;
+} Echo;
 
 typedef struct {
     uint32_t noise;
     float tempo;
+    float beats;
+    Plate plate;
+    Echo echo;
     char block[TEXT_CAP];
     int has_block;
     char *phrase_text;
@@ -247,6 +272,8 @@ static int param_of(const char *id) {
     if (strcmp(id, "noise") == 0) return P_NOISE;
     if (strcmp(id, "cutoff") == 0) return P_CUTOFF;
     if (strcmp(id, "resonance") == 0) return P_RESONANCE;
+    if (strcmp(id, "reverb") == 0) return P_REVERB;
+    if (strcmp(id, "delay") == 0) return P_DELAY;
     if (strcmp(id, "attack") == 0) return P_ATTACK;
     if (strcmp(id, "release") == 0 || strcmp(id, "decay") == 0) return P_RELEASE;
     if (strcmp(id, "osc_width") == 0) return P_WIDTH;
@@ -330,6 +357,8 @@ static void apply_drum(Drum *drum, int param, float unit) {
     case P_LVL: drum->body = unit; break;
     case P_CUTOFF: drum->cutoff = unit; break;
     case P_RESONANCE: drum->resonance = unit; break;
+    case P_REVERB: drum->reverb = unit; break;
+    case P_DELAY: drum->delay = unit; break;
     default: break;
     }
 }
@@ -342,6 +371,8 @@ static void apply_note(Note *note, int param, float unit) {
     case P_NOISE: note->noise = unit; break;
     case P_CUTOFF: note->cutoff = unit; break;
     case P_RESONANCE: note->resonance = unit; break;
+    case P_REVERB: note->reverb = unit; break;
+    case P_DELAY: note->delay = unit; break;
     case P_ATTACK: note->attack = unit; break;
     case P_RELEASE:
         note->release = unit;
@@ -436,6 +467,8 @@ static void arm_drum(Engine *engine, int lane, int note, int velocity, const cha
     drum->body = read_param(params, "lvl", hat ? 0.12f : 1.0f);
     drum->cutoff = read_param(params, "cutoff", 0.5f);
     drum->resonance = read_param(params, "resonance", 0.0f);
+    drum->reverb = read_param(params, "reverb", 0.0f);
+    drum->delay = read_param(params, "delay", 0.0f);
     drum->low = 0;
     drum->flt = 0;
     drum->band = 0;
@@ -475,6 +508,8 @@ static Note *arm_note(Engine *engine, int note_num, int velocity, int ticks, con
     note->noise = read_param(params, "noise", 0.0f);
     note->cutoff = read_param(params, "cutoff", 0.5f);
     note->resonance = read_param(params, "resonance", 0.0f);
+    note->reverb = read_param(params, "reverb", 0.0f);
+    note->delay = read_param(params, "delay", 0.0f);
     note->attack = read_param(params, "attack", 0.0f);
     note->release = read_param(params, "release", read_param(params, "decay", 0.4f));
     note->width = read_param(params, "osc_width", 0.0f);
@@ -619,6 +654,284 @@ static void push_lane(Engine *engine, int lane, int param, float value, int patt
 static unsigned phrase_timing_sig(const Engine *engine);
 static void catch_holding(Engine *engine);
 
+static int line_make(Line *line, int n) {
+    line->buf = (float *)calloc((size_t)n, sizeof(float));
+    line->n = line->buf ? n : 0;
+    line->i = 0;
+    return line->buf != NULL;
+}
+
+static void line_free(Line *line) {
+    free(line->buf);
+    line->buf = NULL;
+    line->n = 0;
+    line->i = 0;
+}
+
+static void line_clear(Line *line) {
+    if (!line->buf || line->n < 1) return;
+    memset(line->buf, 0, (size_t)line->n * sizeof(float));
+    line->i = 0;
+}
+
+static float line_read(const Line *line, float delay) {
+    int n = line->n;
+    if (n < 3) return 0.0f;
+    if (delay < 1.0f) delay = 1.0f;
+    float maxd = (float)(n - 2);
+    if (delay > maxd) delay = maxd;
+    float pos = (float)line->i - delay;
+    while (pos < 0.0f) pos += (float)n;
+    int i0 = (int)pos;
+    if (i0 >= n) i0 %= n;
+    float frac = pos - floorf(pos);
+    int i1 = i0 + 1;
+    if (i1 >= n) i1 = 0;
+    return line->buf[i0] * (1.0f - frac) + line->buf[i1] * frac;
+}
+
+static void line_write(Line *line, float x) {
+    if (x > -1e-15f && x < 1e-15f) x = 0.0f;
+    line->buf[line->i] = x;
+    if (++line->i >= line->n) line->i = 0;
+}
+
+static float line_ap(Line *line, float delay, float x, float g) {
+    float z = line_read(line, delay);
+    float y = -g * x + z;
+    line_write(line, x + g * y);
+    return y;
+}
+
+static float line_delay(Line *line, float samples, float x) {
+    float y = line_read(line, samples);
+    line_write(line, x);
+    return y;
+}
+
+static float paper_scale(void) { return SR / 29761.0f; }
+
+static int tank_len(float base) {
+    return (int)ceilf(base * paper_scale() * 1.85f) + 32;
+}
+
+static float sized_delay(float base, float size) {
+    return base * paper_scale() * (0.5f + size * 1.3f);
+}
+
+static int space_init(Engine *engine) {
+    Plate *p = &engine->plate;
+    Echo *e = &engine->echo;
+    float s = paper_scale();
+    int ok = 1;
+    ok = line_make(&p->pre, (int)ceilf(SR * 0.2f) + 8) && ok;
+    ok = line_make(&p->in0, (int)ceilf(142.0f * s) + 8) && ok;
+    ok = line_make(&p->in1, (int)ceilf(107.0f * s) + 8) && ok;
+    ok = line_make(&p->in2, (int)ceilf(379.0f * s) + 8) && ok;
+    ok = line_make(&p->in3, (int)ceilf(277.0f * s) + 8) && ok;
+    ok = line_make(&p->modL, tank_len(672.0f)) && ok;
+    ok = line_make(&p->modR, tank_len(908.0f)) && ok;
+    ok = line_make(&p->dL1, tank_len(4453.0f)) && ok;
+    ok = line_make(&p->dL2, tank_len(3720.0f)) && ok;
+    ok = line_make(&p->dR1, tank_len(4217.0f)) && ok;
+    ok = line_make(&p->dR2, tank_len(3163.0f)) && ok;
+    ok = line_make(&p->apL, tank_len(1800.0f)) && ok;
+    ok = line_make(&p->apR, tank_len(2656.0f)) && ok;
+    ok = line_make(&e->l, (int)ceilf(SR * 2.0f) + 8) && ok;
+    ok = line_make(&e->r, (int)ceilf(SR * 2.0f) + 8) && ok;
+    p->size = 0.45f;
+    p->decay = 0.55f;
+    p->damp = 0.4f;
+    p->diff = 0.7f;
+    p->predelay = 0.08f;
+    p->width = 0.85f;
+    p->low = 0.25f;
+    p->level = 0.75f;
+    e->time = 0.4f;
+    e->feed = 0.4f;
+    e->hi = 0.65f;
+    e->lo = 0.12f;
+    e->width = 0.55f;
+    e->mod = 0.12f;
+    e->rate = 0.3f;
+    e->level = 0.7f;
+    engine->beats = 4.0f;
+    return ok;
+}
+
+static void space_free(Engine *engine) {
+    Plate *p = &engine->plate;
+    line_free(&p->pre);
+    line_free(&p->in0);
+    line_free(&p->in1);
+    line_free(&p->in2);
+    line_free(&p->in3);
+    line_free(&p->modL);
+    line_free(&p->modR);
+    line_free(&p->dL1);
+    line_free(&p->dL2);
+    line_free(&p->dR1);
+    line_free(&p->dR2);
+    line_free(&p->apL);
+    line_free(&p->apR);
+    line_free(&engine->echo.l);
+    line_free(&engine->echo.r);
+}
+
+static void space_clear(Engine *engine) {
+    Plate *p = &engine->plate;
+    line_clear(&p->pre);
+    line_clear(&p->in0);
+    line_clear(&p->in1);
+    line_clear(&p->in2);
+    line_clear(&p->in3);
+    line_clear(&p->modL);
+    line_clear(&p->modR);
+    line_clear(&p->dL1);
+    line_clear(&p->dL2);
+    line_clear(&p->dR1);
+    line_clear(&p->dR2);
+    line_clear(&p->apL);
+    line_clear(&p->apR);
+    p->dampL = 0;
+    p->dampR = 0;
+    p->lowL = 0;
+    p->lowR = 0;
+    p->right = 0;
+    p->lfo = 0;
+    p->quiet = 0;
+    line_clear(&engine->echo.l);
+    line_clear(&engine->echo.r);
+    engine->echo.lpL = 0;
+    engine->echo.lpR = 0;
+    engine->echo.hpL = 0;
+    engine->echo.hpR = 0;
+    engine->echo.phase = 0;
+    engine->echo.quiet = 0;
+}
+
+static void apply_space(Engine *engine, const char *text) {
+    float v[17];
+    int n = 0;
+    const char *cursor = text;
+    while (n < 17 && cursor && *cursor) {
+        char *end = NULL;
+        float value = strtof(cursor, &end);
+        if (end == cursor) break;
+        v[n++] = value;
+        cursor = (*end == ',') ? end + 1 : end;
+    }
+    if (n < 16) return;
+    Plate *p = &engine->plate;
+    Echo *e = &engine->echo;
+    p->size = clampf01(v[0]);
+    p->decay = clampf01(v[1]);
+    p->damp = clampf01(v[2]);
+    p->diff = clampf01(v[3]);
+    p->predelay = clampf01(v[4]);
+    p->width = clampf01(v[5]);
+    p->low = clampf01(v[6]);
+    p->level = clampf01(v[7]);
+    e->time = clampf01(v[8]);
+    e->feed = clampf01(v[9]);
+    e->hi = clampf01(v[10]);
+    e->lo = clampf01(v[11]);
+    e->width = clampf01(v[12]);
+    e->mod = clampf01(v[13]);
+    e->rate = clampf01(v[14]);
+    e->level = clampf01(v[15]);
+    if (n >= 17 && v[16] >= 1.0f) engine->beats = v[16];
+}
+
+static float smooth_pole(float state, float x, float coef) {
+    return state + (x - state) * coef;
+}
+
+static void plate_sample(Engine *engine, float inL, float inR, float *outL, float *outR) {
+    Plate *p = &engine->plate;
+    float energy = fabsf(inL) + fabsf(inR);
+    if (energy < 1e-7f && p->quiet > (int)(SR / 2.0f)) {
+        *outL = 0;
+        *outR = 0;
+        return;
+    }
+    float s = paper_scale();
+    float pre = line_delay(&p->pre, fmaxf(1.0f, p->predelay * 0.2f * SR), (inL + inR) * 0.5f);
+    float diffuse = 0.25f + p->diff * 0.5f;
+    float x = pre;
+    x = line_ap(&p->in0, 142.0f * s, x, diffuse);
+    x = line_ap(&p->in1, 107.0f * s, x, diffuse);
+    x = line_ap(&p->in2, 379.0f * s, x, diffuse);
+    x = line_ap(&p->in3, 277.0f * s, x, diffuse);
+    float decay = 0.25f + p->decay * 0.7f;
+    p->lfo += (3.14159265f * 1.6f) / SR;
+    if (p->lfo > 6.2831853f) p->lfo -= 6.2831853f;
+    float wobble = sinf(p->lfo) * 12.0f * s;
+    float left = x + p->right * decay;
+    left = line_ap(&p->modL, sized_delay(672.0f, p->size) + wobble, left, 0.7f);
+    float body = line_delay(&p->dL1, sized_delay(4453.0f, p->size), left);
+    p->dampL = smooth_pole(p->dampL, body, 0.8f - p->damp * 0.75f);
+    p->lowL = smooth_pole(p->lowL, p->dampL, 0.002f + p->low * 0.03f);
+    body = (p->dampL * (1.0f - p->low) + (p->dampL - p->lowL) * p->low) * decay;
+    left = line_ap(&p->apL, sized_delay(1800.0f, p->size), body, 0.5f);
+    float left_last = line_delay(&p->dL2, sized_delay(3720.0f, p->size), left);
+    float right = x + left_last * decay;
+    right = line_ap(&p->modR, sized_delay(908.0f, p->size) - wobble, right, 0.7f);
+    body = line_delay(&p->dR1, sized_delay(4217.0f, p->size), right);
+    p->dampR = smooth_pole(p->dampR, body, 0.8f - p->damp * 0.75f);
+    p->lowR = smooth_pole(p->lowR, p->dampR, 0.002f + p->low * 0.03f);
+    body = (p->dampR * (1.0f - p->low) + (p->dampR - p->lowR) * p->low) * decay;
+    right = line_ap(&p->apR, sized_delay(2656.0f, p->size), body, 0.5f);
+    p->right = line_delay(&p->dR2, sized_delay(3163.0f, p->size), right);
+    float mid = (left_last + p->right) * 0.5f;
+    float side = (left_last - p->right) * 0.5f * p->width;
+    *outL = (mid + side) * p->level;
+    *outR = (mid - side) * p->level;
+    p->quiet = energy + fabsf(*outL) + fabsf(*outR) < 1e-6f ? p->quiet + 1 : 0;
+}
+
+static float echo_color(Echo *e, int right, float x) {
+    float hi = 0.05f + e->hi * 0.95f;
+    float *lp = right ? &e->lpR : &e->lpL;
+    float *hp = right ? &e->hpR : &e->hpL;
+    *lp = smooth_pole(*lp, x, hi);
+    *hp = smooth_pole(*hp, *lp, 0.001f + e->lo * 0.08f);
+    return *lp * (1.0f - e->lo) + (*lp - *hp) * e->lo;
+}
+
+static void echo_sample(Engine *engine, float inL, float inR, float *outL, float *outR) {
+    Echo *e = &engine->echo;
+    float energy = fabsf(inL) + fabsf(inR);
+    if (energy < 1e-7f && e->quiet > (int)(SR / 2.0f)) {
+        *outL = 0;
+        *outR = 0;
+        return;
+    }
+    float bar = engine->beats > 1.0f ? engine->beats : 1.0f;
+    float unit = clampf01(e->time);
+    float seconds = 0.125f * powf(bar / 0.125f, unit) * 60.0f / (engine->tempo > 1.0f ? engine->tempo : 1.0f);
+    if (seconds > 2.0f) seconds = 2.0f;
+    if (seconds < 0.001f) seconds = 0.001f;
+    e->phase += (6.2831853f * (0.05f + e->rate * 4.0f)) / SR;
+    if (e->phase > 6.2831853f) e->phase -= 6.2831853f;
+    float samples = seconds * SR + sinf(e->phase) * e->mod * 0.008f * SR;
+    float stereo = e->width * 2.0f;
+    if (stereo > 1.0f) stereo = 1.0f;
+    float ping = e->width * 2.0f - 1.0f;
+    if (ping < 0.0f) ping = 0.0f;
+    float mono = (inL + inR) * 0.5f;
+    float srcL = mono * (1.0f - stereo) + inL * stereo;
+    float srcR = mono * (1.0f - stereo) + inR * stereo;
+    float delL = line_read(&e->l, samples);
+    float delR = line_read(&e->r, samples);
+    float feed = e->feed * 0.92f;
+    line_write(&e->l, srcL + echo_color(e, 0, (delL * (1.0f - ping) + delR * ping) * feed));
+    line_write(&e->r, srcR + echo_color(e, 1, (delR * (1.0f - ping) + delL * ping) * feed));
+    *outL = delL * e->level;
+    *outR = delR * e->level;
+    e->quiet = energy + fabsf(*outL) + fabsf(*outR) < 1e-6f ? e->quiet + 1 : 0;
+}
+
 static void ingest_phrase(Engine *engine) {
     char *text = engine->phrase_text;
     engine->phrase_pending = 0;
@@ -632,7 +945,10 @@ static void ingest_phrase(Engine *engine) {
     char *body = reset ? strchr(reset + 1, '|') : NULL;
     if (!body) return;
     engine->tempo = strtof(tempo + 1, NULL);
-    if (atoi(reset + 1)) engine->clock = 0;
+    if (atoi(reset + 1)) {
+        engine->clock = 0;
+        space_clear(engine);
+    }
     engine->phrase_on = 1;
     engine->phrase_count = 0;
     for (int lane = 0; lane < LANE_COUNT; lane++) {
@@ -640,6 +956,11 @@ static void ingest_phrase(Engine *engine) {
         engine->lanes[lane].still_count = 0;
     }
     char *cursor = body + 1;
+    char *space = strchr(cursor, '@');
+    if (space) {
+        *space = 0;
+        apply_space(engine, space + 1);
+    }
     char *split = strchr(cursor, '#');
     if (split) *split = 0;
     while (cursor && *cursor && engine->phrase_count < PHRASE_CAP) {
@@ -815,22 +1136,38 @@ static void render(Engine *engine, int16_t *out, int frames) {
             else arm_note(engine, ev[e].note, ev[e].velocity, ev[e].ticks, ev[e].params, ev[e].lane, 0);
         }
         if ((i & (FOLLOW_STRIDE - 1)) == 0) follow_sound(engine);
-        float left = 0, right = 0;
+        float left = 0, right = 0, revL = 0, revR = 0, dlyL = 0, dlyR = 0;
         for (int d = 0; d < DRUMS; d++) {
             if (!engine->drums[d].on) continue;
             float sample = drum_sample(engine, &engine->drums[d]);
             float pan = engine->drums[d].pan;
             if (pan < 0) pan = 0;
             if (pan > 1) pan = 1;
-            left += sample * (1.0f - pan);
-            right += sample * pan;
+            float l = sample * (1.0f - pan);
+            float r = sample * pan;
+            left += l;
+            right += r;
+            revL += l * engine->drums[d].reverb;
+            revR += r * engine->drums[d].reverb;
+            dlyL += l * engine->drums[d].delay;
+            dlyR += r * engine->drums[d].delay;
         }
         for (int n = 0; n < NOTES; n++) {
             if (!engine->notes[n].on) continue;
-            note_sample(engine, &engine->notes[n], &left, &right);
+            float nl = 0, nr = 0;
+            note_sample(engine, &engine->notes[n], &nl, &nr);
+            left += nl;
+            right += nr;
+            revL += nl * engine->notes[n].reverb;
+            revR += nr * engine->notes[n].reverb;
+            dlyL += nl * engine->notes[n].delay;
+            dlyR += nr * engine->notes[n].delay;
         }
-        float l = soft(left);
-        float r = soft(right);
+        float wetL = 0, wetR = 0, delL = 0, delR = 0;
+        plate_sample(engine, revL, revR, &wetL, &wetR);
+        echo_sample(engine, dlyL, dlyR, &delL, &delR);
+        float l = soft(left + wetL + delL);
+        float r = soft(right + wetR + delR);
         if (out) {
             int il = (int)(l * 32767.0f);
             int ir = (int)(r * 32767.0f);
@@ -856,6 +1193,13 @@ static void *create_instance(const char *module_dir, const char *json_defaults) 
     }
     engine->noise = 1;
     engine->tempo = 120.0f;
+    engine->beats = 4.0f;
+    if (!space_init(engine)) {
+        space_free(engine);
+        free(engine->phrase_text);
+        free(engine);
+        return NULL;
+    }
     return engine;
 }
 
@@ -876,6 +1220,7 @@ static void set_param(void *instance, const char *key, const char *val) {
 static void destroy_instance(void *instance) {
     Engine *engine = instance;
     if (!engine) return;
+    space_free(engine);
     free(engine->phrase_text);
     free(engine);
 }

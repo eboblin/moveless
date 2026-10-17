@@ -1,4 +1,4 @@
-import type { ChordLane, DrumLane, EuclidGen, LaneFilter, LaneId, Lanes, Modulated, PitchedLane } from "./types.ts";
+import type { ChordLane, DrumLane, EuclidGen, LaneFilter, LaneId, LaneSend, Lanes, Modulated, PitchedLane } from "./types.ts";
 
 export type MorphKind = "lerp" | "switch";
 
@@ -59,6 +59,11 @@ function emitFilter(sink: Sink, prefix: string, filter: LaneFilter): void {
   emitMod(sink, `${prefix}.filter.resonance`, filter.resonance, true);
 }
 
+function emitSend(sink: Sink, prefix: string, send: LaneSend): void {
+  emitMod(sink, `${prefix}.send.reverb`, send.reverb, true);
+  emitMod(sink, `${prefix}.send.delay`, send.delay, true);
+}
+
 function emitDrum(sink: Sink, id: string, lane: DrumLane): void {
   emitEuclid(sink, `${id}.gen1`, lane.gen1);
   emitEuclid(sink, `${id}.gen2`, lane.gen2);
@@ -66,6 +71,7 @@ function emitDrum(sink: Sink, id: string, lane: DrumLane): void {
   emitMod(sink, `${id}.ratchet.rate`, lane.ratchet.rate, false);
   emitSound(sink, id, lane.sound);
   emitFilter(sink, id, lane.filter);
+  emitSend(sink, id, lane.send);
 }
 
 function emitPitched(sink: Sink, id: string, lane: PitchedLane): void {
@@ -77,6 +83,7 @@ function emitPitched(sink: Sink, id: string, lane: PitchedLane): void {
   }
   emitSound(sink, id, lane.sound);
   emitFilter(sink, id, lane.filter);
+  emitSend(sink, id, lane.send);
 }
 
 function emitChords(sink: Sink, lane: ChordLane): void {
@@ -89,6 +96,7 @@ function emitChords(sink: Sink, lane: ChordLane): void {
   emitMod(sink, "chords.gate", lane.gate, false);
   emitSound(sink, "chords", lane.sound);
   emitFilter(sink, "chords", lane.filter);
+  emitSend(sink, "chords", lane.send);
 }
 
 function walkLanes(lanes: Lanes, sink: Sink, only?: LaneId): void {

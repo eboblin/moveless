@@ -1,4 +1,4 @@
-import { defaultProject } from "./defaults.ts";
+import { defaultProject, defaultSpace } from "./defaults.ts";
 import { clone } from "./clone.ts";
 import {
   CAPTURE_DEPTHS,
@@ -14,6 +14,7 @@ import {
   type ContextId,
   type Lanes,
   type Project,
+  type Space,
   type TransitionId,
   type WanderId,
 } from "./types.ts";
@@ -42,7 +43,7 @@ export interface HostFiles {
   write_file?: (path: string, content: string) => boolean;
 }
 
-const CONTEXTS: readonly ContextId[] = [...LANES, "mix", "global", "perf"];
+const CONTEXTS: readonly ContextId[] = [...LANES, "space", "mix", "global", "perf"];
 
 /** Drop tick-bound runtime before save/load. */
 export function sanitizeProject(project: Project): Project {
@@ -122,6 +123,7 @@ function mergeProject(raw: Record<string, unknown>): Project {
     mute: { ...base.mute, ...(isRecord(raw.mute) ? (raw.mute as Project["mute"]) : {}) },
     lock: { ...base.lock, ...(isRecord(raw.lock) ? (raw.lock as Project["lock"]) : {}) },
     working: acceptLanes(raw.working),
+    space: mergeSpace(base.space, raw.space),
     transition: asTransition(raw.transition) ?? base.transition,
     wander: raw.wander === null ? null : asWander(raw.wander) ?? base.wander,
     wanderPreviousTarget:
@@ -153,6 +155,17 @@ function mergeUi(raw: unknown): StoredUi {
   const count = Math.max(1, pageCount(context));
   const page = Math.min(Math.max(0, asInt(raw.page, 0)), count - 1);
   return { context, page, mode };
+}
+
+function mergeSpace(base: Space, raw: unknown): Space {
+  const merged = mergeKnown(base, raw) as Space;
+  for (const group of ["reverb", "delay"] as const) {
+    for (const key of Object.keys(merged[group])) {
+      const box = merged[group] as unknown as Record<string, number>;
+      box[key] = clamp(box[key], 0, 1);
+    }
+  }
+  return merged;
 }
 
 function mergeGlobal(base: Project["global"], raw: unknown): Project["global"] {
@@ -203,6 +216,7 @@ function acceptJournal(raw: unknown): Project["journal"] {
       id: scene.id,
       color: typeof scene.color === "number" ? scene.color : undefined,
       lanes: acceptLanes(scene.lanes),
+      space: mergeSpace(defaultSpace(), scene.space),
     });
   }
   return scenes;

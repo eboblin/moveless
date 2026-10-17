@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { defaultProject } from "../src/core/defaults.ts";
+import { defaultProject, defaultSpace } from "../src/core/defaults.ts";
 import { record, setCaptureDepth, setCaptureIntensity, setCaptureScope } from "../src/core/performance.ts";
 import {
   PROJECT_PATH,
@@ -48,10 +48,25 @@ describe("project persist", () => {
     assert.equal(parsed.ui.mode, "set");
   });
 
+  it("fills space and sends when an older project never stored them", () => {
+    const project = defaultProject();
+    const raw = JSON.parse(serializeStored(project, { context: "kick", page: 0, mode: "journal" })) as {
+      project: { space?: unknown; working: { bass: { send?: unknown } } };
+    };
+    delete raw.project.space;
+    delete raw.project.working.bass.send;
+    const parsed = parseStored(JSON.stringify(raw));
+    assert.ok(parsed);
+    assert.equal(parsed.project.space.reverb.size, defaultSpace().reverb.size);
+    assert.equal(parsed.project.working.bass.send.reverb.value, 0);
+    assert.equal(parsed.project.working.bass.send.delay.value, 0);
+  });
+
   it("clears morph and wander origin on parse", () => {
     const project = defaultProject();
     project.morph = {
       start: project.working,
+      startSpace: project.space,
       targetId: "001",
       originTick: 100,
       durationTicks: 200,
@@ -84,7 +99,7 @@ describe("project persist", () => {
     assert.equal(parsed.project.global.bar, defaultProject().global.bar);
     assert.ok(parsed.project.working.kick);
     assert.equal(parsed.ui.context, "snare");
-    assert.equal(parsed.ui.page, 7);
+    assert.equal(parsed.ui.page, 8);
   });
 
   it("replaces an old chord lane with defaults", () => {

@@ -1,15 +1,17 @@
 import { SAMPLE_RATE, SIXTEENTH_TICKS, tickToSample } from "../core/clock.ts";
+import { defaultSpace } from "../core/defaults.ts";
 import { evalModulated } from "../core/modulate.ts";
-import { isDrum, LANES, type LaneId } from "../core/types.ts";
+import { isDrum, LANES, type LaneId, type Space } from "../core/types.ts";
 import type { EngineParam } from "./map.ts";
 import type { BlockEvent, LoopEvent, Motion } from "./schedule.ts";
+import { clearEcho, clearTank, createEcho, createTank, echoSample, tankSample, type Echo, type Tank } from "./space.ts";
 
 const TWO_PI = Math.PI * 2;
 const DRUM_COUNT = 4;
 const NOTE_COUNT = 12;
 const LANE_COUNT = 8;
 const CHORDS_LANE = LANES.indexOf("chords");
-const LANE_MOTION_CAP = 10;
+const LANE_MOTION_CAP = 12;
 
 const P_NONE = 0;
 const P_FREQ = 1;
@@ -33,6 +35,8 @@ const P_RESONANCE = 18;
 const P_ATTACK = 19;
 const P_RELEASE = 20;
 const P_WIDTH = 21;
+const P_REVERB = 22;
+const P_DELAY = 23;
 
 export interface Engine {
   noise: number;
@@ -42,6 +46,10 @@ export interface Engine {
   motions: Motion[];
   clock: number;
   tempo: number;
+  beats: number;
+  space: Space;
+  tank: Tank;
+  echo: Echo;
   /** Pitched-note timing of the phrase last loaded. Same grid must not re-attack. */
   holdSig: string;
   lanes: LaneBox[];
@@ -74,6 +82,8 @@ interface DrumVoice {
   /** Lane filter, after the drum synth. */
   cutoff: number;
   resonance: number;
+  reverb: number;
+  delay: number;
   flt: number;
   band: number;
   base: number;
@@ -99,6 +109,8 @@ interface NoteVoice {
   noise: number;
   cutoff: number;
   resonance: number;
+  reverb: number;
+  delay: number;
   attack: number;
   release: number;
   width: number;
@@ -133,6 +145,10 @@ export function createEngine(): Engine {
     motions: [],
     clock: 0,
     tempo: 120,
+    beats: 4,
+    space: defaultSpace(),
+    tank: createTank(),
+    echo: createEcho(),
     holdSig: "",
     lanes: emptyLanes(),
   };
@@ -150,6 +166,8 @@ export function loadPhrase(engine: Engine, events: LoopEvent[], tempo: number, r
   stampHeld(engine);
   if (reset) {
     engine.clock = 0;
+    clearTank(engine.tank);
+    clearEcho(engine.echo);
     return;
   }
   if (engine.clock > 0 && sig !== previous) catchHolding(engine);
@@ -185,13 +203,13 @@ export function packPhrase(events: LoopEvent[], tempo: number, reset: boolean, m
   return `P|${tempo}|${reset ? 1 : 0}|${packPhraseBody(events, motions)}`;
 }
 
-export function packPhraseBody(events: LoopEvent[], motions: Motion[] = []): string {
+export function packPhraseBody(events: LoopEvent[], motions: Motion[] = [], space = ""): string {
   const body = events.map((event) => {
     const lane = LANES.indexOf(event.lane);
     const params = event.params.map((param) => `${param.id}=${param.value.toFixed(4)}`).join(",");
     return `${event.sample}:${event.loop}:${lane}:${event.note}:${event.velocity}:${event.lengthTicks}:${params}`;
   }).join(";");
-  if (!motions.length) return body;
+  if (!motions.length) return space ? `${body}@${space}` : body;
   const tail = motions.map((motion) => {
     const lane = LANES.indexOf(motion.lane);
     const head = `${lane}:${motion.id}:${motion.value.toFixed(4)}:${Math.round(motion.pattern)}:${Math.round(motion.cycle)}:${motion.amount.toFixed(4)}:${motion.loop}`;
@@ -199,7 +217,8 @@ export function packPhraseBody(events: LoopEvent[], motions: Motion[] = []): str
     const blend = motion.blend;
     return `${head}:${blend.value.toFixed(4)}:${Math.round(blend.pattern)}:${Math.round(blend.cycle)}:${blend.amount.toFixed(4)}:${blend.t.toFixed(4)}`;
   }).join(";");
-  return `${body}#${tail}`;
+  const packed = `${body}#${tail}`;
+  return space ? `${packed}@${space}` : packed;
 }
 
 /** Bass, Lead and Chords share these twelve notes. Drums keep one voice each. */
@@ -243,21 +262,37 @@ function renderFrames(engine: Engine, frames: number, at: (frame: number) => voi
     if ((i & (FOLLOW_STRIDE - 1)) === 0) follow(engine);
     let left = 0;
     let right = 0;
+    let revL = 0;
+    let revR = 0;
+    let dlyL = 0;
+    let dlyR = 0;
     for (const drum of engine.drums) {
       if (!drum.on) continue;
       const sample = drumSample(engine, drum);
       const pan = Math.max(0, Math.min(1, drum.pan));
-      left += sample * (1 - pan);
-      right += sample * pan;
+      const l = sample * (1 - pan);
+      const r = sample * pan;
+      left += l;
+      right += r;
+      revL += l * drum.reverb;
+      revR += r * drum.reverb;
+      dlyL += l * drum.delay;
+      dlyR += r * drum.delay;
     }
     for (const note of engine.notes) {
       if (!note.on) continue;
       const pair = noteSample(engine, note);
       left += pair[0];
       right += pair[1];
+      revL += pair[0] * note.reverb;
+      revR += pair[1] * note.reverb;
+      dlyL += pair[0] * note.delay;
+      dlyR += pair[1] * note.delay;
     }
-    out[i * 2] = soft(left);
-    out[i * 2 + 1] = soft(right);
+    const wetR = tankSample(engine.tank, engine.space.reverb, revL, revR);
+    const wetD = echoSample(engine.echo, engine.space.delay, engine.beats, engine.tempo, dlyL, dlyR);
+    out[i * 2] = soft(left + wetR[0] + wetD[0]);
+    out[i * 2 + 1] = soft(right + wetR[1] + wetD[1]);
   }
   return out;
 }
@@ -316,6 +351,8 @@ function armDrum(drum: DrumVoice, event: BlockEvent | LoopEvent, pitch: number, 
   drum.body = read(event.params, ["lvl"], hat ? 0.12 : 1);
   drum.cutoff = read(event.params, ["cutoff"], 0.5);
   drum.resonance = read(event.params, ["resonance"], 0);
+  drum.reverb = read(event.params, ["reverb"], 0);
+  drum.delay = read(event.params, ["delay"], 0);
   drum.low = 0;
   drum.flt = 0;
   drum.band = 0;
@@ -340,6 +377,8 @@ function armNote(engine: Engine, note: NoteVoice, event: BlockEvent | LoopEvent,
   note.noise = read(event.params, ["noise"], 0);
   note.cutoff = read(event.params, ["cutoff"], 0.5);
   note.resonance = read(event.params, ["resonance"], 0);
+  note.reverb = read(event.params, ["reverb"], 0);
+  note.delay = read(event.params, ["delay"], 0);
   note.attack = read(event.params, ["attack"], 0);
   note.release = read(event.params, ["decay", "release"], 0.4);
   note.width = read(event.params, ["osc_width"], 0);
@@ -492,6 +531,8 @@ function applyDrum(drum: DrumVoice, param: number, unit: number): void {
   else if (param === P_LVL) drum.body = unit;
   else if (param === P_CUTOFF) drum.cutoff = unit;
   else if (param === P_RESONANCE) drum.resonance = unit;
+  else if (param === P_REVERB) drum.reverb = unit;
+  else if (param === P_DELAY) drum.delay = unit;
 }
 
 function applyNote(note: NoteVoice, param: number, unit: number): void {
@@ -501,6 +542,8 @@ function applyNote(note: NoteVoice, param: number, unit: number): void {
   else if (param === P_NOISE) note.noise = unit;
   else if (param === P_CUTOFF) note.cutoff = unit;
   else if (param === P_RESONANCE) note.resonance = unit;
+  else if (param === P_REVERB) note.reverb = unit;
+  else if (param === P_DELAY) note.delay = unit;
   else if (param === P_ATTACK) note.attack = unit;
   else if (param === P_RELEASE) {
     note.release = unit;
@@ -624,6 +667,8 @@ function paramOf(id: string): number {
   if (id === "noise") return P_NOISE;
   if (id === "cutoff") return P_CUTOFF;
   if (id === "resonance") return P_RESONANCE;
+  if (id === "reverb") return P_REVERB;
+  if (id === "delay") return P_DELAY;
   if (id === "attack") return P_ATTACK;
   if (id === "release" || id === "decay") return P_RELEASE;
   if (id === "osc_width") return P_WIDTH;
@@ -699,7 +744,7 @@ function emptyDrum(): DrumVoice {
   return {
     on: false, lane: 0, phase: 0, phase2: 0, env: 0, noiseEnv: 0, age: 0, freq: 0,
     decay: 0.2, noiseDecay: 0.15, noise: 0, drive: 0, tone: 0.5, pan: 0.5, spread: 0,
-    snap: 0, bright: 0.4, bend: 0, body: 1, low: 0, cutoff: 0.5, resonance: 0, flt: 0, band: 0, base: 0, loop: 0,
+    snap: 0, bright: 0.4, bend: 0, body: 1, low: 0, cutoff: 0.5, resonance: 0, reverb: 0, delay: 0, flt: 0, band: 0, base: 0, loop: 0,
     envK: 1, noiseK: 1, clickK: 1, clickEnv: 1, clickTau: 10,
   };
 }
@@ -707,7 +752,7 @@ function emptyDrum(): DrumVoice {
 function emptyNote(): NoteVoice {
   return {
     on: false, phase: 0, phase2: 0, env: 0, age: 0, left: 0, freq: 0, shape: 0, detune: 0.5,
-    fm: 0, noise: 0, cutoff: 0.5, resonance: 0, attack: 0, release: 0.4, width: 0, gain: 0,
+    fm: 0, noise: 0, cutoff: 0.5, resonance: 0, reverb: 0, delay: 0, attack: 0, release: 0.4, width: 0, gain: 0,
     low: 0, band: 0, lane: 0, loop: 0, releaseK: 1,
   };
 }

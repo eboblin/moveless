@@ -4,7 +4,7 @@ import { clone } from "../src/core/clone.ts";
 import { sampleOffset, SIXTEENTH_TICKS, unitForIndex } from "../src/core/clock.ts";
 import { defaultProject } from "../src/core/defaults.ts";
 import { euclidPattern, phraseStepsOf } from "../src/core/events.ts";
-import { applyMorph } from "../src/core/morph.ts";
+import { applyMorph, writeSpace } from "../src/core/morph.ts";
 import { motif, MOTIF_COUNT } from "../src/core/motif.ts";
 import { modulated } from "../src/core/modulate.ts";
 import {
@@ -134,7 +134,7 @@ describe("euclid generator", () => {
     assert.equal(generatePhrase(project).lanes.kick.length, 0);
     const other = clone(project);
     other.nextSceneId = 99;
-    other.journal = [{ id: "ghost", lanes: clone(project.working) }];
+    other.journal = [{ id: "ghost", lanes: clone(project.working), space: clone(project.space) }];
     assert.deepEqual(generatePhrase(project).lanes.kick, generatePhrase(other).lanes.kick);
   });
 
@@ -1234,7 +1234,7 @@ describe("capture, wander, sets", () => {
     project = createSet(project, "A");
     for (let n = 0; n < 40; n++) {
       const id = String(200 + n);
-      project.journal.push({ id, lanes: clone(project.working) });
+      project.journal.push({ id, lanes: clone(project.working), space: clone(project.space) });
       project = addSceneToSet(project, project.activeSetId!, id);
     }
     assert.equal(project.sets[0].sceneIds.length, 32);
@@ -1250,5 +1250,25 @@ describe("capture, wander, sets", () => {
     project.transition = "now";
     const later = advance(project, 2 * 4 * 192);
     assert.ok(later.wanderPreviousTarget === "001" || later.wanderPreviousTarget === "002");
+  });
+
+  it("records space with the scene and glides it, holding a punched knob", () => {
+    let project = defaultProject();
+    project.space.reverb.size = 0;
+    project = record(project);
+    assert.equal(project.journal[0].space.reverb.size, 0);
+    project.space.reverb.size = 1;
+    project = record(project);
+    project.working = clone(project.journal[0].lanes);
+    project.space = clone(project.journal[0].space);
+    project.transition = "fast";
+    project = launchScene(project, "002", 0);
+    const duration = project.morph?.durationTicks ?? 0;
+    const mid = applyMorph(project, duration / 2);
+    assert.ok(Math.abs(mid.space.reverb.size - 0.5) < 1e-6);
+    const held = writeSpace(mid, "reverb.size", 0.2);
+    const landed = applyMorph(held, duration);
+    assert.ok(Math.abs(landed.space.reverb.size - 0.2) < 1e-9);
+    assert.equal(landed.morph, null);
   });
 });

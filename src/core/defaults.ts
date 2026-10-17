@@ -11,10 +11,12 @@ import {
   type EuclidGen,
   type LaneFilter,
   type LaneId,
+  type LaneSend,
   type Lanes,
   type PitchedLane,
   type Project,
   type GlobalSettings,
+  type Space,
 } from "./types.ts";
 
 const CYCLE_CHOICES = [4, 8, 16] as const;
@@ -122,6 +124,13 @@ function laneFilter(lane: string): LaneFilter {
   };
 }
 
+function laneSend(lane: string): LaneSend {
+  return {
+    reverb: home(`${lane}.send.reverb`, 0),
+    delay: home(`${lane}.send.delay`, 0),
+  };
+}
+
 function sound(lane: LaneId): Record<string, ReturnType<typeof modulated>> {
   const ids = SOUND[lane];
   const values = SOUND_VALUE[lane];
@@ -144,6 +153,7 @@ function drum(id: DrumId): DrumLane {
     ratchet: { count: home(`${id}.ratchet.count`, 0), rate: home(`${id}.ratchet.rate`, 0) },
     sound: sound(id),
     filter: laneFilter(id),
+    send: laneSend(id),
   };
 }
 
@@ -159,6 +169,7 @@ function pitched(lane: "bass" | "lead", follow: number): PitchedLane {
     step: home(`${lane}.step`, 0.5),
     sound: sound(lane),
     filter: laneFilter(lane),
+    send: laneSend(lane),
   };
 }
 
@@ -178,6 +189,33 @@ function chords(): ChordLane {
     gate: home("chords.gate", 0.7),
     sound: sound("chords"),
     filter: laneFilter("chords"),
+    send: laneSend("chords"),
+  };
+}
+
+export function defaultSpace(): Space {
+  return {
+    reverb: {
+      size: 0.45,
+      decay: 0.55,
+      damp: 0.4,
+      diff: 0.7,
+      pre: 0.08,
+      width: 0.85,
+      low: 0.25,
+      level: 0.75,
+    },
+    delay: {
+      // 0.4 is an eighth note when the bar is four beats.
+      time: 0.4,
+      feed: 0.4,
+      hi: 0.65,
+      lo: 0.12,
+      width: 0.55,
+      mod: 0.12,
+      rate: 0.3,
+      level: 0.7,
+    },
   };
 }
 
@@ -230,6 +268,7 @@ export function defaultProject(): Project {
     mute,
     lock,
     working: defaultLanes(),
+    space: defaultSpace(),
     transition: "fast",
     wander: null,
     wanderPreviousTarget: null,

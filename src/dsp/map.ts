@@ -113,6 +113,14 @@ export function mapFilter(filter: { cutoff: number; resonance: number }): Engine
   ];
 }
 
+/** Shared-effect sends. Plain ids, same on every lane. */
+export function mapSend(send: { reverb: number; delay: number }): EngineParam[] {
+  return [
+    { id: "reverb", value: clamp(send.reverb) },
+    { id: "delay", value: clamp(send.delay) },
+  ];
+}
+
 export function mapKick(sound: Record<string, number>): EngineParam[] {
   return mapSound("kick", sound);
 }

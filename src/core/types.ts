@@ -2,7 +2,7 @@ export const LANES = ["kick", "snare", "hat", "perc", "bass", "lead", "chords"] 
 export type LaneId = (typeof LANES)[number];
 export type DrumId = "kick" | "snare" | "hat" | "perc";
 export type PitchedId = "bass" | "lead";
-export type AuxId = "mix" | "global" | "perf";
+export type AuxId = "space" | "mix" | "global" | "perf";
 export type ContextId = LaneId | AuxId;
 
 export const DRUMS: readonly DrumId[] = ["kick", "snare", "hat", "perc"];
@@ -16,6 +16,7 @@ export const LANE_CODE: Record<LaneId | AuxId, string> = {
   bass: "BAS",
   lead: "LEA",
   chords: "CHD",
+  space: "SPC",
   mix: "MIX",
   global: "GLB",
   perf: "PFX",
@@ -46,12 +47,50 @@ export interface LaneFilter {
   resonance: Modulated;
 }
 
+/** Sends into the shared reverb and delay. Home is dry. */
+export interface LaneSend {
+  reverb: Modulated;
+  delay: Modulated;
+}
+
+export const SPACE_REVERB = ["size", "decay", "damp", "diff", "pre", "width", "low", "level"] as const;
+export const SPACE_DELAY = ["time", "feed", "hi", "lo", "width", "mod", "rate", "level"] as const;
+
+export interface SpaceReverb {
+  size: number;
+  decay: number;
+  damp: number;
+  diff: number;
+  pre: number;
+  width: number;
+  low: number;
+  level: number;
+}
+
+export interface SpaceDelay {
+  time: number;
+  feed: number;
+  hi: number;
+  lo: number;
+  width: number;
+  mod: number;
+  rate: number;
+  level: number;
+}
+
+/** Shared reverb and delay. Part of the pattern, not a modulator. */
+export interface Space {
+  reverb: SpaceReverb;
+  delay: SpaceDelay;
+}
+
 export interface DrumLane {
   gen1: EuclidGen;
   gen2: EuclidGen;
   ratchet: { count: Modulated; rate: Modulated };
   sound: Record<string, Modulated>;
   filter: LaneFilter;
+  send: LaneSend;
 }
 
 export interface PitchedLane {
@@ -65,6 +104,7 @@ export interface PitchedLane {
   step: Modulated;
   sound: Record<string, Modulated>;
   filter: LaneFilter;
+  send: LaneSend;
 }
 
 export interface ChordLane {
@@ -90,6 +130,7 @@ export interface ChordLane {
   gate: Modulated;
   sound: Record<string, Modulated>;
   filter: LaneFilter;
+  send: LaneSend;
 }
 
 export interface Lanes {
@@ -105,6 +146,8 @@ export interface Lanes {
 export interface Scene {
   id: string;
   lanes: Lanes;
+  /** Reverb and delay knobs, recorded with the pattern. */
+  space: Space;
   /** Move pad color, assigned once when the scene is recorded. */
   color?: number;
 }
@@ -169,6 +212,7 @@ export interface PageRef {
 
 export interface MorphState {
   start: Lanes;
+  startSpace: Space;
   targetId: string;
   originTick: number;
   durationTicks: number;
@@ -196,6 +240,8 @@ export interface Project {
   mute: Record<LaneId, boolean>;
   lock: Record<LaneId, boolean>;
   working: Lanes;
+  /** Heard reverb and delay. Record copies this into the scene. */
+  space: Space;
   transition: TransitionId;
   wander: WanderId | null;
   wanderPreviousTarget: string | null;
@@ -231,6 +277,7 @@ export interface TimedEvent {
   step: number;
   sound: Record<string, number>;
   filter: { cutoff: number; resonance: number };
+  send: { reverb: number; delay: number };
 }
 
 export interface Phrase {

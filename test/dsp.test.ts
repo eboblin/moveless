@@ -6,7 +6,7 @@ import { evalModulated } from "../src/core/modulate.ts";
 import { applyMorph } from "../src/core/morph.ts";
 import { clone } from "../src/core/clone.ts";
 import { launchScene, record } from "../src/core/performance.ts";
-import { mapFilter, mapKick, mapSound } from "../src/dsp/map.ts";
+import { mapFilter, mapKick, mapSend, mapSound } from "../src/dsp/map.ts";
 import { eventsInBlock, phraseLoop, soundMotions } from "../src/dsp/schedule.ts";
 import { createEngine, filterSample, loadPhrase, packBlock, packPhrase, renderBlock, renderClock } from "../src/dsp/voice.ts";
 
@@ -99,6 +99,34 @@ describe("dsp adapter", () => {
     assert.ok(acid.peak < 2.3);
     const under = sine(80, 0.85, 0).energy;
     assert.ok(sine(80, 0.85, 1).energy < under * 4);
+  });
+
+  it("stays dry with the sends closed and rings after the note when one is open", () => {
+    const params = [
+      ...mapSound("bass", { shape: 0.2, detune: 0.5, fm: 0, noise: 0, attack: 0, decay: 0.02 }),
+      ...mapFilter({ cutoff: 0.7, resonance: 0.2 }),
+      ...mapSend({ reverb: 0, delay: 0 }),
+    ];
+    const hit = {
+      sampleOffset: 0, lane: "bass" as const, note: 36, velocity: 110, lengthTicks: 24, params,
+    };
+    const tail = (buffer: Float32Array) => {
+      let energy = 0;
+      for (let i = 16000 * 2; i < buffer.length; i++) energy += buffer[i] * buffer[i];
+      return energy;
+    };
+    const dry = renderBlock(createEngine(), [hit], 120, 22000);
+    const engine = createEngine();
+    engine.space.reverb.decay = 0.95;
+    engine.space.reverb.level = 1;
+    engine.space.reverb.size = 0.6;
+    const wet = renderBlock(engine, [{
+      ...hit,
+      params: params.map((param) => param.id === "reverb" ? { ...param, value: 1 } : param),
+    }], 120, 22000);
+    assert.ok(tail(dry) < 1e-3);
+    assert.ok(tail(wet) > tail(dry) + 0.05);
+    for (const sample of wet) assert.ok(Number.isFinite(sample));
   });
 
   it("schedules the downbeat kick inside the first audio block", () => {

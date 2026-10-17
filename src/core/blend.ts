@@ -1,6 +1,6 @@
 import { clamp01, sampleOffset, SIXTEENTH_TICKS, sixteenthSteps, tickToSample, ticksPerBar } from "./clock.ts";
 import { evalModulated, withMacro } from "./modulate.ts";
-import { isDrum, LANES, type LaneFilter, type LaneId, type Lanes, type Modulated, type Phrase, type Project, type TimedEvent } from "./types.ts";
+import { isDrum, LANES, type LaneFilter, type LaneId, type LaneSend, type Lanes, type Modulated, type Phrase, type Project, type TimedEvent } from "./types.ts";
 
 /** Shared loop for two patterns. Prefers a common multiple that still lands on the target. */
 export function morphWindow(stepsA: number, stepsB: number, cap: number): number {
@@ -59,6 +59,8 @@ export function blendPhrases(
       toLanes[lane].sound,
       fromLanes[lane].filter,
       toLanes[lane].filter,
+      fromLanes[lane].send,
+      toLanes[lane].send,
       project,
       lane,
       t,
@@ -151,6 +153,8 @@ function stampLane(
   soundTo: Record<string, Modulated>,
   filterFrom: LaneFilter,
   filterTo: LaneFilter,
+  sendFrom: LaneSend,
+  sendTo: LaneSend,
   project: Project,
   lane: LaneId,
   t: number,
@@ -162,6 +166,10 @@ function stampLane(
     filter: {
       cutoff: mixOne(event.step, t, filterFrom.cutoff, filterTo.cutoff, macros.cutoff ?? 0),
       resonance: mixOne(event.step, t, filterFrom.resonance, filterTo.resonance, macros.resonance ?? 0),
+    },
+    send: {
+      reverb: mixOne(event.step, t, sendFrom.reverb, sendTo.reverb, macros.reverb ?? 0),
+      delay: mixOne(event.step, t, sendFrom.delay, sendTo.delay, macros.delay ?? 0),
     },
   }));
 }

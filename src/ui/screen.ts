@@ -4,7 +4,7 @@ import { phraseStepsOf } from "../core/events.ts";
 import { chordSymbol, degreeNumeral, pitchClassName, scaleShort, scaleTitle } from "../core/harmony.ts";
 import { chordFigure, endpointLanes, endpointPhrases, generatePhrase, laneSteps, octaveNumber, restingChordToneLabel, restingPitchLabel } from "../core/phrase.ts";
 import { evalModulated } from "../core/modulate.ts";
-import { CAPTURE_DEPTHS, CAPTURE_INTENSITIES, CAPTURE_SCOPES, isPitched, LANES, LANE_CODE, type CaptureDepth, type CaptureIntensity, type CaptureScope, type ContextId, type HarmonicEvent, type LaneId, type Phrase, type Project, type TimedEvent } from "../core/types.ts";
+import { CAPTURE_DEPTHS, CAPTURE_INTENSITIES, CAPTURE_SCOPES, isPitched, LANES, LANE_CODE, type AuxId, type CaptureDepth, type CaptureIntensity, type CaptureScope, type ContextId, type HarmonicEvent, type LaneId, type Phrase, type Project, type TimedEvent } from "../core/types.ts";
 import { DIGIT_H, displayAmount, type BigAmount, type DisplayAmount } from "./digits.ts";
 import { readControl } from "./controls.ts";
 import { pagesFor, type Binding, type Page } from "../core/pages.ts";
@@ -75,7 +75,7 @@ export function renderScreen(
   const focusState = !notice && !capture && ui.focus && (ui.focus.held || tick < ui.focus.untilTick) ? ui.focus : null;
   const focus = focusState?.label ?? null;
   const header = figureHeader(project, context, focusState?.path ?? null) ?? (focus ? fullName(focus) : laneHeader(project, context, page));
-  const vizLane: LaneId | null = context === "mix" || context === "global" || context === "perf" ? null : context;
+  const vizLane: LaneId | null = isAux(context) ? null : context;
   const generator = vizLane && focusState?.generator ? focusState.generator : null;
   const mixer = !notice && !capture && context === "mix";
   const viz = capture ? "capture" : notice ? "notice" : mixer ? "mixer" : generator ? "generator" : vizLane ? "phrase" : "none";
@@ -217,9 +217,13 @@ function centered(text: string): number {
   return Math.max(0, Math.floor((WIDTH - text.length * CHAR_W) / 2));
 }
 
+function isAux(context: ContextId): context is AuxId {
+  return context === "space" || context === "mix" || context === "global" || context === "perf";
+}
+
 function laneTag(project: Project, context: ContextId): string {
   let tag = LANE_CODE[context];
-  if (context !== "mix" && context !== "global" && context !== "perf") {
+  if (!isAux(context)) {
     if (project.mute[context]) tag += "M";
     if (project.lock[context]) tag += "L";
   }
@@ -272,7 +276,7 @@ function drawGenerator(pixels: Uint8Array, project: Project, context: ContextId,
   const cycle = Math.max(1, Math.round(readControl(project, context, `${path}.cycle`)));
   const stored = readControl(project, context, `${path}.amount`);
   const amount = showPattern && stored === 0 ? 1 : stored;
-  const lane: LaneId = context === "mix" || context === "global" || context === "perf" ? "kick" : context;
+  const lane: LaneId = isAux(context) ? "kick" : context;
   const steps = Math.max(1, laneSteps(project.working, lane, project.global));
   const shown = { value, pattern, cycle, amount };
   const yTop = HEADER_H;

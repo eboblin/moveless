@@ -32,6 +32,7 @@ export function record(project: Project): Project {
   const scene: Scene = {
     id,
     lanes: clone(project.working),
+    space: clone(project.space),
     color: sceneColor(id),
   };
   return {

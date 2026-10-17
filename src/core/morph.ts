@@ -1,7 +1,8 @@
 import { ticksPerBar } from "./clock.ts";
 import { clone } from "./clone.ts";
+import { defaultSpace } from "./defaults.ts";
 import { fieldsOf, getPath, morphValue, setPath } from "./fields.ts";
-import { LANES, isDrum, isPitched, TRANSITION_BARS, type LaneId, type Lanes, type MorphState, type Project, type Scene, type TransitionId } from "./types.ts";
+import { LANES, SPACE_DELAY, SPACE_REVERB, isDrum, isPitched, TRANSITION_BARS, type LaneId, type Lanes, type MorphState, type Project, type Scene, type Space, type TransitionId } from "./types.ts";
 
 export function quantizeStart(tick: number, transition: TransitionId, beatsPerBar: number): number {
   const grid = transition === "now" ? ticksPerBar(1) / 4 : ticksPerBar(beatsPerBar);
@@ -50,15 +51,30 @@ export function mergeLanes(start: Lanes, target: Lanes, current: Lanes, t: numbe
   return next;
 }
 
+function mergeSpace(start: Space, target: Space, current: Space, t: number, punched: ReadonlySet<string>): Space {
+  const next = clone(current);
+  for (const key of SPACE_REVERB) {
+    const path = `space.reverb.${key}`;
+    next.reverb[key] = punched.has(path) ? current.reverb[key] : start.reverb[key] + (target.reverb[key] - start.reverb[key]) * t;
+  }
+  for (const key of SPACE_DELAY) {
+    const path = `space.delay.${key}`;
+    next.delay[key] = punched.has(path) ? current.delay[key] : start.delay[key] + (target.delay[key] - start.delay[key]) * t;
+  }
+  return next;
+}
+
 export function applyMorph(project: Project, tick: number): Project {
   if (!project.morph) return project;
   const target = project.journal.find((scene) => scene.id === project.morph?.targetId);
   if (!target) return { ...project, morph: null };
   const t = morphProgress(project.morph, tick);
-  const working = mergeLanes(project.morph.start, target.lanes, project.working, t, new Set(project.morph.punched), project.lock);
+  const punched = new Set(project.morph.punched);
+  const working = mergeLanes(project.morph.start, target.lanes, project.working, t, punched, project.lock);
+  const space = mergeSpace(project.morph.startSpace, target.space ?? defaultSpace(), project.space, t, punched);
   const done = tick >= project.morph.originTick && t >= 1;
-  if (!done) return { ...project, working, morph: { ...project.morph, t } };
-  return { ...project, working, morph: null, activeSceneId: target.id, wanderPreviousTarget: target.id };
+  if (!done) return { ...project, working, space, morph: { ...project.morph, t } };
+  return { ...project, working, space, morph: null, activeSceneId: target.id, wanderPreviousTarget: target.id };
 }
 
 export function retarget(project: Project, scene: Scene, tick: number): Project {
@@ -69,6 +85,7 @@ export function retarget(project: Project, scene: Scene, tick: number): Project 
     ...project,
     morph: {
       start,
+      startSpace: clone(project.space),
       targetId: scene.id,
       originTick: origin,
       durationTicks,
@@ -95,7 +112,7 @@ function pinLanes(base: Lanes, current: Lanes, punched: ReadonlySet<string>, loc
   }
   for (const path of punched) {
     const lane = path.split(".")[0] as LaneId;
-    if (lock[lane]) continue;
+    if (!(LANES as readonly string[]).includes(lane) || lock[lane]) continue;
     setPath(next, path, getPath(current, path));
   }
   return next;
@@ -108,9 +125,20 @@ function copyLane(into: Lanes, from: Lanes, lane: LaneId): void {
 }
 
 export function punch(project: Project, path: string, value: number): Project {
+  if (path.startsWith("space.")) return writeSpace(project, path.slice("space.".length), value);
   const working = clone(project.working);
   setPath(working, path, value);
   if (!project.morph) return { ...project, working };
   const punched = project.morph.punched.includes(path) ? project.morph.punched : [...project.morph.punched, path];
   return { ...project, working, morph: { ...project.morph, punched } };
+}
+
+/** A space knob. During a morph the value stays where the hand left it. */
+export function writeSpace(project: Project, path: string, value: number): Project {
+  const space = clone(project.space);
+  setPath(space, path, value);
+  if (!project.morph) return { ...project, space };
+  const full = `space.${path}`;
+  const punched = project.morph.punched.includes(full) ? project.morph.punched : [...project.morph.punched, full];
+  return { ...project, space, morph: { ...project.morph, punched } };
 }

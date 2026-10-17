@@ -29,7 +29,7 @@ export const LED = {
 /** How bright the shared yellow intensity pads read: low, med, high. */
 const INTENSITY_SHADE = { soft: 0.2, medium: 0.5, hard: 1 } as const;
 
-export type LedFamily = "red" | "yellow" | "purple" | "lock" | "off";
+export type LedFamily = "red" | "yellow" | "purple" | "green" | "lock" | "off";
 
 export interface Led {
   family: LedFamily;
@@ -44,6 +44,7 @@ const COLOR: Record<LedFamily, number> = {
   red: LED.red,
   yellow: LED.yellow,
   purple: LED.purple,
+  green: 9,
   lock: LED.lock,
 };
 
@@ -67,8 +68,13 @@ export function auxLed(current: boolean): Led {
   return led("purple", current);
 }
 
+export function spaceLed(current: boolean): Led {
+  return led("green", current);
+}
+
 export function stepLeds(project: Project, context: ContextId): Led[] {
   const out = LANES.map((lane) => stepLed(project, context, lane));
+  out.push(spaceLed(context === "space"));
   out.push(auxLed(context === "mix"));
   out.push(auxLed(context === "global"));
   out.push(auxLed(context === "perf"));

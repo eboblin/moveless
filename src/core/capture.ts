@@ -209,8 +209,12 @@ function clearLane(project: Project, lane: LaneId, scope: LaneCapture): Project 
     if (lane === "bass" || lane === "lead" || lane === "chords") randomizeNotes(working, lane, roll, intensity, depth);
     randomizeSound(working[lane].sound, intensity, depth);
     randomizeFilter(working[lane].filter, intensity, depth);
+    randomizeSend(working[lane].send, intensity, depth);
   } else if (scope === "sound") randomizeSound(working[lane].sound, intensity, depth);
-  else if (scope === "fx") randomizeFilter(working[lane].filter, intensity, depth);
+  else if (scope === "fx") {
+    randomizeFilter(working[lane].filter, intensity, depth);
+    randomizeSend(working[lane].send, intensity, depth);
+  }
   else if (scope === "notes") randomizeNotes(working, lane, roll, intensity, depth);
   else randomizePattern(working, lane, roll, intensity, depth);
   return { ...project, working, captureNonce: nonce };
@@ -451,4 +455,9 @@ function randomizeSound(sound: Record<string, Modulated>, intensity: CaptureInte
 function randomizeFilter(filter: { cutoff: Modulated; resonance: Modulated }, intensity: CaptureIntensity, depth: CaptureDepth): void {
   filter.cutoff = touchModulated(filter.cutoff, intensity, depth);
   filter.resonance = touchModulated(filter.resonance, intensity, depth);
+}
+
+function randomizeSend(send: { reverb: Modulated; delay: Modulated }, intensity: CaptureIntensity, depth: CaptureDepth): void {
+  send.reverb = touchModulated(send.reverb, intensity, depth);
+  send.delay = touchModulated(send.delay, intensity, depth);
 }

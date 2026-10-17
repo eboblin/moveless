@@ -19,17 +19,21 @@ function session(): Session {
 }
 
 describe("pages and leds", () => {
-  it("gives drums eight pages and bass nine", () => {
-    assert.equal(pageCount("kick"), 8);
-    assert.equal(pageCount("bass"), 9);
-    assert.equal(pageCount("lead"), 9);
-    assert.equal(pageCount("chords"), 7);
+  it("gives drums nine pages and bass ten", () => {
+    assert.equal(pageCount("kick"), 9);
+    assert.equal(pageCount("bass"), 10);
+    assert.equal(pageCount("lead"), 10);
+    assert.equal(pageCount("chords"), 8);
     assert.equal(pageGroup("kick", 7), "fx");
+    assert.equal(pageGroup("kick", 8), "fx");
     assert.equal(pageGroup("bass", 8), "fx");
+    assert.equal(pageGroup("bass", 9), "fx");
     assert.equal(pageGroup("chords", 6), "fx");
+    assert.equal(pageGroup("chords", 7), "fx");
     assert.equal(pageGroupColor("kick", 7), 9);
-    assert.equal(lanePages("bass").at(-1)?.groups[0], "CUTOFF");
-    assert.equal(lanePages("bass").at(-1)?.groups[1], "RESO");
+    assert.equal(lanePages("bass").at(-1)?.groups[0], "REV");
+    assert.equal(lanePages("bass").at(-1)?.groups[1], "DLY");
+    assert.equal(lanePages("bass").at(-2)?.groups[0], "CUTOFF");
     assert.equal(lanePages("kick")[0].title, "GEN 1");
     assert.deepEqual(lanePages("kick")[0].groups, ["GEN 1", "VEL"]);
     assert.deepEqual(lanePages("kick")[2].groups, ["COUNT", "RATE"]);
@@ -54,6 +58,11 @@ describe("pages and leds", () => {
     assert.equal(pagesFor("perf")[1].bindings[0]?.label, "CUT");
     assert.equal(pageGroup("perf", 0), "macro");
     assert.equal(pageGroup("perf", 1), "macro");
+    assert.equal(pageCount("space"), 2);
+    assert.equal(pagesFor("space")[0].bindings[0]?.label, "SIZE");
+    assert.equal(pagesFor("space")[1].bindings[0]?.label, "TIME");
+    assert.equal(pageGroup("space", 0), "space");
+    assert.equal(pageGroupColor("space", 1), 9);
   });
 
   it("follows the lane lamp rules", () => {
@@ -62,11 +71,13 @@ describe("pages and leds", () => {
     assert.equal(stepLed(project, "kick", "kick").blink, true);
     assert.equal(stepLed(project, "lead", "bass").family, "yellow");
     assert.equal(stepLed(project, "bass", "bass").blink, true);
-    assert.equal(stepLeds(project, "global")[8].family, "purple");
-    assert.equal(stepLeds(project, "global")[8].blink, true);
-    assert.equal(stepLeds(project, "perf")[9].family, "purple");
-    assert.equal(stepLeds(project, "perf")[9].blink, true);
-    assert.equal(stepLeds(project, "global")[9].blink, false);
+    assert.equal(stepLeds(project, "space")[7].family, "green");
+    assert.equal(stepLeds(project, "space")[7].blink, true);
+    assert.equal(stepLeds(project, "global")[9].family, "purple");
+    assert.equal(stepLeds(project, "global")[9].blink, true);
+    assert.equal(stepLeds(project, "perf")[10].family, "purple");
+    assert.equal(stepLeds(project, "perf")[10].blink, true);
+    assert.equal(stepLeds(project, "global")[10].blink, false);
     project.lock.lead = true;
     assert.equal(stepLed(project, "kick", "lead").family, "lock");
     assert.equal(stepLed(project, "kick", "lead").blink, false);
@@ -137,7 +148,7 @@ describe("pages and leds", () => {
     const wheel = padLeds(project, "journal", { ...defaultUi(), wheelTouch: true });
     assert.equal(wheel[24].color, 3);
     assert.equal(wheel[24].blink, true);
-    assert.equal(wheel[16].color, 0);
+    assert.equal(wheel[16].color, 9);
     assert.equal(wheel[0].color, 8);
     assert.equal(wheel[1].blink, true);
     assert.equal(wheel[4].color, 22);
@@ -159,7 +170,7 @@ describe("surface", () => {
   it("opens perf fx from the purple step after global", () => {
     let state = session();
     const before = clone(state.project.working.kick);
-    state = reduce(state, { kind: "note", data1: 25, data2: 127 });
+    state = reduce(state, { kind: "note", data1: 26, data2: 127 });
     assert.equal(state.ui.context, "perf");
     assert.equal(state.ui.page, 0);
     state = reduce(state, { kind: "cc", data1: 52, data2: 127 });
@@ -169,7 +180,7 @@ describe("surface", () => {
 
   it("rerolls the mixer and a perf page from Capture", () => {
     let mix = session();
-    mix = reduce(mix, { kind: "note", data1: 23, data2: 127 });
+    mix = reduce(mix, { kind: "note", data1: 24, data2: 127 });
     assert.equal(mix.ui.context, "mix");
     mix.project.mixer.kick = 0.2;
     mix = reduce(mix, { kind: "cc", data1: 52, data2: 127 });
@@ -177,7 +188,7 @@ describe("surface", () => {
     assert.notEqual(mix.project.mixer.kick, 0.2);
 
     let perf = session();
-    perf = reduce(perf, { kind: "note", data1: 25, data2: 127 });
+    perf = reduce(perf, { kind: "note", data1: 26, data2: 127 });
     assert.equal(perf.ui.context, "perf");
     perf.project.macros = { probability: 0.8, cutoff: 0.8 };
     perf = reduce(perf, { kind: "cc", data1: 52, data2: 127 });
@@ -186,7 +197,7 @@ describe("surface", () => {
     assert.equal(perf.project.macros.cutoff, 0.8);
 
     let cleared = session();
-    cleared = reduce(cleared, { kind: "note", data1: 25, data2: 127 });
+    cleared = reduce(cleared, { kind: "note", data1: 26, data2: 127 });
     cleared.project.macros = { probability: 0.8, cutoff: 0.8 };
     cleared = reduce(cleared, { kind: "cc", data1: 52, data2: 127 });
     cleared = reduce(cleared, { kind: "note", data1: 68 + 10, data2: 127 });

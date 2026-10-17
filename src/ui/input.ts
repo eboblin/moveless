@@ -116,9 +116,10 @@ function onStep(session: Session, index: number, press: boolean): Session {
     return { ...session, ui: { ...session.ui, heldLane: lane } };
   }
   if (!press) return session;
-  if (index === 7) return { ...session, ui: { ...session.ui, context: "mix", page: 0, heldLane: null } };
-  if (index === 8) return { ...session, ui: { ...session.ui, context: "global", page: 0, heldLane: null } };
-  if (index === 9) return { ...session, ui: { ...session.ui, context: "perf", page: 0, heldLane: null } };
+  if (index === 7) return { ...session, ui: { ...session.ui, context: "space", page: 0, heldLane: null } };
+  if (index === 8) return { ...session, ui: { ...session.ui, context: "mix", page: 0, heldLane: null } };
+  if (index === 9) return { ...session, ui: { ...session.ui, context: "global", page: 0, heldLane: null } };
+  if (index === 10) return { ...session, ui: { ...session.ui, context: "perf", page: 0, heldLane: null } };
   return session;
 }
 
@@ -258,7 +259,7 @@ function turnEncoder(session: Session, index: number, value: number): Session {
 /** Reroll one generator as soon as its encoder is touched or turned while Capture is held. */
 function captureFromEncoder(session: Session, path: string, held: boolean): Session | null {
   const lane = session.ui.heldLane ?? session.ui.context;
-  if (lane === "global") return null;
+  if (lane === "global" || lane === "space") return null;
   if (lane === "mix" || lane === "perf") {
     const focusBinding = bindingByPath(lane, path) ?? { path, label: path };
     return {
@@ -326,7 +327,7 @@ function onCapture(session: Session, press: boolean): Session {
   let project = session.project;
   if (!already && (lane === "mix" || lane === "perf")) {
     project = captureSurface(project, lane, surfacePaths(lane, project.captureScope, page));
-  } else if (lane !== "mix" && lane !== "global" && lane !== "perf" && !already) {
+  } else if (lane !== "mix" && lane !== "global" && lane !== "perf" && lane !== "space" && !already) {
     project = rerollCapture(project, lane, page);
   }
   return {

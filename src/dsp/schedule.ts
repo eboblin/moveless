@@ -1,8 +1,8 @@
 import { clamp01, FRAMES_PER_BLOCK, SIXTEENTH_TICKS, tickToSample } from "../core/clock.ts";
 import { withMacro } from "../core/modulate.ts";
 import { generatePhrase, laneSteps, endpointLanes } from "../core/phrase.ts";
-import { LANES, type LaneId, type Phrase, type Project } from "../core/types.ts";
-import { mapFilter, mapSound, type EngineParam } from "./map.ts";
+import { LANES, type LaneId, type LaneSend, type Modulated, type Phrase, type Project } from "../core/types.ts";
+import { mapFilter, mapSend, mapSound, type EngineParam } from "./map.ts";
 
 export interface BlockEvent {
   sampleOffset: number;
@@ -56,7 +56,7 @@ export function phraseLoop(project: Project, phrase: Phrase = generatePhrase(pro
         note: event.note,
         velocity,
         lengthTicks: event.lengthTicks,
-        params: [...mapSound(lane, event.sound), ...mapFilter(event.filter)],
+        params: [...mapSound(lane, event.sound), ...mapFilter(event.filter), ...mapSend(event.send)],
       });
     }
   }
@@ -137,8 +137,50 @@ export function soundMotions(project: Project, phrase?: Phrase): Motion[] {
       }
       out.push(motion);
     }
+    const sendFrom = ends ? ends.from[lane].send : project.working[lane].send;
+    const sendTo = ends ? ends.to[lane].send : null;
+    pushSend(out, lane, loop, t, macros, sendFrom, sendTo);
   }
   return out;
+}
+
+function pushSend(
+  out: Motion[],
+  lane: LaneId,
+  loop: number,
+  t: number,
+  macros: Record<string, number>,
+  from: LaneSend,
+  to: LaneSend | null,
+): void {
+  for (const id of ["reverb", "delay"] as const) {
+    const heard = withMacro(from[id], macros[id] ?? 0);
+    const motion: Motion = {
+      lane,
+      id,
+      value: heard.value,
+      pattern: Math.round(heard.pattern),
+      cycle: heard.cycle,
+      amount: heard.amount,
+      loop,
+    };
+    const other = to?.[id];
+    if (other) {
+      const toward = withMacro(other, macros[id] ?? 0);
+      if (heard.amount === 0 && toward.amount === 0) {
+        motion.value = clamp01((1 - t) * heard.value + t * toward.value);
+      } else {
+        motion.blend = {
+          value: toward.value,
+          pattern: Math.round(toward.pattern),
+          cycle: toward.cycle,
+          amount: toward.amount,
+          t,
+        };
+      }
+    }
+    out.push(motion);
+  }
 }
 
 /** Events whose sample falls in the 128-frame block that starts at `tick`. */
@@ -159,7 +201,7 @@ export function eventsInBlock(project: Project, tick: number): BlockEvent[] {
         note: event.note,
         velocity,
         lengthTicks: event.lengthTicks,
-        params: [...mapSound(lane, event.sound), ...mapFilter(event.filter)],
+        params: [...mapSound(lane, event.sound), ...mapFilter(event.filter), ...mapSend(event.send)],
       });
     }
   }

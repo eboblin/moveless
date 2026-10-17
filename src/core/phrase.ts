@@ -28,6 +28,7 @@ import {
   type HarmonicEvent,
   type LaneFilter,
   type LaneId,
+  type LaneSend,
   type Lanes,
   type Phrase,
   type PitchedLane,
@@ -309,7 +310,7 @@ function eventsFor(
 ): TimedEvent[] {
   if (isDrum(lane)) return drumEvents(lanes[lane], lane, global, macros, steps);
   if (isPitched(lane)) return pitchedEvents(lanes[lane], lane, global, macros, harmony, steps);
-  return chordAudio(lanes.chords, harmony, global, macros, lanes.chords.sound, lanes.chords.filter);
+  return chordAudio(lanes.chords, harmony, global, macros, lanes.chords.sound, lanes.chords.filter, lanes.chords.send);
 }
 
 function macro(macros: Record<string, number>, id: string): number {
@@ -333,7 +334,25 @@ function filterValues(filter: LaneFilter, step: number, macros: Record<string, n
   };
 }
 
-function place(step: number, extraTicks: number, global: GlobalSettings, lane: LaneId, note: number, velocity: number, lengthTicks: number, sound: Record<string, number>, filter: TimedEvent["filter"]): TimedEvent {
+function sendValues(send: LaneSend, step: number, macros: Record<string, number>): TimedEvent["send"] {
+  return {
+    reverb: evalModulated(withMacro(send.reverb, macro(macros, "reverb")), step),
+    delay: evalModulated(withMacro(send.delay, macro(macros, "delay")), step),
+  };
+}
+
+function place(
+  step: number,
+  extraTicks: number,
+  global: GlobalSettings,
+  lane: LaneId,
+  note: number,
+  velocity: number,
+  lengthTicks: number,
+  sound: Record<string, number>,
+  filter: TimedEvent["filter"],
+  send: TimedEvent["send"],
+): TimedEvent {
   const tick = swungStepTick(step, global.swing) + extraTicks;
   const sample = tickToSample(tick, global.tempo);
   return {
@@ -347,6 +366,7 @@ function place(step: number, extraTicks: number, global: GlobalSettings, lane: L
     step,
     sound,
     filter,
+    send,
   };
 }
 
@@ -360,7 +380,8 @@ function drumEvents(lane: DrumLane, id: LaneId, global: GlobalSettings, macros: 
       const step = hit.step + (i * rate.ticks) / SIXTEENTH_TICKS;
       const sound = soundValues(lane.sound, step, macros);
       const filter = filterValues(lane.filter, step, macros);
-      out.push(place(hit.step, i * rate.ticks, global, id, DRUM_NOTE[id as keyof typeof DRUM_NOTE], hit.velocity, rate.ticks, sound, filter));
+      const send = sendValues(lane.send, step, macros);
+      out.push(place(hit.step, i * rate.ticks, global, id, DRUM_NOTE[id as keyof typeof DRUM_NOTE], hit.velocity, rate.ticks, sound, filter, send));
     }
   });
   return out;
@@ -394,7 +415,8 @@ function pitchedEvents(
       const lengthTicks = Math.max(1, Math.round(evalModulated(withMacro(lane.length, macro(macros, "length")), step) * global.bar * SIXTEENTH_TICKS));
       const sound = soundValues(lane.sound, step, macros);
       const filter = filterValues(lane.filter, step, macros);
-      out.push(place(hit.step, r * SIXTEENTH_TICKS, global, id, note, hit.velocity, lengthTicks, sound, filter));
+      const send = sendValues(lane.send, step, macros);
+      out.push(place(hit.step, r * SIXTEENTH_TICKS, global, id, note, hit.velocity, lengthTicks, sound, filter, send));
     }
   });
   return out;
@@ -422,6 +444,7 @@ function chordAudio(
   macros: Record<string, number>,
   sound: ChordLaneSound,
   filter: LaneFilter,
+  send: LaneSend,
 ): TimedEvent[] {
   const scale = scaleOf(global.scale);
   const rootPc = mod(global.root + global.transpose, 12);
@@ -441,6 +464,7 @@ function chordAudio(
       const start = harm.startTick + delay;
       const rendered = soundValues(sound, start / SIXTEENTH_TICKS, macros);
       const heard = filterValues(filter, start / SIXTEENTH_TICKS, macros);
+      const sent = sendValues(send, start / SIXTEENTH_TICKS, macros);
       const sample = tickToSample(start, global.tempo);
       out.push({
         lane: "chords",
@@ -453,6 +477,7 @@ function chordAudio(
         step: Math.floor(harm.startTick / SIXTEENTH_TICKS),
         sound: rendered,
         filter: heard,
+        send: sent,
       });
     });
   });

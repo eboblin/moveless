@@ -4,6 +4,7 @@ import { advance } from "../core/performance.ts";
 import { generatePhrase } from "../core/phrase.ts";
 import { loadStoredProject, saveStoredProject, type HostFiles, type StoredUi } from "../core/persist.ts";
 import { phraseLoop, soundMotions } from "../dsp/schedule.ts";
+import { formatSpace } from "../dsp/space.ts";
 import { packPhraseBody } from "../dsp/voice.ts";
 import { reduce, type MidiMsg, type Session } from "../ui/input.ts";
 import { MENU_CC } from "../core/types.ts";
@@ -121,7 +122,7 @@ function syncVoice(reset: boolean): void {
   const boundary = morphing !== voiceMorph || step !== voiceStep;
   if (phraseProject !== session.project && (!morphing || boundary || reset)) {
     const phrase = generatePhrase(session.project);
-    phraseBody = packPhraseBody(phraseLoop(session.project, phrase), soundMotions(session.project, phrase));
+    phraseBody = packPhraseBody(phraseLoop(session.project, phrase), soundMotions(session.project, phrase), formatSpace(session.project.space, session.project.global.bar));
     phraseProject = session.project;
     phraseSent = "";
   }

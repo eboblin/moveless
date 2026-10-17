@@ -9,7 +9,7 @@ export interface Binding {
   integer: boolean;
 }
 
-export type PageGroup = "pattern" | "notes" | "sound" | "fx" | "global" | "macro" | "mix";
+export type PageGroup = "pattern" | "notes" | "sound" | "fx" | "space" | "global" | "macro" | "mix";
 
 export interface Page {
   id: string;
@@ -129,9 +129,13 @@ function filterPage(): Page {
   return pair("filter.cutoff", "CUTOFF", "filter.resonance", "RESO", "fx");
 }
 
+function sendPage(): Page {
+  return pair("send.reverb", "REV", "send.delay", "DLY", "fx");
+}
+
 export function lanePages(lane: LaneId): Page[] {
   if (lane === "chords") {
-    return [progPage(), playPage(), pair("tone", "TONE", "octave", "OCTAVE", "notes"), ...soundPages(SOUND.chords), filterPage()];
+    return [progPage(), playPage(), pair("tone", "TONE", "octave", "OCTAVE", "notes"), ...soundPages(SOUND.chords), filterPage(), sendPage()];
   }
   const pitched = lane === "bass" || lane === "lead";
   return [
@@ -142,6 +146,7 @@ export function lanePages(lane: LaneId): Page[] {
       : [pair("ratchet.count", "COUNT", "ratchet.rate", "RATE", "pattern")]),
     ...soundPages(SOUND[lane]),
     filterPage(),
+    sendPage(),
   ];
 }
 
@@ -155,6 +160,41 @@ export function mixPage(): Page {
       ...LANES.map((lane) => num(lane, LANE_CODE[lane], 0, 1, 0.01)),
       num("master", "MASTER", 0, 1, 0.01),
     ]),
+  };
+}
+
+export function spacePages(): Page[] {
+  return [
+    plainPage("reverb", "REVERB", "SIZE", "TAIL", "space", [
+      ["size", "SIZE"],
+      ["decay", "DECAY"],
+      ["damp", "DAMP"],
+      ["diff", "DIFF"],
+      ["pre", "PRE"],
+      ["width", "WIDTH"],
+      ["low", "LOW"],
+      ["level", "LEVEL"],
+    ]),
+    plainPage("delay", "DELAY", "TIME", "ECHO", "space", [
+      ["time", "TIME"],
+      ["feed", "FEED"],
+      ["hi", "HI"],
+      ["lo", "LO"],
+      ["width", "WIDTH"],
+      ["mod", "MOD"],
+      ["rate", "RATE"],
+      ["level", "LEVEL"],
+    ]),
+  ];
+}
+
+function plainPage(id: string, title: string, left: string, right: string, group: PageGroup, knobs: readonly [string, string][]): Page {
+  return {
+    id,
+    title,
+    groups: [left, right],
+    group,
+    bindings: slots(knobs.map(([key, label]) => num(`${id}.${key}`, label, 0, 1, 0.01))),
   };
 }
 
@@ -225,7 +265,9 @@ export function pagesFor(context: ContextId): Page[] {
       ? globalPages()
       : context === "perf"
         ? perfPages()
-        : lanePages(context);
+        : context === "space"
+          ? spacePages()
+          : lanePages(context);
   pageCache.set(context, pages);
   return pages;
 }
@@ -282,6 +324,7 @@ export const PAGE_GROUP_COLOR: Record<PageGroup, number> = {
   notes: 14,
   sound: 20,
   fx: 9,
+  space: 9,
   global: 8,
   macro: 22,
   mix: 120,
@@ -291,7 +334,7 @@ export function pageGroupColor(context: ContextId, index: number): number {
   return PAGE_GROUP_COLOR[pageGroup(context, index)];
 }
 
-const CATALOG: readonly ContextId[] = [...LANES, "mix", "global", "perf"];
+const CATALOG: readonly ContextId[] = [...LANES, "space", "mix", "global", "perf"];
 
 /** First binding with this path. Ranges are the same on every lane that has the knob. */
 export function bindingFor(path: string): Binding | null {
