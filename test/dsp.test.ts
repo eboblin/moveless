@@ -29,16 +29,17 @@ describe("dsp adapter", () => {
     assert.equal(params.length, 8);
   });
 
-  it("maps the lane filter beside the surge chain and keeps chord width distinct", () => {
-    const bass = mapSound("bass", { shape: 0.5, decay: 0.2, attack: 0.1, detune: 0, fm: 0, noise: 0 });
+  it("maps the lane filter beside the wavetable and keeps chord wide distinct", () => {
+    const bass = mapSound("bass", { wave: 0.36, release: 0.2, attack: 0.1, bend: 0, sync: 0, fold: 0, drive: 0, wide: 0 });
     assert.equal(bass.some((param) => param.id === "cutoff"), false);
+    assert.ok(bass.some((param) => param.id === "wave"));
     const filter = mapFilter({ cutoff: 0.4, resonance: 0.3 });
     assert.deepEqual(filter, [
       { id: "cutoff", value: 0.4 },
       { id: "resonance", value: 0.3 },
     ]);
-    const chords = mapSound("chords", { width: 0.6, shape: 0, detune: 0, fm: 0, attack: 0, release: 0 });
-    assert.ok(chords.some((param) => param.id === "osc_width"));
+    const chords = mapSound("chords", { wide: 0.6, wave: 0, bend: 0, sync: 0, fold: 0, drive: 0, attack: 0, release: 0 });
+    assert.ok(chords.some((param) => param.id === "wide"));
   });
 
   it("bypasses the lane filter at 50 and cuts lows or highs toward the ends", () => {
@@ -103,7 +104,7 @@ describe("dsp adapter", () => {
 
   it("stays dry with the sends closed and rings after the note when one is open", () => {
     const params = [
-      ...mapSound("bass", { shape: 0.2, detune: 0.5, fm: 0, noise: 0, attack: 0, decay: 0.02 }),
+      ...mapSound("bass", { wave: 0.42, bend: 0, sync: 0, fold: 0, drive: 0, wide: 0, attack: 0, release: 0 }),
       ...mapFilter({ cutoff: 0.7, resonance: 0.2 }),
       ...mapSend({ reverb: 0, delay: 0 }),
     ];
@@ -141,7 +142,7 @@ describe("dsp adapter", () => {
     assert.ok(kick[0].params.some((param) => param.id === "v01_freq"));
   });
 
-  it("sounds the kick, pans the hat, and widens chords with osc_width", () => {
+  it("sounds the kick, pans the hat, and widens chords", () => {
     const project = defaultProject();
     const engine = createEngine();
     const first = renderBlock(engine, eventsInBlock(project, 0), project.global.tempo);
@@ -501,33 +502,76 @@ describe("dsp adapter", () => {
     assert.ok(next.left <= full);
   });
 
-  it("spreads pitched detune, fm and resonance into the note voice", () => {
+  it("spreads pitched wave, sync and resonance into the note voice", () => {
     const engine = createEngine();
     loadPhrase(engine, [{
       sample: 0, loop: 100000, lane: "bass", note: 40, velocity: 100, lengthTicks: 192,
       params: [
-        ...mapSound("bass", { shape: 0.8, detune: 0.9, fm: 0.7, noise: 0.4, attack: 0.1, decay: 0.5 }),
+        ...mapSound("bass", { wave: 0.8, bend: 0.2, sync: 0.7, fold: 0.4, drive: 0.3, wide: 0.6, attack: 0.1, release: 0.5 }),
         ...mapFilter({ cutoff: 0.6, resonance: 0.85 }),
       ],
     }], 120, true);
     renderClock(engine);
     const note = engine.notes[0];
-    assert.equal(note.shape, 0.8);
-    assert.equal(note.detune, 0.9);
-    assert.equal(note.fm, 0.7);
-    assert.equal(note.noise, 0.4);
+    assert.equal(note.wave, 0.8);
+    assert.equal(note.sync, 0.7);
+    assert.equal(note.fold, 0.4);
+    assert.equal(note.wide, 0.6);
     assert.equal(note.resonance, 0.85);
   });
 
   it("keeps musical sound defaults off the old 0.5 parking lot for drums and pitched lanes", () => {
     const project = defaultProject();
     assert.equal(project.working.kick.sound.drive.value < 0.3, true);
-    assert.equal(project.working.bass.sound.fm.value < 0.2, true);
-    assert.equal(project.working.bass.sound.noise.value < 0.1, true);
+    assert.equal(project.working.bass.sound.sync.value < 0.2, true);
+    assert.equal(project.working.bass.sound.fold.value < 0.1, true);
+    assert.equal(project.working.bass.sound.wave.value > 0.3 && project.working.bass.sound.wave.value < 0.5, true);
     assert.equal(project.working.lead.sound.attack.value < 0.1, true);
-    assert.equal(project.working.chords.sound.fm.value, 0.5);
+    assert.equal(project.working.lead.sound.wide.value > 0.1 && project.working.lead.sound.wide.value < 0.4, true);
+    assert.equal(project.working.chords.sound.wide.value, 0.4);
     assert.equal(project.working.chords.sound.attack.value, 0);
     assert.equal(project.working.chords.sound.release.value, 0);
+  });
+
+  it("puts more edge on a saw and on sync than on a sine", () => {
+    const edge = (wave: number, sync: number) => {
+      const audio = renderBlock(createEngine(), [{
+        sampleOffset: 0, lane: "lead", note: 69, velocity: 110, lengthTicks: 192,
+        params: [
+          ...mapSound("lead", { wave, bend: 0, sync, fold: 0, drive: 0, wide: 0, attack: 0, release: 1 }),
+          ...mapFilter({ cutoff: 0.5, resonance: 0 }),
+        ],
+      }], 120, 2048);
+      let energy = 0;
+      for (let i = 400; i < 1800; i++) {
+        const d = audio[i * 2] - audio[(i - 1) * 2];
+        energy += d * d;
+      }
+      return energy;
+    };
+    const sine = edge(0, 0);
+    assert.ok(edge(0.42, 0) > sine * 2);
+    assert.ok(edge(0, 1) > sine * 2);
+    const hot = renderBlock(createEngine(), [{
+      sampleOffset: 0, lane: "lead", note: 76, velocity: 120, lengthTicks: 192,
+      params: [
+        ...mapSound("lead", { wave: 1, bend: 1, sync: 1, fold: 1, drive: 1, wide: 1, attack: 0, release: 0.2 }),
+        ...mapFilter({ cutoff: 0.85, resonance: 1 }),
+      ],
+    }], 120, 1024);
+    for (const sample of hot) {
+      assert.ok(Number.isFinite(sample));
+      assert.ok(Math.abs(sample) < 4);
+    }
+  });
+
+  it("lets the decay macro lengthen a melodic release", () => {
+    const project = defaultProject();
+    const base = project.working.bass.sound.release.value;
+    project.macros.decay = 0.4;
+    const motion = soundMotions(project).find((item) => item.lane === "bass" && item.id === "release");
+    assert.ok(motion);
+    assert.ok(Math.abs(motion.value - Math.min(1, base + 0.4)) < 1e-6);
   });
 });
 
@@ -543,7 +587,7 @@ function peak(buf: Float32Array): number {
 function sideDifference(width: number): number {
   const audio = renderBlock(createEngine(), [{
     sampleOffset: 0, lane: "chords", note: 64, velocity: 110, lengthTicks: 192,
-    params: mapSound("chords", { shape: 0.8, detune: 0.5, fm: 0, width, cutoff: 0.9, resonance: 0.1, attack: 0, release: 0.8 }),
+    params: mapSound("chords", { wave: 0.42, bend: 0, sync: 0, fold: 0, drive: 0, wide: width, cutoff: 0.9, resonance: 0.1, attack: 0, release: 0.8 }),
   }], 120);
   let diff = 0;
   for (let i = 0; i < 128; i++) diff += Math.abs(audio[i * 2] - audio[i * 2 + 1]);

@@ -13,7 +13,6 @@
 #define SR 44100.0f
 #define TWO_PI 6.28318530718f
 #define DRUMS 4
-#define CHORDS_LANE 6
 #define NOTES 12
 #define TEXT_CAP 8192
 #define PHRASE_TEXT 65536
@@ -35,17 +34,18 @@ enum {
     P_ATK,
     P_MAMT,
     P_LVL,
-    P_SHAPE,
-    P_DETUNE,
-    P_FM,
-    P_NOISE,
+    P_WAVE,
+    P_BEND,
+    P_SYNC,
+    P_FOLD,
     P_CUTOFF,
     P_RESONANCE,
     P_ATTACK,
     P_RELEASE,
-    P_WIDTH,
+    P_WIDE,
     P_REVERB,
-    P_DELAY
+    P_DELAY,
+    P_NOTE_DRIVE
 };
 
 typedef struct {
@@ -60,7 +60,9 @@ typedef struct {
 
 typedef struct {
     int on;
-    float phase, phase2, env, freq, shape, detune, fm, noise, cutoff, resonance, reverb, delay, attack, release, width, gain, low, band;
+    float phase, phase2, slave, slave2, env, freq;
+    float wave, bend, sync, fold, drive, wide;
+    float cutoff, resonance, reverb, delay, attack, release, gain, low, band;
     float release_k;
     int age, left, lane, loop;
 } Note;
@@ -170,18 +172,136 @@ static float soft(float sample) {
     return scaled / (1.0f + fabsf(scaled));
 }
 
-static float wave(float phase, float shape) {
-    float wrapped = fmodf(phase, TWO_PI);
-    if (wrapped < 0) wrapped += TWO_PI;
-    float saw = wrapped / 3.14159265f - 1.0f;
-    float square = wrapped < 3.14159265f ? 1.0f : -1.0f;
-    if (shape >= 0.5f) {
-        float t = (shape - 0.5f) * 2.0f;
-        return saw * (1.0f - t) + square * t;
+#define WT_FRAMES 48
+#define WT_CYCLE 256
+#define WT_MIPS 7
+#define WT_HARM 64
+static float wave_table[WT_MIPS * WT_FRAMES * WT_CYCLE];
+static int wave_ready = 0;
+static const float WT_ANCHOR[6] = {0.0f, 0.22f, 0.42f, 0.62f, 0.82f, 1.0f};
+
+static float gauss_k(float k, float center, float sigma) {
+    float d = (k - center) / sigma;
+    return expf(-d * d);
+}
+
+static float anchor_amp(int kind, int k) {
+    float kf = (float)k;
+    if (kind == 0) return k == 1 ? 1.0f : 0.0f;
+    if (kind == 1) {
+        if ((k & 1) == 0) return 0.0f;
+        return ((k % 4) == 1 ? 1.0f : -1.0f) / (kf * kf);
     }
-    float sine = sinf(wrapped);
-    float t = shape * 2.0f;
-    return sine * (1.0f - t) + saw * t;
+    if (kind == 2) return 1.0f / kf;
+    if (kind == 3) return (k & 1) ? 1.0f / kf : 0.0f;
+    if (kind == 4) return sinf(3.14159265f * kf * 0.12f) / kf;
+    return 0.22f / powf(kf, 1.5f) + gauss_k(kf, 3.0f, 0.9f) + 0.75f * gauss_k(kf, 8.0f, 1.2f) + 0.55f * gauss_k(kf, 14.0f, 1.5f);
+}
+
+static float amp_at(float p, int k) {
+    int i;
+    float span, t;
+    if (p <= 0.0f) return anchor_amp(0, k);
+    if (p >= 1.0f) return anchor_amp(5, k);
+    i = 0;
+    while (i < 4 && p > WT_ANCHOR[i + 1]) i++;
+    span = WT_ANCHOR[i + 1] - WT_ANCHOR[i];
+    t = span > 0.0f ? (p - WT_ANCHOR[i]) / span : 0.0f;
+    return anchor_amp(i, k) * (1.0f - t) + anchor_amp(i + 1, k) * t;
+}
+
+static void ensure_wave_table(void) {
+    int mip, frame, k, n;
+    if (wave_ready) return;
+    for (mip = 0; mip < WT_MIPS; mip++) {
+        int max_h = WT_HARM >> mip;
+        for (frame = 0; frame < WT_FRAMES; frame++) {
+            float p = (float)frame / (float)(WT_FRAMES - 1);
+            float amp[WT_HARM + 1];
+            float peak = 0.0f;
+            int base = (mip * WT_FRAMES + frame) * WT_CYCLE;
+            for (k = 1; k <= max_h; k++) amp[k] = amp_at(p, k);
+            for (n = 0; n < WT_CYCLE; n++) {
+                float theta = (TWO_PI * (float)n) / (float)WT_CYCLE;
+                float sum = 0.0f;
+                for (k = 1; k <= max_h; k++) sum += amp[k] * sinf((float)k * theta);
+                wave_table[base + n] = sum;
+                if (fabsf(sum) > peak) peak = fabsf(sum);
+            }
+            if (peak > 1e-8f) {
+                float norm = 1.0f / peak;
+                for (n = 0; n < WT_CYCLE; n++) wave_table[base + n] *= norm;
+            }
+        }
+    }
+    wave_ready = 1;
+}
+
+static float read_cycle(int mip, int frame, float u) {
+    float pos = u * (float)WT_CYCLE;
+    int i0 = (int)floorf(pos) % WT_CYCLE;
+    float frac = pos - floorf(pos);
+    int i1 = (i0 + 1) % WT_CYCLE;
+    int base = (mip * WT_FRAMES + frame) * WT_CYCLE;
+    float a = wave_table[base + i0];
+    float b = wave_table[base + i1];
+    return a + (b - a) * frac;
+}
+
+static float read_wave(float freq, float wave, float u) {
+    float fit = (SR * 0.45f) / (freq > 1.0f ? freq : 1.0f);
+    float mip_f, pos, ff, s0, s1;
+    int m0, m1, top, f0;
+    if (fit < 1.0f) fit = 1.0f;
+    if (fit > (float)WT_HARM) fit = (float)WT_HARM;
+    mip_f = logf((float)WT_HARM / fit) / logf(2.0f);
+    m0 = (int)floorf(mip_f);
+    if (m0 < 0) m0 = 0;
+    if (m0 > WT_MIPS - 1) m0 = WT_MIPS - 1;
+    top = m0 >= WT_MIPS - 1;
+    m1 = top ? m0 : m0 + 1;
+    pos = wave < 0.0f ? 0.0f : (wave > 1.0f ? 1.0f : wave);
+    pos *= (float)(WT_FRAMES - 1);
+    f0 = (int)floorf(pos);
+    if (f0 >= WT_FRAMES - 1) f0 = WT_FRAMES - 2;
+    ff = pos - (float)f0;
+    s0 = read_cycle(m0, f0, u) * (1.0f - ff) + read_cycle(m0, f0 + 1, u) * ff;
+    if (top || mip_f - (float)m0 < 1e-4f) return s0;
+    s1 = read_cycle(m1, f0, u) * (1.0f - ff) + read_cycle(m1, f0 + 1, u) * ff;
+    return s0 + (s1 - s0) * (mip_f - (float)m0);
+}
+
+static float bend_unit(float u, float bend) {
+    if (bend <= 1e-4f || u <= 0.0f) return u;
+    return powf(u, 1.0f + bend * bend * 3.0f);
+}
+
+static float advance_osc(Note *note, int wide, float inc, float sync, float bend, float wave) {
+    float *phase = wide ? &note->phase2 : &note->phase;
+    float *slave = wide ? &note->slave2 : &note->slave;
+    float next = *phase + inc;
+    int wrapped = 0;
+    float u, read_freq;
+    if (next >= TWO_PI) {
+        next -= TWO_PI;
+        if (next >= TWO_PI) next = fmodf(next, TWO_PI);
+        wrapped = 1;
+    }
+    *phase = next;
+    if (sync > 1e-4f) {
+        float ratio = 1.0f + sync * sync * 4.0f;
+        if (wrapped) *slave = 0.0f;
+        else {
+            *slave += inc * ratio;
+            if (*slave >= TWO_PI) *slave = fmodf(*slave, TWO_PI);
+        }
+        u = *slave / TWO_PI;
+        read_freq = (inc * ratio * SR) / TWO_PI;
+    } else {
+        u = *phase / TWO_PI;
+        read_freq = (inc * SR) / TWO_PI;
+    }
+    return read_wave(read_freq, wave, bend_unit(u, bend));
 }
 
 static int suffix_is(const char *id, const char *suffix) {
@@ -266,17 +386,18 @@ static float motif_at(int id, float phase01) {
 }
 
 static int param_of(const char *id) {
-    if (strcmp(id, "osc_shape") == 0) return P_SHAPE;
-    if (strcmp(id, "osc_detune") == 0) return P_DETUNE;
-    if (strcmp(id, "osc_fm") == 0) return P_FM;
-    if (strcmp(id, "noise") == 0) return P_NOISE;
+    if (strcmp(id, "wave") == 0) return P_WAVE;
+    if (strcmp(id, "bend") == 0) return P_BEND;
+    if (strcmp(id, "sync") == 0) return P_SYNC;
+    if (strcmp(id, "fold") == 0) return P_FOLD;
+    if (strcmp(id, "drive") == 0) return P_NOTE_DRIVE;
     if (strcmp(id, "cutoff") == 0) return P_CUTOFF;
     if (strcmp(id, "resonance") == 0) return P_RESONANCE;
     if (strcmp(id, "reverb") == 0) return P_REVERB;
     if (strcmp(id, "delay") == 0) return P_DELAY;
     if (strcmp(id, "attack") == 0) return P_ATTACK;
     if (strcmp(id, "release") == 0 || strcmp(id, "decay") == 0) return P_RELEASE;
-    if (strcmp(id, "osc_width") == 0) return P_WIDTH;
+    if (strcmp(id, "wide") == 0) return P_WIDE;
     if (suffix_is(id, "freq")) return P_FREQ;
     if (suffix_is(id, "nedcy")) return P_NEDCY;
     if (suffix_is(id, "nffrq")) return P_NFFRQ;
@@ -365,10 +486,11 @@ static void apply_drum(Drum *drum, int param, float unit) {
 
 static void apply_note(Note *note, int param, float unit) {
     switch (param) {
-    case P_SHAPE: note->shape = unit; break;
-    case P_DETUNE: note->detune = unit; break;
-    case P_FM: note->fm = unit; break;
-    case P_NOISE: note->noise = unit; break;
+    case P_WAVE: note->wave = unit; break;
+    case P_BEND: note->bend = unit; break;
+    case P_SYNC: note->sync = unit; break;
+    case P_FOLD: note->fold = unit; break;
+    case P_NOTE_DRIVE: note->drive = unit; break;
     case P_CUTOFF: note->cutoff = unit; break;
     case P_RESONANCE: note->resonance = unit; break;
     case P_REVERB: note->reverb = unit; break;
@@ -378,7 +500,7 @@ static void apply_note(Note *note, int param, float unit) {
         note->release = unit;
         refresh_release(note);
         break;
-    case P_WIDTH: note->width = unit; break;
+    case P_WIDE: note->wide = unit; break;
     default: break;
     }
 }
@@ -496,23 +618,26 @@ static Note *arm_note(Engine *engine, int note_num, int velocity, int ticks, con
     note->on = 1;
     note->phase = 0;
     note->phase2 = 0;
+    note->slave = 0;
+    note->slave2 = 0;
     note->env = 0;
     note->age = 0;
     note->left = samples;
     note->lane = lane;
     note->loop = loop;
     note->freq = 440.0f * powf(2.0f, ((float)note_num - 69.0f) / 12.0f);
-    note->shape = read_param(params, "osc_shape", 0.5f);
-    note->detune = read_param(params, "osc_detune", 0.5f);
-    note->fm = read_param(params, "osc_fm", 0.0f);
-    note->noise = read_param(params, "noise", 0.0f);
+    note->wave = read_param(params, "wave", 0.36f);
+    note->bend = read_param(params, "bend", 0.0f);
+    note->sync = read_param(params, "sync", 0.0f);
+    note->fold = read_param(params, "fold", 0.0f);
+    note->drive = read_param(params, "drive", 0.0f);
     note->cutoff = read_param(params, "cutoff", 0.5f);
     note->resonance = read_param(params, "resonance", 0.0f);
     note->reverb = read_param(params, "reverb", 0.0f);
     note->delay = read_param(params, "delay", 0.0f);
     note->attack = read_param(params, "attack", 0.0f);
     note->release = read_param(params, "release", read_param(params, "decay", 0.4f));
-    note->width = read_param(params, "osc_width", 0.0f);
+    note->wide = read_param(params, "wide", 0.0f);
     note->gain = velocity / 127.0f;
     note->low = 0;
     note->band = 0;
@@ -595,26 +720,29 @@ static float drum_sample(Engine *engine, Drum *drum) {
 
 static void note_sample(Engine *engine, Note *note, float *left, float *right) {
     float inc = (TWO_PI * note->freq) / SR;
-    /* Square FM/reso so the musical range is most of the knobs, not unit≈0.16.
-       Chord FM used to stop being useful near unit 0.5, so the whole knob covers that throw. */
-    float fm_unit = note->lane == CHORDS_LANE ? note->fm * 0.5f : note->fm;
-    float fm = fm_unit * fm_unit * 5.0f;
-    if (fm > 1e-4f) note->phase += inc + sinf(note->phase) * fm * inc;
-    else note->phase += inc;
-    float det_off = note->detune - 0.5f;
-    float ratio = 1.0f + det_off * 0.35f;
-    float primary = wave(note->phase, note->shape);
-    float second = 0.0f;
-    int need_second = fabsf(det_off) > 1e-3f || note->width > 1e-3f;
-    if (need_second) {
-        note->phase2 += inc * ratio;
-        second = wave(note->phase2, note->shape);
+    float primary, mix, side = 0.0f, resonated, attack_samples, gain, sided;
+    (void)engine;
+    ensure_wave_table();
+    primary = advance_osc(note, 0, inc, note->sync, note->bend, note->wave);
+    mix = primary;
+    if (note->wide > 1e-4f) {
+        float ratio = powf(2.0f, (note->wide * 15.0f) / 1200.0f);
+        float second = advance_osc(note, 1, inc * ratio, note->sync, note->bend, note->wave);
+        float w = note->wide;
+        mix = primary * (1.0f - w * 0.5f) + second * (w * 0.5f);
+        side = (primary - second) * w * 0.5f;
     }
-    float noisy = primary;
-    if (need_second) noisy += second * 0.35f * fabsf(det_off) * 2.0f;
-    if (note->noise > 1e-3f) noisy += rng(engine) * note->noise * 0.85f;
-    float resonated = filter_sample(&note->low, &note->band, noisy, note->cutoff, note->resonance);
-    float attack_samples = 1.0f + note->attack * 0.2f * SR;
+    if (note->fold > 1e-4f) {
+        float folded = sinf(mix * (1.0f + note->fold * note->fold * 4.0f));
+        mix += (folded - mix) * note->fold;
+    }
+    if (note->drive > 1e-4f) {
+        float amount = note->drive * note->drive * 5.0f;
+        float driven = mix * (1.0f + amount);
+        mix = driven / (1.0f + amount * fabsf(mix));
+    }
+    resonated = filter_sample(&note->low, &note->band, mix, note->cutoff, note->resonance);
+    attack_samples = 1.0f + note->attack * 0.2f * SR;
     /* Hold full level for the whole note. Release is the tail after that length. */
     if (note->left > 0 && (float)note->age < attack_samples) note->env = ((float)note->age + 1.0f) / attack_samples;
     else if (note->left > 0) note->env = 1.0f;
@@ -623,10 +751,10 @@ static void note_sample(Engine *engine, Note *note, float *left, float *right) {
     if (note->left > 0) note->left -= 1;
     /* Slow attacks start below 0.0008; only silence once the gate is over and the tail is quiet. */
     if (note->left <= 0 && (float)note->age >= attack_samples && note->env < 0.0008f) note->on = 0;
-    float gain = resonated * note->env * note->gain * 0.38f;
-    float wide = need_second ? second * note->width * gain * 1.35f : 0.0f;
-    *left += gain + wide;
-    *right += gain - wide;
+    gain = resonated * note->env * note->gain * 0.38f;
+    sided = side * note->env * note->gain * 0.38f;
+    *left += gain + sided;
+    *right += gain - sided;
 }
 
 static void push_lane(Engine *engine, int lane, int param, float value, int pattern, float cycle, float amount,
@@ -1194,6 +1322,7 @@ static void *create_instance(const char *module_dir, const char *json_defaults) 
     engine->noise = 1;
     engine->tempo = 120.0f;
     engine->beats = 4.0f;
+    ensure_wave_table();
     if (!space_init(engine)) {
         space_free(engine);
         free(engine->phrase_text);
@@ -1286,7 +1415,7 @@ int main(void) {
     if (left < right * 2) return fail("pan left did not reach the left channel");
 
     engine = create_instance(NULL, NULL);
-    set_param(engine, "block", "120|0:4:40:100:192:osc_shape=0.2000,osc_width=0.0000,cutoff=0.8000,attack=0.0000,release=0.8000");
+    set_param(engine, "block", "120|0:4:40:100:192:wave=0.4200,wide=0.0000,cutoff=0.8000,attack=0.0000,release=0.8000");
     render(engine, out, 128);
     long diff_narrow = 0, level = 0;
     for (int i = 0; i < 128; i++) {
@@ -1297,14 +1426,14 @@ int main(void) {
     if (level < 20) return fail("melodic voice stayed silent");
 
     engine = create_instance(NULL, NULL);
-    set_param(engine, "block", "120|0:6:64:110:192:osc_shape=0.8000,osc_width=1.0000,cutoff=0.9000,attack=0.0000,release=0.8000");
+    set_param(engine, "block", "120|0:6:64:110:192:wave=0.4200,wide=1.0000,cutoff=0.9000,attack=0.0000,release=0.8000");
     render(engine, out, 128);
     long diff_wide = 0;
     for (int i = 0; i < 128; i++) {
         int d = out[i * 2] - out[i * 2 + 1];
         diff_wide += d < 0 ? -d : d;
     }
-    if (diff_wide <= diff_narrow) return fail("osc_width did not open the stereo image");
+    if (diff_wide <= diff_narrow) return fail("wide did not open the stereo image");
 
     engine = create_instance(NULL, NULL);
     set_param(engine, "block", "P|120|1|0:300:0:36:120:48:v01_dcy=0.0500");

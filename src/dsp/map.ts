@@ -62,39 +62,23 @@ const DRUM_SUFFIX: Record<DrumId, Record<string, string>> = {
 };
 
 /**
- * Shape, detune, FM, noise and width are osc_shape, osc_detune, osc_fm, noise, osc_width on our voice.
- * Attack, decay and release use the stock chain names. Cutoff and resonance are the lane filter, not sound.
+ * Bass, lead and chords share one wavetable. Cutoff and resonance are the lane filter, not sound.
+ * `decay` still reaches the voice as a release alias for older blocks.
  */
-const SURGE: Record<"bass" | "lead" | "chords", Record<string, string>> = {
-  bass: {
-    shape: "osc_shape",
-    detune: "osc_detune",
-    fm: "osc_fm",
-    noise: "noise",
-    attack: "attack",
-    decay: "decay",
-  },
-  lead: {
-    shape: "osc_shape",
-    detune: "osc_detune",
-    fm: "osc_fm",
-    noise: "noise",
-    attack: "attack",
-    release: "release",
-  },
-  chords: {
-    shape: "osc_shape",
-    detune: "osc_detune",
-    fm: "osc_fm",
-    width: "osc_width",
-    attack: "attack",
-    release: "release",
-  },
+const MELODY: Record<string, string> = {
+  wave: "wave",
+  bend: "bend",
+  sync: "sync",
+  fold: "fold",
+  drive: "drive",
+  wide: "wide",
+  attack: "attack",
+  release: "release",
 };
 
 export function mapSound(lane: LaneId, sound: Record<string, number>): EngineParam[] {
   if (lane === "bass" || lane === "lead" || lane === "chords") {
-    const table = SURGE[lane];
+    const table = MELODY;
     return Object.keys(sound).sort().map((id) => ({ id: table[id] ?? id, value: clamp(sound[id] ?? 0) }));
   }
   const voice = VOICE[lane];

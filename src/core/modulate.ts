@@ -19,6 +19,13 @@ export function withMacro(m: Modulated, offset: number): Modulated {
   return { ...m, value: clamp01(m.value + offset) };
 }
 
+/** Performance offset for one sound field. DECAY also lengthens a melodic release. */
+export function soundMacro(id: string, macros: Record<string, number>): number {
+  const direct = macros[id] ?? 0;
+  if (id === "release") return direct + (macros.decay ?? 0);
+  return direct;
+}
+
 /** Unit 0.5 is the centre. Span is the positive reach in musical units. */
 export function bipolarFromUnit(unit: number, span: number): number {
   return (clamp01(unit) - 0.5) * 2 * span;

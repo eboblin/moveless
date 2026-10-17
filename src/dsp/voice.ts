@@ -10,8 +10,12 @@ const TWO_PI = Math.PI * 2;
 const DRUM_COUNT = 4;
 const NOTE_COUNT = 12;
 const LANE_COUNT = 8;
-const CHORDS_LANE = LANES.indexOf("chords");
 const LANE_MOTION_CAP = 12;
+const WT_FRAMES = 48;
+const WT_CYCLE = 256;
+const WT_MIPS = 7;
+const WT_HARM = 64;
+const WT_ANCHOR = [0, 0.22, 0.42, 0.62, 0.82, 1];
 
 const P_NONE = 0;
 const P_FREQ = 1;
@@ -26,17 +30,18 @@ const P_NFFRQ = 9;
 const P_ATK = 10;
 const P_MAMT = 11;
 const P_LVL = 12;
-const P_SHAPE = 13;
-const P_DETUNE = 14;
-const P_FM = 15;
-const P_NOISE = 16;
+const P_WAVE = 13;
+const P_BEND = 14;
+const P_SYNC = 15;
+const P_FOLD = 16;
 const P_CUTOFF = 17;
 const P_RESONANCE = 18;
 const P_ATTACK = 19;
 const P_RELEASE = 20;
-const P_WIDTH = 21;
+const P_WIDE = 21;
 const P_REVERB = 22;
 const P_DELAY = 23;
+const P_NOTE_DRIVE = 24;
 
 export interface Engine {
   noise: number;
@@ -99,21 +104,24 @@ interface NoteVoice {
   on: boolean;
   phase: number;
   phase2: number;
+  slave: number;
+  slave2: number;
   env: number;
   age: number;
   left: number;
   freq: number;
-  shape: number;
-  detune: number;
-  fm: number;
-  noise: number;
+  wave: number;
+  bend: number;
+  sync: number;
+  fold: number;
+  drive: number;
+  wide: number;
   cutoff: number;
   resonance: number;
   reverb: number;
   delay: number;
   attack: number;
   release: number;
-  width: number;
   gain: number;
   low: number;
   band: number;
@@ -365,23 +373,26 @@ function armNote(engine: Engine, note: NoteVoice, event: BlockEvent | LoopEvent,
   note.on = true;
   note.phase = 0;
   note.phase2 = 0;
+  note.slave = 0;
+  note.slave2 = 0;
   note.env = 0;
   note.age = 0;
   note.left = samples;
   note.lane = LANES.indexOf(event.lane);
   note.loop = loop;
   note.freq = 440 * 2 ** ((event.note - 69) / 12);
-  note.shape = read(event.params, ["osc_shape"], 0.5);
-  note.detune = read(event.params, ["osc_detune"], 0.5);
-  note.fm = read(event.params, ["osc_fm"], 0);
-  note.noise = read(event.params, ["noise"], 0);
+  note.wave = read(event.params, ["wave"], 0.36);
+  note.bend = read(event.params, ["bend"], 0);
+  note.sync = read(event.params, ["sync"], 0);
+  note.fold = read(event.params, ["fold"], 0);
+  note.drive = read(event.params, ["drive"], 0);
   note.cutoff = read(event.params, ["cutoff"], 0.5);
   note.resonance = read(event.params, ["resonance"], 0);
   note.reverb = read(event.params, ["reverb"], 0);
   note.delay = read(event.params, ["delay"], 0);
   note.attack = read(event.params, ["attack"], 0);
-  note.release = read(event.params, ["decay", "release"], 0.4);
-  note.width = read(event.params, ["osc_width"], 0);
+  note.release = read(event.params, ["release", "decay"], 0.4);
+  note.wide = read(event.params, ["wide"], 0);
   note.gain = event.velocity / 127;
   note.low = 0;
   note.band = 0;
@@ -420,28 +431,28 @@ function drumSample(engine: Engine, drum: DrumVoice): number {
   return filtered;
 }
 
-function noteSample(engine: Engine, note: NoteVoice): [number, number] {
+function noteSample(_engine: Engine, note: NoteVoice): [number, number] {
   const inc = (TWO_PI * note.freq) / SAMPLE_RATE;
-  // FM/reso use a square curve: the old linear*8 died around unit 0.16; this
-  // keeps the musical throw across most of the knob and leaves 1.0 as chaos.
-  // Chord FM used to stop being useful near unit 0.5, so the whole knob covers that throw.
-  const fmUnit = note.lane === CHORDS_LANE ? note.fm * 0.5 : note.fm;
-  const fm = fmUnit * fmUnit * 5;
-  if (fm > 1e-4) note.phase += inc + Math.sin(note.phase) * fm * inc;
-  else note.phase += inc;
-  const detOff = note.detune - 0.5;
-  const ratio = 1 + detOff * 0.35;
-  const primary = wave(note.phase, note.shape);
-  const needSecond = Math.abs(detOff) > 1e-3 || note.width > 1e-3;
-  let second = 0;
-  if (needSecond) {
-    note.phase2 += inc * ratio;
-    second = wave(note.phase2, note.shape);
+  const primary = advanceOsc(note, "phase", "slave", inc, note.sync, note.bend, note.wave);
+  let mix = primary;
+  let side = 0;
+  if (note.wide > 1e-4) {
+    const ratio = 2 ** ((note.wide * 15) / 1200);
+    const second = advanceOsc(note, "phase2", "slave2", inc * ratio, note.sync, note.bend, note.wave);
+    const w = note.wide;
+    mix = primary * (1 - w * 0.5) + second * (w * 0.5);
+    side = (primary - second) * w * 0.5;
   }
-  let noisy = primary;
-  if (needSecond) noisy += second * 0.35 * Math.abs(detOff) * 2;
-  if (note.noise > 1e-3) noisy += rng(engine) * note.noise * 0.85;
-  const resonated = filterSample(note, noisy, note.cutoff, note.resonance);
+  if (note.fold > 1e-4) {
+    const folded = Math.sin(mix * (1 + note.fold * note.fold * 4));
+    mix += (folded - mix) * note.fold;
+  }
+  if (note.drive > 1e-4) {
+    const amount = note.drive * note.drive * 5;
+    const driven = mix * (1 + amount);
+    mix = driven / (1 + amount * Math.abs(mix));
+  }
+  const resonated = filterSample(note, mix, note.cutoff, note.resonance);
   const attackSamples = 1 + note.attack * 0.2 * SAMPLE_RATE;
   // Hold full level for the whole note. Release is the tail after that length, not a decay from the attack.
   if (note.left > 0 && note.age < attackSamples) note.env = (note.age + 1) / attackSamples;
@@ -451,21 +462,137 @@ function noteSample(engine: Engine, note: NoteVoice): [number, number] {
   if (note.left > 0) note.left -= 1;
   if (note.left <= 0 && note.age >= attackSamples && note.env < 0.0008) note.on = false;
   const gain = resonated * note.env * note.gain * 0.38;
-  const wide = needSecond ? second * note.width * gain * 1.35 : 0;
-  return [gain + wide, gain - wide];
+  const sided = side * note.env * note.gain * 0.38;
+  return [gain + sided, gain - sided];
 }
 
-function wave(phase: number, shape: number): number {
-  const wrapped = ((phase % TWO_PI) + TWO_PI) % TWO_PI;
-  const saw = wrapped / Math.PI - 1;
-  const square = wrapped < Math.PI ? 1 : -1;
-  if (shape >= 0.5) {
-    const t = (shape - 0.5) * 2;
-    return saw * (1 - t) + square * t;
+function gauss(k: number, center: number, sigma: number): number {
+  const d = (k - center) / sigma;
+  return Math.exp(-d * d);
+}
+
+/** Integer partial at one spectral anchor. Kind 0..5 is sine, triangle, saw, square, pulse, vowel. */
+function anchorAmp(kind: number, k: number): number {
+  if (kind === 0) return k === 1 ? 1 : 0;
+  if (kind === 1) {
+    if (k % 2 === 0) return 0;
+    return (k % 4 === 1 ? 1 : -1) / (k * k);
   }
-  const sine = Math.sin(wrapped);
-  const t = shape * 2;
-  return sine * (1 - t) + saw * t;
+  if (kind === 2) return 1 / k;
+  if (kind === 3) return k % 2 === 1 ? 1 / k : 0;
+  if (kind === 4) return Math.sin(Math.PI * k * 0.12) / k;
+  return 0.22 / k ** 1.5 + gauss(k, 3, 0.9) + 0.75 * gauss(k, 8, 1.2) + 0.55 * gauss(k, 14, 1.5);
+}
+
+function ampAt(p: number, k: number): number {
+  if (p <= 0) return anchorAmp(0, k);
+  if (p >= 1) return anchorAmp(5, k);
+  let i = 0;
+  while (i < 4 && p > WT_ANCHOR[i + 1]) i += 1;
+  const span = WT_ANCHOR[i + 1] - WT_ANCHOR[i];
+  const t = span > 0 ? (p - WT_ANCHOR[i]) / span : 0;
+  return anchorAmp(i, k) * (1 - t) + anchorAmp(i + 1, k) * t;
+}
+
+function buildWaveTable(): Float32Array {
+  const table = new Float32Array(WT_MIPS * WT_FRAMES * WT_CYCLE);
+  const amp = new Float64Array(WT_HARM + 1);
+  for (let mip = 0; mip < WT_MIPS; mip++) {
+    const maxH = WT_HARM >> mip;
+    for (let frame = 0; frame < WT_FRAMES; frame++) {
+      const p = frame / (WT_FRAMES - 1);
+      for (let k = 1; k <= maxH; k++) amp[k] = ampAt(p, k);
+      let peak = 0;
+      const base = (mip * WT_FRAMES + frame) * WT_CYCLE;
+      for (let n = 0; n < WT_CYCLE; n++) {
+        const theta = (TWO_PI * n) / WT_CYCLE;
+        let sum = 0;
+        for (let k = 1; k <= maxH; k++) sum += amp[k] * Math.sin(k * theta);
+        table[base + n] = sum;
+        const abs = Math.abs(sum);
+        if (abs > peak) peak = abs;
+      }
+      if (peak > 1e-8) {
+        const norm = 1 / peak;
+        for (let n = 0; n < WT_CYCLE; n++) table[base + n] *= norm;
+      }
+    }
+  }
+  return table;
+}
+
+const WAVE_TABLE = buildWaveTable();
+
+function readCycle(mip: number, frame: number, u: number): number {
+  const pos = u * WT_CYCLE;
+  const i0 = Math.floor(pos) % WT_CYCLE;
+  const frac = pos - Math.floor(pos);
+  const i1 = (i0 + 1) % WT_CYCLE;
+  const base = (mip * WT_FRAMES + frame) * WT_CYCLE;
+  const a = WAVE_TABLE[base + i0];
+  const b = WAVE_TABLE[base + i1];
+  return a + (b - a) * frac;
+}
+
+function readWave(freq: number, wave: number, u: number): number {
+  const fit = Math.min(WT_HARM, Math.max(1, (SAMPLE_RATE * 0.45) / Math.max(freq, 1)));
+  const mipF = Math.log2(WT_HARM / fit);
+  let m0 = Math.floor(mipF);
+  if (m0 < 0) m0 = 0;
+  if (m0 > WT_MIPS - 1) m0 = WT_MIPS - 1;
+  const top = m0 >= WT_MIPS - 1;
+  const m1 = top ? m0 : m0 + 1;
+  const mf = top ? 0 : mipF - m0;
+  const pos = Math.max(0, Math.min(1, wave)) * (WT_FRAMES - 1);
+  let f0 = Math.floor(pos);
+  if (f0 >= WT_FRAMES - 1) f0 = WT_FRAMES - 2;
+  const ff = pos - f0;
+  const s0 = readCycle(m0, f0, u) * (1 - ff) + readCycle(m0, f0 + 1, u) * ff;
+  if (mf < 1e-4) return s0;
+  const s1 = readCycle(m1, f0, u) * (1 - ff) + readCycle(m1, f0 + 1, u) * ff;
+  return s0 + (s1 - s0) * mf;
+}
+
+function bendUnit(u: number, bend: number): number {
+  if (bend <= 1e-4 || u <= 0) return u;
+  return u ** (1 + bend * bend * 3);
+}
+
+function advanceOsc(
+  note: NoteVoice,
+  phaseKey: "phase" | "phase2",
+  slaveKey: "slave" | "slave2",
+  inc: number,
+  sync: number,
+  bend: number,
+  wave: number,
+): number {
+  let phase = note[phaseKey] + inc;
+  let wrapped = false;
+  if (phase >= TWO_PI) {
+    phase -= TWO_PI;
+    if (phase >= TWO_PI) phase %= TWO_PI;
+    wrapped = true;
+  }
+  note[phaseKey] = phase;
+  let u: number;
+  let readFreq: number;
+  if (sync > 1e-4) {
+    const ratio = 1 + sync * sync * 4;
+    let slave = note[slaveKey];
+    if (wrapped) slave = 0;
+    else {
+      slave += inc * ratio;
+      if (slave >= TWO_PI) slave %= TWO_PI;
+    }
+    note[slaveKey] = slave;
+    u = slave / TWO_PI;
+    readFreq = (inc * ratio * SAMPLE_RATE) / TWO_PI;
+  } else {
+    u = phase / TWO_PI;
+    readFreq = (inc * SAMPLE_RATE) / TWO_PI;
+  }
+  return readWave(readFreq, wave, bendUnit(u, bend));
 }
 
 function shapeDrive(sample: number, drive: number): number {
@@ -536,10 +663,11 @@ function applyDrum(drum: DrumVoice, param: number, unit: number): void {
 }
 
 function applyNote(note: NoteVoice, param: number, unit: number): void {
-  if (param === P_SHAPE) note.shape = unit;
-  else if (param === P_DETUNE) note.detune = unit;
-  else if (param === P_FM) note.fm = unit;
-  else if (param === P_NOISE) note.noise = unit;
+  if (param === P_WAVE) note.wave = unit;
+  else if (param === P_BEND) note.bend = unit;
+  else if (param === P_SYNC) note.sync = unit;
+  else if (param === P_FOLD) note.fold = unit;
+  else if (param === P_NOTE_DRIVE) note.drive = unit;
   else if (param === P_CUTOFF) note.cutoff = unit;
   else if (param === P_RESONANCE) note.resonance = unit;
   else if (param === P_REVERB) note.reverb = unit;
@@ -548,7 +676,7 @@ function applyNote(note: NoteVoice, param: number, unit: number): void {
   else if (param === P_RELEASE) {
     note.release = unit;
     refreshRelease(note);
-  } else if (param === P_WIDTH) note.width = unit;
+  } else if (param === P_WIDE) note.wide = unit;
 }
 
 function refreshDrumEnv(drum: DrumVoice): void {
@@ -661,17 +789,18 @@ function stampNote(engine: Engine, note: NoteVoice): void {
 }
 
 function paramOf(id: string): number {
-  if (id === "osc_shape") return P_SHAPE;
-  if (id === "osc_detune") return P_DETUNE;
-  if (id === "osc_fm") return P_FM;
-  if (id === "noise") return P_NOISE;
+  if (id === "wave") return P_WAVE;
+  if (id === "bend") return P_BEND;
+  if (id === "sync") return P_SYNC;
+  if (id === "fold") return P_FOLD;
+  if (id === "drive") return P_NOTE_DRIVE;
   if (id === "cutoff") return P_CUTOFF;
   if (id === "resonance") return P_RESONANCE;
   if (id === "reverb") return P_REVERB;
   if (id === "delay") return P_DELAY;
   if (id === "attack") return P_ATTACK;
   if (id === "release" || id === "decay") return P_RELEASE;
-  if (id === "osc_width") return P_WIDTH;
+  if (id === "wide") return P_WIDE;
   if (ends(id, "freq")) return P_FREQ;
   if (ends(id, "nedcy")) return P_NEDCY;
   if (ends(id, "nffrq")) return P_NFFRQ;
@@ -751,8 +880,9 @@ function emptyDrum(): DrumVoice {
 
 function emptyNote(): NoteVoice {
   return {
-    on: false, phase: 0, phase2: 0, env: 0, age: 0, left: 0, freq: 0, shape: 0, detune: 0.5,
-    fm: 0, noise: 0, cutoff: 0.5, resonance: 0, reverb: 0, delay: 0, attack: 0, release: 0.4, width: 0, gain: 0,
+    on: false, phase: 0, phase2: 0, slave: 0, slave2: 0, env: 0, age: 0, left: 0, freq: 0,
+    wave: 0.36, bend: 0, sync: 0, fold: 0, drive: 0, wide: 0,
+    cutoff: 0.5, resonance: 0, reverb: 0, delay: 0, attack: 0, release: 0.4, gain: 0,
     low: 0, band: 0, lane: 0, loop: 0, releaseK: 1,
   };
 }

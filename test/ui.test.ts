@@ -26,17 +26,17 @@ function openAux(state: Session, page = 0): Session {
 }
 
 describe("pages and leds", () => {
-  it("gives drums nine pages and bass ten", () => {
+  it("gives drums nine pages and bass eleven", () => {
     assert.equal(pageCount("kick"), 9);
-    assert.equal(pageCount("bass"), 10);
-    assert.equal(pageCount("lead"), 10);
-    assert.equal(pageCount("chords"), 7);
+    assert.equal(pageCount("bass"), 11);
+    assert.equal(pageCount("lead"), 11);
+    assert.equal(pageCount("chords"), 8);
     assert.equal(pageGroup("kick", 7), "fx");
     assert.equal(pageGroup("kick", 8), "fx");
-    assert.equal(pageGroup("bass", 8), "fx");
     assert.equal(pageGroup("bass", 9), "fx");
-    assert.equal(pageGroup("chords", 5), "fx");
+    assert.equal(pageGroup("bass", 10), "fx");
     assert.equal(pageGroup("chords", 6), "fx");
+    assert.equal(pageGroup("chords", 7), "fx");
     assert.equal(pageGroupColor("kick", 7), 9);
     assert.equal(lanePages("bass").at(-1)?.groups[0], "REV");
     assert.equal(lanePages("bass").at(-1)?.groups[1], "DLY");
@@ -171,7 +171,8 @@ describe("pages and leds", () => {
     assert.equal(bass[24].color, 3);
     assert.equal(bass[27].color, 14);
     assert.equal(bass[30].color, 20);
-    assert.equal(bass[16].color, 9);
+    assert.equal(bass[16].color, 20);
+    assert.equal(bass[17].color, 9);
     const chords = padLeds(project, "journal", { ...defaultUi(), wheelTouch: true, context: "chords" });
     assert.equal(chords[24].color, 14);
     assert.equal(chords[28].color, 20);

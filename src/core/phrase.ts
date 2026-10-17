@@ -14,7 +14,7 @@ import { generateHits, phraseStepsOf } from "./events.ts";
 import { getPath, mixFieldValues } from "./fields.ts";
 import { morphEndpoints } from "./morph.ts";
 import { applyFollowMidi, chordTonePitchClasses, degreeToMidi, generateHarmony, harmonyAt, pitchClassName, scaleOf } from "./harmony.ts";
-import { bipolarFromUnit, evalModulated, withMacro } from "./modulate.ts";
+import { bipolarFromUnit, evalModulated, soundMacro, withMacro } from "./modulate.ts";
 import { mod } from "./motif.ts";
 import {
   DRUM_NOTE,
@@ -326,7 +326,7 @@ function soundValues(
   macros: Record<string, number>,
 ): Record<string, number> {
   const out: Record<string, number> = {};
-  for (const id of Object.keys(sound)) out[id] = evalModulated(withMacro(sound[id], macro(macros, id)), step);
+  for (const id of Object.keys(sound)) out[id] = evalModulated(withMacro(sound[id], soundMacro(id, macros)), step);
   return out;
 }
 

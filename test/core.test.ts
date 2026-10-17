@@ -557,8 +557,8 @@ describe("morph, journal, macros", () => {
         item.working.bass.gen1.probability = 0.7;
         item.working.bass.filter.cutoff.value = 0;
         item.working.bass.filter.cutoff.amount = 0;
-        item.working.bass.sound.detune.value = 0;
-        item.working.bass.sound.detune.amount = 0;
+        item.working.bass.sound.wide.value = 0;
+        item.working.bass.sound.wide.amount = 0;
         item.working.kick.sound.pitch.value = 0.15;
         item.working.kick.sound.pitch.amount = 0;
         item.working.lead.pitch.value = 0.25;
@@ -573,8 +573,8 @@ describe("morph, journal, macros", () => {
         item.working.bass.gen1.probability = 1;
         item.working.bass.filter.cutoff.value = 1;
         item.working.bass.filter.cutoff.amount = 0;
-        item.working.bass.sound.detune.value = 1;
-        item.working.bass.sound.detune.amount = 0;
+        item.working.bass.sound.wide.value = 1;
+        item.working.bass.sound.wide.amount = 0;
         item.working.kick.sound.pitch.value = 0.85;
         item.working.kick.sound.pitch.amount = 0;
         item.working.lead.pitch.value = 0.85;
@@ -597,7 +597,7 @@ describe("morph, journal, macros", () => {
     assert.equal(riding.working.bass.octave.value, 0.2);
     assert.equal(riding.working.bass.follow, 0);
     assert.equal(riding.working.bass.length.value, project.morph!.start.bass.length.value);
-    assert.ok(Math.abs(riding.working.bass.sound.detune.value - 0.25) < 1e-9);
+    assert.ok(Math.abs(riding.working.bass.sound.wide.value - 0.25) < 1e-9);
     assert.ok(Math.abs(riding.working.kick.sound.pitch.value - 0.325) < 1e-9);
     const owns = (phrase: ReturnType<typeof generatePhrase>, t: number, lane: "bass" | "lead" | "chords") => {
       for (const event of phrase.lanes[lane]) {

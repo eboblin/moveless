@@ -307,9 +307,9 @@ export const SOUND: Record<LaneId, readonly string[]> = {
   snare: ["pitch", "body", "noise", "snap", "decay", "tail", "click", "drive"],
   hat: ["pitch", "click", "snap", "decay", "tone", "drive", "pan", "spread"],
   perc: ["pitch", "tone", "bend", "noise", "decay", "tail", "pan", "spread"],
-  bass: ["shape", "detune", "fm", "noise", "attack", "decay"],
-  lead: ["shape", "detune", "fm", "noise", "attack", "release"],
-  chords: ["shape", "detune", "fm", "width", "attack", "release"],
+  bass: ["wave", "bend", "sync", "fold", "drive", "wide", "attack", "release"],
+  lead: ["wave", "bend", "sync", "fold", "drive", "wide", "attack", "release"],
+  chords: ["wave", "bend", "sync", "fold", "drive", "wide", "attack", "release"],
 };
 
 export const QUALITY_NAMES = ["maj", "min", "sus2", "sus4", "7", "m7", "dim", "aug"] as const;

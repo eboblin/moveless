@@ -1,5 +1,5 @@
 import { clamp01, sampleOffset, SIXTEENTH_TICKS, sixteenthSteps, tickToSample, ticksPerBar } from "./clock.ts";
-import { evalModulated, withMacro } from "./modulate.ts";
+import { evalModulated, soundMacro, withMacro } from "./modulate.ts";
 import { isDrum, LANES, type LaneFilter, type LaneId, type LaneSend, type Lanes, type Modulated, type Phrase, type Project, type TimedEvent } from "./types.ts";
 
 /** Shared loop for two patterns. Prefers a common multiple that still lands on the target. */
@@ -174,7 +174,7 @@ function mixSound(
   const out: Record<string, number> = {};
   for (const id of new Set([...Object.keys(soundFrom), ...Object.keys(soundTo)])) {
     if (id === "pitch") continue;
-    out[id] = mixOne(step, t, soundFrom[id], soundTo[id], macros[id] ?? 0);
+    out[id] = mixOne(step, t, soundFrom[id], soundTo[id], soundMacro(id, macros));
   }
   return out;
 }

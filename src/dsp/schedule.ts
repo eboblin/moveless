@@ -1,5 +1,5 @@
 import { clamp01, FRAMES_PER_BLOCK, SIXTEENTH_TICKS, tickToSample } from "../core/clock.ts";
-import { withMacro } from "../core/modulate.ts";
+import { soundMacro, withMacro } from "../core/modulate.ts";
 import { generatePhrase, laneSteps, endpointLanes } from "../core/phrase.ts";
 import { LANES, type LaneId, type LaneSend, type Modulated, type Phrase, type Project } from "../core/types.ts";
 import { mapFilter, mapSend, mapSound, type EngineParam } from "./map.ts";
@@ -80,7 +80,7 @@ export function soundMotions(project: Project, phrase?: Phrase): Motion[] {
     const macros = project.lock[lane] ? {} : project.macros;
     for (const id of Object.keys(sound)) {
       if (id === "pitch") continue;
-      const heard = withMacro(sound[id], macros[id] ?? 0);
+      const heard = withMacro(sound[id], soundMacro(id, macros));
       const mapped = mapSound(lane, { [id]: 0 })[0];
       if (!mapped) continue;
       const motion: Motion = {
@@ -93,7 +93,7 @@ export function soundMotions(project: Project, phrase?: Phrase): Motion[] {
         loop,
       };
       if (other?.[id]) {
-        const toward = withMacro(other[id], macros[id] ?? 0);
+        const toward = withMacro(other[id], soundMacro(id, macros));
         if (heard.amount === 0 && toward.amount === 0) {
           motion.value = clamp01((1 - t) * heard.value + t * toward.value);
         } else {

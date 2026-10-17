@@ -256,8 +256,8 @@ export function perfPages(): Page[] {
       ["drive", "DRV"],
       ["noise", "NSE"],
       ["attack", "ATK"],
-      ["shape", "SHAPE"],
-      ["detune", "DET"],
+      ["wave", "WAVE"],
+      ["wide", "WIDE"],
       ["tone", "TONE"],
     ]),
   ];
