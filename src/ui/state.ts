@@ -10,6 +10,8 @@ export interface Focus {
   showPattern: boolean;
   held: boolean;
   untilTick: number;
+  /** Wall-clock end of the post-release preview. Musical ticks stop when transport does. */
+  untilMs: number;
 }
 
 export interface Notice {
@@ -51,6 +53,15 @@ export function focusHoldTicks(tempo: number): number {
   return Math.max(1, Math.round(0.3 * (Math.max(1, tempo) / 60) * 192));
 }
 
+/** Wall-clock linger after an encoder release. The musical clock does not run while stopped. */
+export const FOCUS_HOLD_MS = 300;
+
+/** Knob preview: while the encoder is down, then until both the musical and wall clocks expire. */
+export function focusVisible(focus: Focus | null, tick: number, now: number): boolean {
+  if (!focus) return false;
+  return focus.held || (tick < focus.untilTick && now < focus.untilMs);
+}
+
 function blankLanePages(): Record<ContextId, number> {
   const pages = {} as Record<ContextId, number>;
   for (const id of STEPS) pages[id] = 0;
@@ -61,11 +72,13 @@ function blankLanePages(): Record<ContextId, number> {
 export function rememberPage(ui: UiState, context: ContextId, page: number): UiState {
   const count = Math.max(1, pageCount(context));
   const clamped = Math.min(Math.max(0, page), count - 1);
+  const moved = context !== ui.context || clamped !== ui.page;
   return {
     ...ui,
     context,
     page: clamped,
     lanePages: { ...ui.lanePages, [context]: clamped },
+    focus: moved ? null : ui.focus,
   };
 }
 

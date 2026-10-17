@@ -8,7 +8,7 @@ import { applyMorph } from "../src/core/morph.ts";
 import { createSet, launchScene, record } from "../src/core/performance.ts";
 import { generatePhrase } from "../src/core/phrase.ts";
 import { lanePages, pageCount, pageGroup, pageGroupColor, pagesFor } from "../src/core/pages.ts";
-import { LED, blinkHalfPeriod, ledColorAt, menuLed, padLeds, shadeColor, stepLed, stepLeds, trackLeds } from "../src/ui/leds.ts";
+import { LED, blinkHalfMs, ledColorAt, menuLed, padLeds, shadeColor, stepLed, stepLeds, trackLeds } from "../src/ui/leds.ts";
 import { DIGIT_H, displayAmount, plotAmount } from "../src/ui/digits.ts";
 import { DIGIT_Y, FONT_H, HEADER_H, HEIGHT, NAME_Y, PAGER_Y, PARAM_COL_W, PARAM_H, SEP_Y, TITLE_Y, VALUE_Y, VIZ_H, pixel, renderScreen, type Screen } from "../src/ui/screen.ts";
 import { defaultUi, openSetMode } from "../src/ui/state.ts";
@@ -126,8 +126,8 @@ describe("pages and leds", () => {
     assert.equal(journal[0].blink, false);
     assert.equal(journal[1].blink, true);
     assert.equal(journal[1].blinkTo, LED.white);
-    assert.equal(ledColorAt(journal[1], 0, 192), journal[1].color);
-    assert.equal(ledColorAt(journal[1], blinkHalfPeriod(192), 192), LED.white);
+    assert.equal(ledColorAt(journal[1], 0, 120), journal[1].color);
+    assert.equal(ledColorAt(journal[1], blinkHalfMs(120), 120), LED.white);
     assert.equal(empty[0].blinkTo, LED.white);
     assert.equal(journal[2].color, 0);
     const targetColor = journal[0].color;
@@ -176,6 +176,31 @@ describe("pages and leds", () => {
     const chords = padLeds(project, "journal", { ...defaultUi(), wheelTouch: true, context: "chords" });
     assert.equal(chords[24].color, 14);
     assert.equal(chords[28].color, 20);
+  });
+
+  it("blinks the current pads on the wall clock at a quarter of the tempo", () => {
+    const tempo = 120;
+    const half = blinkHalfMs(tempo);
+    assert.equal(half, 250);
+    const project = { ...defaultProject(), wander: "fast" as const };
+    const wheel = padLeds(project, "journal", { wheelTouch: true, context: "kick", page: 0 });
+    const capture = padLeds(project, "journal", { captureHeld: true });
+    const current = [
+      stepLed(project, "kick", "kick"),
+      padLeds(project, "journal")[0],
+      wheel[24],
+      wheel[1],
+      wheel[4],
+      capture[2],
+      capture[9],
+      capture[16],
+    ];
+    for (const lit of current) {
+      assert.equal(lit.blink, true);
+      assert.equal(ledColorAt(lit, 0, tempo), lit.color);
+      assert.equal(ledColorAt(lit, half, tempo), lit.blinkTo ?? LED.off);
+      assert.equal(ledColorAt(lit, half * 2, tempo), lit.color);
+    }
   });
 });
 
@@ -581,7 +606,7 @@ describe("surface", () => {
       ...defaultUi(),
       context: "bass",
       page: 3,
-      focus: { label: "PITCH V", path: "pitch.value", generator: null, showPattern: false, held: true, untilTick: 0 },
+      focus: { label: "PITCH V", path: "pitch.value", generator: null, showPattern: false, held: true, untilTick: 0, untilMs: 0 },
     }, 0);
     assert.equal(pitchHeld.header, "C2");
     const lengthPage = renderScreen(defaultProject(), { ...defaultUi(), context: "bass", page: 4 }, 0);
@@ -659,19 +684,19 @@ describe("surface", () => {
       ...defaultUi(),
       context: "chords",
       page: 1,
-      focus: { label: "TONE V", path: "tone.value", generator: "tone.value", showPattern: false, held: true, untilTick: 0 },
+      focus: { label: "TONE V", path: "tone.value", generator: "tone.value", showPattern: false, held: true, untilTick: 0, untilMs: 0 },
     }, 0);
     assert.equal(toneHeld.header, "C4");
     const octaveHeld = renderScreen(project, {
       ...defaultUi(),
       context: "chords",
       page: 1,
-      focus: { label: "OCTAVE V", path: "octave.value", generator: "octave.value", showPattern: false, held: true, untilTick: 0 },
+      focus: { label: "OCTAVE V", path: "octave.value", generator: "octave.value", showPattern: false, held: true, untilTick: 0, untilMs: 0 },
     }, 0);
     assert.equal(octaveHeld.header, "OCT 4");
     const zone = (rate: number) => renderScreen(
       { ...project, working: { ...project.working, chords: { ...project.working.chords, rate: modulated(rate) } } },
-      { ...defaultUi(), context: "chords", page: 0, focus: { label: "RATE V", path: "rate.value", generator: "rate.value", showPattern: false, held: true, untilTick: 0 } },
+      { ...defaultUi(), context: "chords", page: 0, focus: { label: "RATE V", path: "rate.value", generator: "rate.value", showPattern: false, held: true, untilTick: 0, untilMs: 0 } },
       0,
     ).header;
     assert.equal(zone(0), "BLOCK");
@@ -730,7 +755,7 @@ describe("surface", () => {
       ...defaultUi(),
       context: "aux",
       page: 4,
-      focus: { label: "SCALE", path: "scale", generator: null, showPattern: false, held: true, untilTick: 0 },
+      focus: { label: "SCALE", path: "scale", generator: null, showPattern: false, held: true, untilTick: 0, untilMs: 0 },
     }, 0);
     assert.ok(mode.labels.some((label) => label.y === VALUE_Y && label.text === "D" && label.cell === 2));
     assert.ok(mode.labels.some((label) => label.y === TITLE_Y && label.text === "DORIAN"));
@@ -760,13 +785,59 @@ describe("surface", () => {
     assert.equal(phrase.header, "GEN 1 HITS");
   });
 
+  it("returns the lane view after a knob release while the clock is stopped, and when the page changes", () => {
+    let state = session();
+    state.tick = 40000;
+    state = reduce(state, { kind: "cc", data1: 14, data2: 1 });
+    state = reduce(state, { kind: "cc", data1: 14, data2: 1 });
+    state = reduce(state, { kind: "note", data1: 0, data2: 127 });
+    state = reduce(state, { kind: "note", data1: 0, data2: 0 });
+    const untilMs = state.ui.focus?.untilMs ?? 0;
+    const frozen = state.tick;
+    const waiting = renderScreen(state.project, state.ui, frozen, false, untilMs - 1);
+    assert.equal(waiting.viz, "generator");
+    assert.equal(waiting.header, "COUNT VALUE");
+    const back = renderScreen(state.project, state.ui, frozen, false, untilMs);
+    assert.equal(back.viz, "phrase");
+    assert.equal(back.header, "KCK COUNT RATE");
+    const restarted = renderScreen(state.project, state.ui, 0, true, untilMs);
+    assert.equal(restarted.viz, "phrase");
+    assert.equal(restarted.header, "KCK COUNT RATE");
+
+    let turned = session();
+    turned = reduce(turned, { kind: "cc", data1: 14, data2: 1 });
+    turned = reduce(turned, { kind: "cc", data1: 14, data2: 1 });
+    turned = reduce(turned, { kind: "note", data1: 0, data2: 127 });
+    turned = reduce(turned, { kind: "note", data1: 0, data2: 0 });
+    const preview = renderScreen(turned.project, turned.ui, 0, false, (turned.ui.focus?.untilMs ?? 0) - 1);
+    assert.equal(preview.viz, "generator");
+    turned = reduce(turned, { kind: "cc", data1: 14, data2: 1 });
+    assert.equal(turned.ui.focus, null);
+    assert.equal(turned.ui.page, 3);
+    const next = renderScreen(turned.project, turned.ui, 0);
+    assert.equal(next.viz, "phrase");
+    assert.equal(next.header, "KCK PITCH BEND");
+    assert.ok(next.labels.some((label) => label.text === "PITCH"));
+
+    let held = session();
+    held = reduce(held, { kind: "cc", data1: 14, data2: 1 });
+    held = reduce(held, { kind: "cc", data1: 14, data2: 1 });
+    held = reduce(held, { kind: "note", data1: 0, data2: 127 });
+    assert.equal(renderScreen(held.project, held.ui, 0).viz, "generator");
+    held = reduce(held, { kind: "cc", data1: 14, data2: 1 });
+    const left = renderScreen(held.project, held.ui, 0);
+    assert.equal(held.ui.focus, null);
+    assert.equal(left.viz, "phrase");
+    assert.equal(left.header, "KCK PITCH BEND");
+  });
+
   it("draws a generator cycle on the phrase scale", () => {
     const screenFor = (cycle: number) => {
       const project = defaultProject();
       project.working.kick.ratchet.count = { value: 0.5, pattern: 0, cycle, amount: 1 };
       const ui = {
         ...defaultUi(),
-        focus: { label: "COUNT C", path: "ratchet.count.cycle", generator: "ratchet.count", showPattern: false, held: true, untilTick: 0 },
+        focus: { label: "COUNT C", path: "ratchet.count.cycle", generator: "ratchet.count", showPattern: false, held: true, untilTick: 0, untilMs: 0 },
       };
       return renderScreen(project, ui, 0);
     };

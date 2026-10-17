@@ -24,7 +24,7 @@ import {
 import { CAPTURE_DEPTHS, CAPTURE_INTENSITIES, CAPTURE_SCOPES, isLane, LANES, MENU_CC, STEPS, TRANSITIONS, WANDERS, type LaneId, type Project } from "../core/types.ts";
 import { resetControl, writeControl } from "./controls.ts";
 import { bindingPaths, pageCount, pageGroup, pagesFor } from "../core/pages.ts";
-import { applyBookmark, focusHoldTicks, HOLD_MS, HOLD_TICKS, rememberPage, type Notice, type UiState } from "./state.ts";
+import { applyBookmark, FOCUS_HOLD_MS, focusHoldTicks, HOLD_MS, HOLD_TICKS, rememberPage, type Notice, type UiState } from "./state.ts";
 
 export interface MidiMsg {
   kind: "note" | "cc";
@@ -90,7 +90,7 @@ function onStep(session: Session, index: number, press: boolean): Session {
       return {
         ...session,
         project: resetLane(session.project, step),
-        ui: { ...session.ui, heldContext: step },
+        ui: { ...session.ui, heldContext: step, focus: null },
       };
     }
     if (session.ui.loopHeld && press) {
@@ -108,7 +108,10 @@ function onStep(session: Session, index: number, press: boolean): Session {
       ui: { ...rememberPage(session.ui, step, page), heldContext: null, heldPage: null },
     };
   }
-  return { ...session, ui: { ...session.ui, heldContext: step } };
+  return {
+    ...session,
+    ui: { ...session.ui, heldContext: step, focus: step === session.ui.context ? session.ui.focus : null },
+  };
 }
 
 function onPad(session: Session, index: number, press: boolean): Session {
@@ -212,7 +215,15 @@ function touchEncoder(session: Session, index: number, press: boolean): Session 
     if (!focus?.held) return session;
     return {
       ...session,
-      ui: { ...session.ui, focus: { ...focus, held: false, untilTick: session.tick + focusHoldTicks(session.project.global.tempo) } },
+      ui: {
+        ...session.ui,
+        focus: {
+          ...focus,
+          held: false,
+          untilTick: session.tick + focusHoldTicks(session.project.global.tempo),
+          untilMs: Date.now() + FOCUS_HOLD_MS,
+        },
+      },
     };
   }
   const binding = currentBinding(session, index);
@@ -281,6 +292,7 @@ function focusFor(session: Session, binding: { path: string; label: string }, he
     showPattern: binding.path.endsWith(".pattern"),
     held,
     untilTick: session.tick + focusHoldTicks(session.project.global.tempo),
+    untilMs: Date.now() + FOCUS_HOLD_MS,
   };
 }
 

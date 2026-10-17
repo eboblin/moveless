@@ -1,4 +1,4 @@
-import { PPQN, SAMPLE_RATE } from "../core/clock.ts";
+import { SAMPLE_RATE } from "../core/clock.ts";
 import { defaultProject } from "../core/defaults.ts";
 import { advance } from "../core/performance.ts";
 import { generatePhrase } from "../core/phrase.ts";
@@ -8,7 +8,7 @@ import { formatSpace } from "../dsp/space.ts";
 import { packPhraseBody } from "../dsp/voice.ts";
 import { reduce, type MidiMsg, type Session } from "../ui/input.ts";
 import { MENU_CC } from "../core/types.ts";
-import { blinkHalfPeriod, ledColorAt, menuLed, padLeds, stepLeds, trackLeds } from "../ui/leds.ts";
+import { blinkHalfMs, ledColorAt, menuLed, padLeds, stepLeds, trackLeds } from "../ui/leds.ts";
 import { plotAmount, plotMinus } from "../ui/digits.ts";
 import {
   CHAR_W,
@@ -22,7 +22,7 @@ import {
   cellTextX,
   renderScreen,
 } from "../ui/screen.ts";
-import { defaultUi, rememberPage, type UiState } from "../ui/state.ts";
+import { defaultUi, focusVisible, rememberPage, type UiState } from "../ui/state.ts";
 import type { Project } from "../core/types.ts";
 
 interface HostGlobals {
@@ -168,7 +168,7 @@ function screenChanged(): boolean {
   const step = Math.floor(Math.max(0, session.tick) / 48);
   const now = Date.now();
   const notice = !!(ui.notice && now < ui.notice.untilMs);
-  const focus = !!(ui.focus && (ui.focus.held || session.tick < ui.focus.untilTick));
+  const focus = focusVisible(ui.focus, session.tick, now);
   if (
     paintProject === session.project &&
     paintUi === ui &&
@@ -189,7 +189,7 @@ function screenChanged(): boolean {
 }
 
 function ledsChanged(): boolean {
-  const phase = Math.floor(session.tick / blinkHalfPeriod(PPQN));
+  const phase = Math.floor(Date.now() / blinkHalfMs(session.project.global.tempo));
   if (ledPhase === phase && ledProject === session.project && ledUi === session.ui) return false;
   ledPhase = phase;
   ledProject = session.project;
@@ -246,9 +246,11 @@ function paintScreen(): void {
 function paintLeds(): void {
   const host = globalThis as HostGlobals;
   if (!host.move_midi_internal_send) return;
+  const now = Date.now();
+  const tempo = session.project.global.tempo;
   const tick = session.tick;
   stepLeds(session.project, session.ui.context).forEach((led, index) => {
-    const color = ledColorAt(led, tick, PPQN);
+    const color = ledColorAt(led, now, tempo);
     if (sentSteps[index] === color) return;
     sentSteps[index] = color;
     host.move_midi_internal_send?.([0x09, 0x90, 16 + index, color]);
@@ -259,13 +261,13 @@ function paintLeds(): void {
     host.move_midi_internal_send([0x0B, 0xB0, MENU_CC, menu]);
   }
   trackLeds(session.project, session.ui.context, session.ui.page).forEach((led, index) => {
-    const color = ledColorAt(led, tick, PPQN);
+    const color = ledColorAt(led, now, tempo);
     if (sentTracks[index] === color) return;
     sentTracks[index] = color;
     host.move_midi_internal_send?.([0x0B, 0xB0, TRACK_CC + index, color]);
   });
   padLeds(session.project, session.ui.mode, session.ui, tick).forEach((led, index) => {
-    const color = ledColorAt(led, tick, PPQN);
+    const color = ledColorAt(led, now, tempo);
     if (sentPads[index] === color) return;
     sentPads[index] = color;
     host.move_midi_internal_send?.([0x09, 0x90, 68 + index, color]);

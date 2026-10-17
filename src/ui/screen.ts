@@ -8,7 +8,7 @@ import { CAPTURE_DEPTHS, CAPTURE_INTENSITIES, CAPTURE_SCOPES, isPitched, LANES, 
 import { DIGIT_H, displayAmount, type BigAmount, type DisplayAmount } from "./digits.ts";
 import { readControl } from "./controls.ts";
 import { pagesFor, type Binding, type Page } from "../core/pages.ts";
-import type { UiState } from "./state.ts";
+import { focusVisible, type UiState } from "./state.ts";
 
 export const WIDTH = 128;
 export const HEIGHT = 64;
@@ -72,7 +72,7 @@ export function renderScreen(
   const page = pages[Math.min(pageIndex, pages.length - 1)];
   const capture = ui.captureHeld;
   const notice = !capture && ui.notice && now < ui.notice.untilMs ? ui.notice : null;
-  const focusState = !notice && !capture && ui.focus && (ui.focus.held || tick < ui.focus.untilTick) ? ui.focus : null;
+  const focusState = !notice && !capture && focusVisible(ui.focus, tick, now) ? ui.focus : null;
   const focus = focusState?.label ?? null;
   const header = figureHeader(project, context, focusState?.path ?? null) ?? (focus ? fullName(focus) : laneHeader(project, context, page));
   const vizLane: LaneId | null = isAux(context) ? null : context;

@@ -101,7 +101,7 @@ export interface PadSurface {
 }
 
 /**
- * Playing and morph-target pads share the same beat-locked blink. Target also shades
+ * Playing and morph-target pads share one blink. Target also shades
  * dark→dim→bright by morph progress. An empty journal/set still shows pad 0 as the
  * current working scene. Capture-hold and wheel-touch replace the grid with overlays.
  */
@@ -204,14 +204,14 @@ function pageLed(context: ContextId, index: number, current: boolean): Led {
   return { family: "yellow", color: pageGroupColor(context, index), blink: current };
 }
 
-/** Half-period in ticks for beat-locked blink (full on/off cycle = 1 quarter note). */
-export function blinkHalfPeriod(ppqn: number): number {
-  return ppqn / 2;
+/** Half a quarter note at this tempo, in milliseconds. The blink runs on the wall clock. */
+export function blinkHalfMs(tempo: number): number {
+  return Math.max(1, Math.round(30_000 / Math.max(1, tempo)));
 }
 
-export function ledColorAt(led: Led, tick: number, ppqn: number): number {
+export function ledColorAt(led: Led, now: number, tempo: number): number {
   if (!led.blink) return led.color;
-  const on = Math.floor(tick / blinkHalfPeriod(ppqn)) % 2 === 0;
+  const on = Math.floor(now / blinkHalfMs(tempo)) % 2 === 0;
   return on ? led.color : (led.blinkTo ?? LED.off);
 }
 
