@@ -368,6 +368,49 @@ describe("surface", () => {
     assert.equal(litRuns(lead), 1);
   });
 
+  it("fits the morph picture to the lane length and resizes it when that length changes", () => {
+    let project = defaultProject();
+    project.working.kick.gen1 = { ...project.working.kick.gen1, length: 16, hits: 1, rotate: 0, probability: 1 };
+    project.working.kick.gen2 = { ...project.working.kick.gen2, length: 0, hits: 0 };
+    project = record(project);
+    project.working.kick.gen1 = { ...project.working.kick.gen1, length: 12, hits: 1, rotate: 0, probability: 1 };
+    project.working.kick.gen2 = { ...project.working.kick.gen2, length: 0, hits: 0 };
+    project = record(project);
+    project.working = clone(project.journal[0].lanes);
+    project.transition = "slow";
+    project = launchScene(project, "002", 0);
+    const ui = { ...defaultUi(), context: "kick" as const };
+    const early = renderScreen(project, ui, 0, false);
+    const intoNextPass = renderScreen(project, ui, 20 * 48, true);
+    const still = renderScreen(project, ui, 20 * 48, false);
+    assert.equal(litRuns(early), 1);
+    assert.equal(runWidth(early), 7);
+    assert.equal(playheadColumn(still, intoNextPass), Math.floor((4 * 128) / 16));
+    const handed = renderScreen(applyMorph(project, (project.morph?.durationTicks ?? 0) * 0.95), ui, 0, false);
+    assert.equal(litRuns(handed), 1);
+    assert.equal(runWidth(handed), 9);
+  });
+
+  it("draws a phrase that is longer than the morph window at its own length", () => {
+    let project = defaultProject();
+    project.global.phrase = 1;
+    project.working.kick.gen1 = { ...project.working.kick.gen1, length: 38, hits: 1, rotate: 0, probability: 1 };
+    project.working.kick.gen2 = { ...project.working.kick.gen2, length: 0, hits: 0 };
+    project = record(project);
+    project.working.kick.gen1 = { ...project.working.kick.gen1, length: 38, hits: 1, rotate: 0, probability: 1 };
+    project.working.kick.gen2 = { ...project.working.kick.gen2, length: 0, hits: 0 };
+    project = record(project);
+    project.working = clone(project.journal[0].lanes);
+    project.transition = "medium";
+    project = launchScene(project, "002", 0);
+    const ui = { ...defaultUi(), context: "kick" as const };
+    const early = renderScreen(project, ui, 0, false);
+    const handed = renderScreen(applyMorph(project, (project.morph?.durationTicks ?? 0) / 2), ui, 0, false);
+    assert.equal(litRuns(early), 1);
+    assert.equal(runWidth(early), 2);
+    assert.equal(runWidth(handed), 2);
+  });
+
   it("wraps ratchet tails into the phrase so the playhead still reaches the end", () => {
     const project = defaultProject();
     project.working.kick.ratchet.count = modulated(1);
@@ -1052,6 +1095,27 @@ describe("surface", () => {
     assert.deepEqual(state.project.sets[0].sceneIds, ["002"]);
   });
 });
+
+function runWidth(screen: Screen): number {
+  let width = 0;
+  let on = false;
+  for (let x = 0; x < 128; x++) {
+    const lit = columnSpan(screen, x) > 0;
+    if (lit) width++;
+    else if (on) break;
+    on = lit;
+  }
+  return width;
+}
+
+function playheadColumn(still: Screen, moving: Screen): number {
+  for (let x = 0; x < 128; x++) {
+    for (let y = HEADER_H; y < HEADER_H + VIZ_H - 1; y++) {
+      if (pixel(still, x, y) !== pixel(moving, x, y)) return x;
+    }
+  }
+  return -1;
+}
 
 function litRuns(screen: Screen): number {
   let runs = 0;

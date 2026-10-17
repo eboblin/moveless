@@ -1,8 +1,8 @@
-import { morphWindow } from "../core/blend.ts";
+import { morphBarSide } from "../core/blend.ts";
 import { SIXTEENTH_TICKS } from "../core/clock.ts";
 import { phraseStepsOf } from "../core/events.ts";
 import { chordSymbol, degreeNumeral, pitchClassName, scaleShort, scaleTitle } from "../core/harmony.ts";
-import { chordFigure, endpointLanes, generatePhrase, laneSteps, restingChordToneLabel, restingOctave, restingPitchLabel } from "../core/phrase.ts";
+import { chordFigure, endpointLanes, endpointPhrases, generatePhrase, laneSteps, restingChordToneLabel, restingOctave, restingPitchLabel } from "../core/phrase.ts";
 import { evalModulated } from "../core/modulate.ts";
 import { isPitched, LANE_CODE, type CaptureDepth, type CaptureIntensity, type CaptureScope, type ContextId, type HarmonicEvent, type LaneId, type Phrase, type Project, type TimedEvent } from "../core/types.ts";
 import { DIGIT_H, displayAmount, type BigAmount, type DisplayAmount } from "./digits.ts";
@@ -431,35 +431,54 @@ function drawPhrase(pixels: Uint8Array, project: Project, phrase: Phrase, lane: 
 }
 
 /**
- * Bass and lead span the phrase so follow can see later chords. The lane page
- * shows one pass of this lane's generator ring, the pass the cursor is in.
+ * The page shows the mixed phrase at the length of the side that owns the
+ * downbeat. While the morph window is longer than that phrase, the picture
+ * advances one phrase per cursor pass. When the downbeat crosses, the length
+ * becomes the other side's phrase. A pattern longer than the voice window is
+ * drawn from that side's own phrase, at its own length.
  */
 function lanePicture(project: Project, phrase: Phrase, lane: LaneId, playhead: number): { steps: number; events: TimedEvent[]; playhead: number } {
   const full = Math.max(1, phrase.steps[lane]);
-  const events = phrase.lanes[lane];
-  if (!project.morph || !isPitched(lane)) return { steps: full, events, playhead };
-  const ring = generatorRing(project, lane, full);
-  if (ring >= full) return { steps: full, events, playhead };
+  const width = patternSteps(project, lane);
+  if (width == null) return { steps: full, events: phrase.lanes[lane], playhead };
+  if (width > full) {
+    const cursor = phraseCursor(project, playhead, width);
+    return { steps: width, events: sideEvents(project, lane, width), playhead: playhead < 0 ? -1 : cursor };
+  }
+  if (width === full) {
+    const cursor = phraseCursor(project, playhead, width);
+    return { steps: width, events: phrase.lanes[lane], playhead: playhead < 0 ? -1 : cursor };
+  }
   const cursor = phraseCursor(project, playhead, full);
-  const origin = Math.floor(cursor / ring) * ring;
+  const origin = Math.floor(cursor / width) * width;
   const originTick = origin * SIXTEENTH_TICKS;
-  const endTick = (origin + ring) * SIXTEENTH_TICKS;
+  const endTick = (origin + width) * SIXTEENTH_TICKS;
   const sliced: TimedEvent[] = [];
-  for (const event of events) {
+  for (const event of phrase.lanes[lane]) {
     if (event.tick < originTick || event.tick >= endTick) continue;
     sliced.push({ ...event, tick: event.tick - originTick });
   }
-  return { steps: ring, events: sliced, playhead: playhead < 0 ? -1 : cursor - origin };
+  return { steps: width, events: sliced, playhead: playhead < 0 ? -1 : cursor - origin };
 }
 
-function generatorRing(project: Project, lane: "bass" | "lead", cap: number): number {
-  const ends = endpointLanes(project);
-  if (!ends) return cap;
-  return morphWindow(
-    phraseStepsOf(ends.from[lane].gen1, ends.from[lane].gen2),
-    phraseStepsOf(ends.to[lane].gen1, ends.to[lane].gen2),
-    cap,
-  );
+/** Phrase length of the side that owns the downbeat. Chords stay on the shared phrase. */
+function patternSteps(project: Project, lane: LaneId): number | null {
+  if (!project.morph || lane === "chords") return null;
+  const trees = endpointLanes(project);
+  if (!trees) return null;
+  const useSource = project.lock[lane] || morphBarSide(project) === "src";
+  const tree = (useSource ? trees.from : trees.to)[lane];
+  if (!("gen1" in tree)) return null;
+  return Math.max(1, phraseStepsOf(tree.gen1, tree.gen2));
+}
+
+/** Endpoint events for a pattern the voice window had to crop. */
+function sideEvents(project: Project, lane: LaneId, steps: number): TimedEvent[] {
+  const phrases = endpointPhrases(project);
+  if (!phrases) return [];
+  const useSource = project.lock[lane] || morphBarSide(project) === "src";
+  const endTick = steps * SIXTEENTH_TICKS;
+  return (useSource ? phrases.from : phrases.to).lanes[lane].filter((event) => event.tick < endTick);
 }
 
 function phraseCursor(project: Project, playhead: number, steps: number): number {

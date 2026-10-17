@@ -148,10 +148,20 @@ function ensureEnds(project: Project, target: Lanes): EndSnap {
 
 /** Lane trees for the live morph, cloned only when the endpoint stamp misses. */
 export function endpointLanes(project: Project): { from: Lanes; to: Lanes } | null {
+  const snap = endSnap(project);
+  return snap ? { from: snap.from, to: snap.to } : null;
+}
+
+/** Phrases of the two morph ends, at each lane's own length. */
+export function endpointPhrases(project: Project): { from: Phrase; to: Phrase } | null {
+  const snap = endSnap(project);
+  return snap ? { from: snap.fromPhrase, to: snap.toPhrase } : null;
+}
+
+function endSnap(project: Project): EndSnap | null {
   const target = morphTarget(project);
   if (!target) return null;
-  const snap = ensureEnds(project, target.lanes);
-  return { from: snap.from, to: snap.to };
+  return ensureEnds(project, target.lanes);
 }
 
 function morphTarget(project: Project): Scene | undefined {

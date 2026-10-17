@@ -25,11 +25,10 @@ function gcd(a: number, b: number): number {
 }
 
 /**
- * Both phrases are snapshots. The whole bar plays one of them: the source
- * until the bar whose start has reached halfway, then the destination.
- * Every lane takes that same side, so bass still follows the chords it plays
- * with. A locked lane stays on the source. The chosen side is tiled into the
- * steady loop. Timbre still follows live t. Pitch stays on the event.
+ * Both phrases are snapshots, tiled into one steady loop. Beats hand over
+ * from the end of the bar toward the downbeat as live t rises, and every
+ * lane takes the same side for a beat. t = 0 is the source. A locked lane
+ * stays on the source. Timbre still follows live t. Pitch stays on the event.
  */
 export function blendPhrases(
   fromPhrase: Phrase,
@@ -48,27 +47,67 @@ export function blendPhrases(
     steps[lane] = morphWindow(fromPhrase.steps[lane], toPhrase.steps[lane], limit);
   }
   const tempo = project.global.tempo;
-  const source = barSide(project) === "src";
   const lanes = {} as Phrase["lanes"];
   for (const lane of LANES) {
-    const useSource = project.lock[lane] || source;
-    const phrase = useSource ? fromPhrase : toPhrase;
-    const events = tile(phrase.lanes[lane], phrase.steps[lane], steps[lane], tempo);
-    lanes[lane] = stampLane(events, fromLanes[lane].sound, toLanes[lane].sound, project, lane, t);
+    const fromEvents = tile(fromPhrase.lanes[lane], fromPhrase.steps[lane], steps[lane], tempo);
+    const chosen = project.lock[lane]
+      ? fromEvents
+      : pickBeats(fromEvents, tile(toPhrase.lanes[lane], toPhrase.steps[lane], steps[lane], tempo), project);
+    lanes[lane] = stampLane(chosen, fromLanes[lane].sound, toLanes[lane].sound, project, lane, t);
   }
-  const harmony = project.lock.chords || source ? fromPhrase.harmony : toPhrase.harmony;
-  return { lanes, harmony: harmony.slice(), steps };
+  const harmony = project.lock.chords
+    ? fromPhrase.harmony.slice()
+    : pickHarmony(fromPhrase.harmony, toPhrase.harmony, project);
+  return { lanes, harmony, steps };
 }
 
-/** Source through the bar before halfway. From the halfway bar, the destination. */
-function barSide(project: Project): "src" | "dst" {
+/**
+ * Side that owns the downbeat. It stays the source until the downbeat itself
+ * crosses, which is the last beat to move.
+ */
+export function morphBarSide(project: Project): "src" | "dst" {
   const morph = project.morph;
   if (!morph || morph.durationTicks <= 0) return "dst";
-  const bar = ticksPerBar(project.global.bar);
-  const now = morph.originTick + morph.t * Math.max(0, morph.durationTicks);
-  const barStart = Math.floor(now / bar) * bar;
-  const raw = (barStart - morph.originTick) / morph.durationTicks;
-  return raw < 0.5 ? "src" : "dst";
+  return morph.t > beatRank(0, project.global.bar) ? "dst" : "src";
+}
+
+/** Last beat of the bar crosses first. The downbeat crosses last, still before t = 1. */
+function beatRank(tick: number, beatsPerBar: number): number {
+  const beats = Math.max(1, Math.round(beatsPerBar));
+  const bar = ticksPerBar(beats);
+  const pos = ((tick % bar) + bar) % bar;
+  const beat = Math.min(beats - 1, Math.floor((pos * beats) / bar));
+  return (beats - 1 - beat + 0.5) / beats;
+}
+
+function tookDestination(project: Project, tick: number): boolean {
+  const morph = project.morph;
+  if (!morph || morph.durationTicks <= 0) return true;
+  return morph.t > beatRank(tick, project.global.bar);
+}
+
+function pickBeats(fromEvents: readonly TimedEvent[], toEvents: readonly TimedEvent[], project: Project): TimedEvent[] {
+  const out: TimedEvent[] = [];
+  for (const event of fromEvents) {
+    if (!tookDestination(project, event.tick)) out.push(event);
+  }
+  for (const event of toEvents) {
+    if (tookDestination(project, event.tick)) out.push(event);
+  }
+  out.sort((a, b) => a.tick - b.tick || a.note - b.note);
+  return out;
+}
+
+function pickHarmony(from: Phrase["harmony"], to: Phrase["harmony"], project: Project): Phrase["harmony"] {
+  const out: Phrase["harmony"] = [];
+  for (const event of from) {
+    if (!tookDestination(project, event.startTick)) out.push(event);
+  }
+  for (const event of to) {
+    if (tookDestination(project, event.startTick)) out.push(event);
+  }
+  out.sort((a, b) => a.startTick - b.startTick);
+  return out;
 }
 
 function tile(events: readonly TimedEvent[], nativeSteps: number, span: number, tempo: number): TimedEvent[] {
