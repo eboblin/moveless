@@ -20,19 +20,22 @@ export function writeControl(
 ): { project: Project; hold: DetentHold | null } {
   if (delta === 0) return { project, hold };
   const current = readControl(project, context, binding.path);
-  const stepped = stepKnob(current, binding, delta, hold);
+  const stepped = stepKnob(current, binding, delta, hold, Date.now());
   return { project: storeControl(project, context, binding, stepped.value), hold: stepped.hold };
 }
 
-/** Clicks the encoder must spend on a detent before the value moves off it. */
+/** Clicks the encoder must spend on a fresh detent before the value moves off it. */
 export const DETENT_CLICKS = 8;
+/** After this long on a detent, the next turn leaves with no extra clicks. */
+export const DETENT_REST_MS = 500;
 
-/** One encoder message. A detent catches a crossing step and holds for {@link DETENT_CLICKS} clicks. */
+/** One encoder message. A detent catches a crossing step and holds until it has rested. */
 export function stepKnob(
   current: number,
   binding: Binding,
   delta: number,
   hold: DetentHold | null,
+  now = 0,
 ): { value: number; hold: DetentHold | null } {
   const dir: -1 | 1 = delta > 0 ? 1 : -1;
   const ticks = Math.abs(delta);
@@ -40,16 +43,17 @@ export function stepKnob(
   if (!detents.length) return { value: clampKnob(current + delta * binding.step, binding), hold: null };
   const here = nearestDetent(current, detents, binding.step);
   if (here !== null) {
-    const left = hold?.path === binding.path && hold.dir === dir ? hold.left : DETENT_CLICKS;
-    if (ticks <= left) return { value: here, hold: { path: binding.path, dir, left: left - ticks } };
+    const rested = hold?.path === binding.path && now - hold.since > DETENT_REST_MS;
+    const left = rested ? 0 : hold?.path === binding.path && hold.dir === dir ? hold.left : DETENT_CLICKS;
+    if (ticks <= left) return { value: here, hold: { path: binding.path, dir, left: left - ticks, since: now } };
     const dest = clampKnob(here + dir * (ticks - left) * binding.step, binding);
     const caught = firstDetent(here, dest, detents);
-    if (caught !== null) return { value: caught, hold: { path: binding.path, dir, left: DETENT_CLICKS } };
+    if (caught !== null) return { value: caught, hold: { path: binding.path, dir, left: DETENT_CLICKS, since: now } };
     return { value: dest, hold: null };
   }
   const target = clampKnob(current + delta * binding.step, binding);
   const caught = firstDetent(current, target, detents);
-  if (caught !== null) return { value: caught, hold: { path: binding.path, dir, left: DETENT_CLICKS } };
+  if (caught !== null) return { value: caught, hold: { path: binding.path, dir, left: DETENT_CLICKS, since: now } };
   return { value: target, hold: null };
 }
 

@@ -25,6 +25,8 @@ export interface DetentHold {
   dir: -1 | 1;
   /** Clicks still to spend before this direction leaves the detent. */
   left: number;
+  /** Wall-clock time of the last turn that stayed on this detent. */
+  since: number;
 }
 
 export interface UiState {

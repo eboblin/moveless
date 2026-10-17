@@ -13,7 +13,7 @@ import { DIGIT_H, displayAmount, plotAmount } from "../src/ui/digits.ts";
 import { DIGIT_Y, FONT_H, HEADER_H, HEIGHT, NAME_Y, PAGER_Y, PARAM_COL_W, PARAM_H, SEP_Y, TITLE_Y, VALUE_Y, VIZ_H, pixel, renderScreen, type Screen } from "../src/ui/screen.ts";
 import { defaultUi, openSetMode } from "../src/ui/state.ts";
 import { reduce, relDelta, type Session } from "../src/ui/input.ts";
-import { DETENT_CLICKS, stepKnob } from "../src/ui/controls.ts";
+import { DETENT_CLICKS, DETENT_REST_MS, stepKnob } from "../src/ui/controls.ts";
 
 function session(): Session {
   return { project: defaultProject(), ui: defaultUi(), tick: 0, playing: false };
@@ -1335,7 +1335,7 @@ describe("virtual detents", () => {
     assert.equal(stepKnob(3, cycle, 7, null).value, 4);
     assert.equal(stepKnob(4, cycle, 7, null).value, 4);
     assert.equal(stepKnob(4, cycle, DETENT_CLICKS + 4, null).value, 8);
-    const turned = stepKnob(4, cycle, -1, { path: cycle.path, dir: 1, left: 0 });
+    const turned = stepKnob(4, cycle, -1, { path: cycle.path, dir: 1, left: 0, since: 0 });
     assert.equal(turned.value, 4);
     assert.equal(turned.hold?.dir, -1);
     assert.equal(turned.hold?.left, DETENT_CLICKS - 1);
@@ -1374,6 +1374,19 @@ describe("virtual detents", () => {
     const length = knob("gen1.length");
     assert.equal(length.detents, undefined);
     assert.equal(stepKnob(16, length, 1, null).value, 17);
+  });
+
+  it("leaves a rested detent on the next click", () => {
+    const cycle = knob("gen1.velocity.cycle");
+    const caught = stepKnob(3, cycle, 1, null, 0);
+    assert.equal(caught.value, 4);
+    const soon = stepKnob(4, cycle, 1, caught.hold, DETENT_REST_MS);
+    assert.equal(soon.value, 4);
+    const rested = stepKnob(4, cycle, 1, caught.hold, DETENT_REST_MS + 1);
+    assert.equal(rested.value, 5);
+    assert.equal(rested.hold, null);
+    const flick = stepKnob(4, cycle, 7, caught.hold, DETENT_REST_MS + 1);
+    assert.equal(flick.value, 8);
   });
 });
 
