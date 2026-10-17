@@ -62,6 +62,27 @@ describe("project persist", () => {
     assert.equal(parsed.project.working.bass.send.delay.value, 0);
   });
 
+  it("keeps the factory progression when an older file never stored one", () => {
+    const project = record(defaultProject());
+    const raw = JSON.parse(serializeStored(project, { context: "kick", page: 0, mode: "journal" })) as {
+      project: {
+        progression?: unknown;
+        working: { chords: { start?: number; count?: number } };
+        journal: { progression?: unknown; lanes: { chords: { start?: number } } }[];
+      };
+    };
+    delete raw.project.progression;
+    delete raw.project.journal[0].progression;
+    raw.project.working.chords.start = 3;
+    raw.project.working.chords.count = 6;
+    raw.project.journal[0].lanes.chords.start = 2;
+    const parsed = parseStored(JSON.stringify(raw));
+    assert.ok(parsed);
+    assert.equal(parsed.project.progression.start, defaultProject().progression.start);
+    assert.equal(parsed.project.progression.count, defaultProject().progression.count);
+    assert.equal(parsed.project.journal[0].progression.start, defaultProject().progression.start);
+  });
+
   it("clears morph and wander origin on parse", () => {
     const project = defaultProject();
     project.morph = {

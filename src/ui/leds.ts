@@ -5,7 +5,8 @@ import {
   CAPTURE_INTENSITIES,
   CAPTURE_SCOPES,
   isDrum,
-  LANES,
+  isLane,
+  STEPS,
   TRANSITIONS,
   WANDERS,
   type ContextId,
@@ -29,7 +30,7 @@ export const LED = {
 /** How bright the shared yellow intensity pads read: low, med, high. */
 const INTENSITY_SHADE = { soft: 0.2, medium: 0.5, hard: 1 } as const;
 
-export type LedFamily = "red" | "yellow" | "purple" | "green" | "lock" | "off";
+export type LedFamily = "red" | "yellow" | "purple" | "lock" | "off";
 
 export interface Led {
   family: LedFamily;
@@ -44,7 +45,6 @@ const COLOR: Record<LedFamily, number> = {
   red: LED.red,
   yellow: LED.yellow,
   purple: LED.purple,
-  green: 9,
   lock: LED.lock,
 };
 
@@ -68,16 +68,8 @@ export function auxLed(current: boolean): Led {
   return led("purple", current);
 }
 
-export function spaceLed(current: boolean): Led {
-  return led("green", current);
-}
-
 export function stepLeds(project: Project, context: ContextId): Led[] {
-  const out = LANES.map((lane) => stepLed(project, context, lane));
-  out.push(spaceLed(context === "space"));
-  out.push(auxLed(context === "mix"));
-  out.push(auxLed(context === "global"));
-  out.push(auxLed(context === "perf"));
+  const out = STEPS.map((id) => (isLane(id) ? stepLed(project, context, id) : auxLed(context === id)));
   while (out.length < 16) out.push(led("off", false));
   return out;
 }
@@ -101,7 +93,7 @@ export function trackLeds(project: Project, context: ContextId, page: number): L
 export interface PadSurface {
   wheelTouch?: boolean;
   captureHeld?: boolean;
-  heldLane?: LaneId | null;
+  heldContext?: ContextId | null;
   context?: ContextId;
   page?: number;
 }
@@ -117,7 +109,7 @@ export function padLeds(project: Project, mode: "journal" | "set", surface?: Pad
   if (surface?.captureHeld) return capturePadLeds(project);
   if (surface?.wheelTouch) return wheelPadLeds(project, context, page);
   const scenes = scenePadLeds(project, mode, tick);
-  if (surface?.heldLane) return pageOverlay(scenes, surface.heldLane, surface.heldLane === context ? page : -1);
+  if (surface?.heldContext) return pageOverlay(scenes, surface.heldContext, surface.heldContext === context ? page : -1);
   return scenes;
 }
 

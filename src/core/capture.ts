@@ -72,9 +72,6 @@ function weightFor(path: string): number {
   if (path.endsWith(".hits")) return 5;
   if (path.startsWith("gen") && path.endsWith(".length")) return 6;
   if (path === "follow") return 6;
-  if (path === "start" || path === "count" || path === "motion" || path === "length") return 6;
-  if (path === "mood" || path === "tension") return 3;
-  if (path === "variation" || path === "way") return 4;
   if (path.endsWith(".value")) {
     const id = path.split(".").at(-2) ?? "";
     return HEAVY_SOUND.has(id) ? 8 : 4;
@@ -302,26 +299,6 @@ type CaptureTarget =
   | { kind: "modulated"; key: string; path: string }
   | { kind: "scalar"; key: string; path: string };
 
-const CHORD_RANGE: Record<string, [number, number, boolean]> = {
-  start: [-7, 7, true],
-  count: [1, 16, true],
-  length: [0, 4, true],
-  motion: [0, 7, true],
-  variation: [0, 3, true],
-  mood: [0, 1, false],
-  tension: [0, 1, false],
-  way: [0, 3, true],
-};
-
-function rollChordScalar(key: string, unit: number): number {
-  const spec = CHORD_RANGE[key];
-  if (!spec) return unit;
-  const [min, max, integer] = spec;
-  const value = min + unit * (max - min);
-  if (!integer) return value;
-  return Math.max(min, Math.min(max, Math.round(value)));
-}
-
 function captureTarget(path: string): CaptureTarget | null {
   const euclid = /^(gen[12])\.(length|hits|rotate|probability|velocity(?:\.(?:value|pattern|cycle|amount))?)$/.exec(path);
   if (euclid) return { kind: "euclid", key: euclid[1], path: euclid[1] };
@@ -359,7 +336,7 @@ function applyCaptureTarget(
     return;
   }
   const unit = roll(target.path);
-  root[target.path] = target.path in CHORD_RANGE ? rollChordScalar(target.path, unit) : unit;
+  root[target.path] = unit;
 }
 
 function isEuclidGen(value: unknown): value is EuclidGen {
@@ -441,11 +418,6 @@ function randomizeNotes(
   chords.octave = touchModulated(chords.octave, intensity, depth);
   chords.rate = touchModulated(chords.rate, intensity, depth);
   chords.gate = touchModulated(chords.gate, intensity, depth);
-  if (!movesValues(depth)) return;
-  const plain = chords as unknown as Record<string, number>;
-  for (const key of Object.keys(CHORD_RANGE)) {
-    plain[key] = intensity === "clear" ? 0 : rollChordScalar(key, roll(key));
-  }
 }
 
 function randomizeSound(sound: Record<string, Modulated>, intensity: CaptureIntensity, depth: CaptureDepth): void {

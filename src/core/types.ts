@@ -2,8 +2,15 @@ export const LANES = ["kick", "snare", "hat", "perc", "bass", "lead", "chords"] 
 export type LaneId = (typeof LANES)[number];
 export type DrumId = "kick" | "snare" | "hat" | "perc";
 export type PitchedId = "bass" | "lead";
-export type AuxId = "space" | "mix" | "global" | "perf";
+export type AuxId = "aux";
 export type ContextId = LaneId | AuxId;
+
+/** Step buttons: the seven lanes, then one section button. */
+export const STEPS = [...LANES, "aux"] as const satisfies readonly ContextId[];
+
+export function isLane(id: ContextId): id is LaneId {
+  return (LANES as readonly string[]).includes(id);
+}
 
 export const DRUMS: readonly DrumId[] = ["kick", "snare", "hat", "perc"];
 export const PITCHED: readonly PitchedId[] = ["bass", "lead"];
@@ -16,10 +23,7 @@ export const LANE_CODE: Record<LaneId | AuxId, string> = {
   bass: "BAS",
   lead: "LEA",
   chords: "CHD",
-  space: "SPC",
-  mix: "MIX",
-  global: "GLB",
-  perf: "PFX",
+  aux: "AUX",
 };
 
 export type ModPatternId = number;
@@ -84,6 +88,26 @@ export interface Space {
   delay: SpaceDelay;
 }
 
+export const PROGRESSION_KEYS = ["start", "count", "length", "motion", "variation", "mood", "tension", "way"] as const;
+
+/** Chord walk for the whole pattern. Not a lane and not morphed. */
+export interface Progression {
+  /** Starting scale degree. */
+  start: number;
+  /** How many chords fill the phrase. */
+  count: number;
+  /** Base harmonic unit: 0 sixteenth, 1 eighth, 2 beat, 3 half bar, 4 bar. */
+  length: number;
+  /** Scale steps between chords. */
+  motion: number;
+  /** Pitch jitter and how many chords become passing. */
+  variation: number;
+  mood: number;
+  tension: number;
+  /** 0 up, 1 down, 2 alternate, 3 random from the seed. */
+  way: number;
+}
+
 export interface DrumLane {
   gen1: EuclidGen;
   gen2: EuclidGen;
@@ -108,20 +132,6 @@ export interface PitchedLane {
 }
 
 export interface ChordLane {
-  /** Starting scale degree. */
-  start: number;
-  /** How many chords fill the phrase. */
-  count: number;
-  /** Base harmonic unit: 0 sixteenth, 1 eighth, 2 beat, 3 half bar, 4 bar. */
-  length: number;
-  /** Scale steps between chords. */
-  motion: number;
-  /** Pitch jitter and how many chords become passing. */
-  variation: number;
-  mood: number;
-  tension: number;
-  /** 0 up, 1 down, 2 alternate, 3 random from the seed. */
-  way: number;
   /** 0 is the root of the current chord, 1 is its top tone. */
   tone: Modulated;
   /** Absolute octave 0..9, same scale as bass and lead. */
@@ -146,6 +156,8 @@ export interface Lanes {
 export interface Scene {
   id: string;
   lanes: Lanes;
+  /** Chord walk, recorded with the pattern. Heard as a whole, not blended. */
+  progression: Progression;
   /** Reverb and delay knobs, recorded with the pattern. */
   space: Space;
   /** Move pad color, assigned once when the scene is recorded. */
@@ -240,6 +252,8 @@ export interface Project {
   mute: Record<LaneId, boolean>;
   lock: Record<LaneId, boolean>;
   working: Lanes;
+  /** Heard chord walk. Record copies this into the scene. A morph keeps it until landing. */
+  progression: Progression;
   /** Heard reverb and delay. Record copies this into the scene. */
   space: Space;
   transition: TransitionId;

@@ -1,11 +1,13 @@
-import { defaultProject, defaultSpace } from "./defaults.ts";
+import { defaultProgression, defaultProject, defaultSpace } from "./defaults.ts";
 import { clone } from "./clone.ts";
 import {
   CAPTURE_DEPTHS,
   CAPTURE_INTENSITIES,
   CAPTURE_SCOPES,
   LANES,
+  PROGRESSION_KEYS,
   SCALE_IDS,
+  STEPS,
   TRANSITIONS,
   WANDERS,
   type CaptureDepth,
@@ -13,6 +15,7 @@ import {
   type CaptureScope,
   type ContextId,
   type Lanes,
+  type Progression,
   type Project,
   type Space,
   type TransitionId,
@@ -43,7 +46,7 @@ export interface HostFiles {
   write_file?: (path: string, content: string) => boolean;
 }
 
-const CONTEXTS: readonly ContextId[] = [...LANES, "space", "mix", "global", "perf"];
+const CONTEXTS: readonly ContextId[] = STEPS;
 
 /** Drop tick-bound runtime before save/load. */
 export function sanitizeProject(project: Project): Project {
@@ -123,6 +126,7 @@ function mergeProject(raw: Record<string, unknown>): Project {
     mute: { ...base.mute, ...(isRecord(raw.mute) ? (raw.mute as Project["mute"]) : {}) },
     lock: { ...base.lock, ...(isRecord(raw.lock) ? (raw.lock as Project["lock"]) : {}) },
     working: acceptLanes(raw.working),
+    progression: mergeProgression(base.progression, raw.progression),
     space: mergeSpace(base.space, raw.space),
     transition: asTransition(raw.transition) ?? base.transition,
     wander: raw.wander === null ? null : asWander(raw.wander) ?? base.wander,
@@ -155,6 +159,28 @@ function mergeUi(raw: unknown): StoredUi {
   const count = Math.max(1, pageCount(context));
   const page = Math.min(Math.max(0, asInt(raw.page, 0)), count - 1);
   return { context, page, mode };
+}
+
+const PROGRESSION_CLAMP: Record<(typeof PROGRESSION_KEYS)[number], [number, number, boolean]> = {
+  start: [-7, 7, true],
+  count: [1, 16, true],
+  length: [0, 4, true],
+  motion: [0, 7, true],
+  variation: [0, 3, true],
+  mood: [0, 1, false],
+  tension: [0, 1, false],
+  way: [0, 3, true],
+};
+
+function mergeProgression(base: Progression, raw: unknown): Progression {
+  if (!isRecord(raw)) return { ...base };
+  const merged = mergeKnown(base, raw) as Progression;
+  for (const key of PROGRESSION_KEYS) {
+    const [min, max, integer] = PROGRESSION_CLAMP[key];
+    const n = integer ? asInt(merged[key], base[key]) : asNumber(merged[key], base[key]);
+    merged[key] = clamp(n, min, max);
+  }
+  return merged;
 }
 
 function mergeSpace(base: Space, raw: unknown): Space {
@@ -191,7 +217,7 @@ function hasValue(value: unknown): boolean {
 /** Current lane shape only. Anything older is unreadable and stays at the factory lane. */
 function laneCurrent(id: (typeof LANES)[number], raw: unknown): boolean {
   if (!isRecord(raw)) return false;
-  if (id === "chords") return typeof raw.start === "number" && hasValue(raw.tone) && hasValue(raw.octave) && hasValue(raw.rate);
+  if (id === "chords") return hasValue(raw.tone) && hasValue(raw.octave) && hasValue(raw.rate);
   if (id === "bass" || id === "lead") return hasValue(raw.pitch) && hasValue(raw.octave);
   return isRecord(raw.gen1) && typeof raw.gen1.hits === "number" && isRecord(raw.ratchet) && hasValue(raw.ratchet.count);
 }
@@ -216,6 +242,7 @@ function acceptJournal(raw: unknown): Project["journal"] {
       id: scene.id,
       color: typeof scene.color === "number" ? scene.color : undefined,
       lanes: acceptLanes(scene.lanes),
+      progression: mergeProgression(defaultProgression(), scene.progression),
       space: mergeSpace(defaultSpace(), scene.space),
     });
   }

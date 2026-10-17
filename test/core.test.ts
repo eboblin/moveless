@@ -134,7 +134,7 @@ describe("euclid generator", () => {
     assert.equal(generatePhrase(project).lanes.kick.length, 0);
     const other = clone(project);
     other.nextSceneId = 99;
-    other.journal = [{ id: "ghost", lanes: clone(project.working), space: clone(project.space) }];
+    other.journal = [{ id: "ghost", lanes: clone(project.working), progression: clone(project.progression), space: clone(project.space) }];
     assert.deepEqual(generatePhrase(project).lanes.kick, generatePhrase(other).lanes.kick);
   });
 
@@ -369,22 +369,23 @@ describe("morph, journal, macros", () => {
     project.working.kick.gen1.rotate = 0;
     project.working.kick.sound.decay.value = 0;
     project.working.kick.sound.decay.amount = 0;
-    project.working.chords.start = 0;
+    project.progression.start = 0;
     project = record(project);
     project.working.kick.gen1.hits = 7;
     project.working.kick.gen1.rotate = 3;
     project.working.kick.sound.decay.value = 1;
     project.working.kick.sound.decay.amount = 0;
-    project.working.chords.start = 3;
+    project.progression.start = 3;
     project = record(project);
     project.working = clone(project.journal[0].lanes);
+    project.progression = clone(project.journal[0].progression);
     project.transition = "medium";
     project = launchScene(project, "002", 0);
     const duration = project.morph?.durationTicks ?? 0;
     const beats = project.global.bar;
     const barTicks = beats * 192;
     const start = generatePhrase({ ...project, morph: null, working: project.morph!.start });
-    const goal = generatePhrase({ ...project, morph: null, working: project.journal[1].lanes });
+    const goal = generatePhrase({ ...project, morph: null, working: project.journal[1].lanes, progression: project.journal[1].progression });
     assert.notDeepEqual(kickSig(start), kickSig(goal));
     assert.notDeepEqual(start.harmony.map((event) => event.root), goal.harmony.map((event) => event.root));
 
@@ -411,7 +412,7 @@ describe("morph, journal, macros", () => {
 
     const almost = generatePhrase(applyMorph(project, duration * 0.95));
     assert.deepEqual(kickSig(almost), kickSig(goal));
-    assert.deepEqual(almost.harmony.map((event) => event.root), goal.harmony.map((event) => event.root));
+    assert.deepEqual(almost.harmony.map((event) => event.root), start.harmony.map((event) => event.root));
 
     const fast = launchScene({ ...project, transition: "fast" }, "002", 0);
     const during = generatePhrase(applyMorph(fast, (fast.morph?.durationTicks ?? 0) * 0.5));
@@ -422,6 +423,7 @@ describe("morph, journal, macros", () => {
     const done = applyMorph(project, duration);
     assert.equal(done.morph, null);
     assert.deepEqual(kickSig(generatePhrase(done)), kickSig(goal));
+    assert.deepEqual(generatePhrase(done).harmony.map((event) => event.root), goal.harmony.map((event) => event.root));
   });
 
   it("keeps the drum loop length steady and glides a hit's decay", () => {
@@ -560,8 +562,8 @@ describe("morph, journal, macros", () => {
         item.working.kick.sound.pitch.value = 0.15;
         item.working.kick.sound.pitch.amount = 0;
         item.working.lead.pitch.value = 0.25;
-        item.working.chords.start = 0;
-        item.working.chords.mood = 0;
+        item.progression.start = 0;
+        item.progression.mood = 0;
       },
       (item) => {
         item.working.bass.pitch.value = 0.9;
@@ -576,8 +578,8 @@ describe("morph, journal, macros", () => {
         item.working.kick.sound.pitch.value = 0.85;
         item.working.kick.sound.pitch.amount = 0;
         item.working.lead.pitch.value = 0.85;
-        item.working.chords.start = 4;
-        item.working.chords.mood = 1;
+        item.progression.start = 4;
+        item.progression.mood = 1;
       },
     );
     const duration = project.morph?.durationTicks ?? 0;
@@ -607,7 +609,7 @@ describe("morph, journal, macros", () => {
       }
     };
     for (const lane of ["bass", "lead", "chords"] as const) {
-      assert.notDeepEqual(noteSig(start, lane), noteSig(goal, lane));
+      if (lane !== "chords") assert.notDeepEqual(noteSig(start, lane), noteSig(goal, lane));
       assert.deepEqual(noteSig(built, lane), noteSig(start, lane));
       assert.deepEqual(noteSig(almost, lane), noteSig(goal, lane));
       owns(early, 0.25, lane);
@@ -617,7 +619,7 @@ describe("morph, journal, macros", () => {
     assert.notDeepEqual(noteSig(early, "bass"), noteSig(goal, "bass"));
     assert.deepEqual(early.harmony.map((event) => event.root), start.harmony.map((event) => event.root));
     assert.deepEqual(late.harmony.map((event) => event.root), start.harmony.map((event) => event.root));
-    assert.deepEqual(almost.harmony.map((event) => event.root), goal.harmony.map((event) => event.root));
+    assert.deepEqual(almost.harmony.map((event) => event.root), start.harmony.map((event) => event.root));
     assert.ok(early.lanes.bass.length > 0);
     assert.ok(early.lanes.bass.every((event) => Math.abs(event.filter.cutoff - 0.25) < 1e-6));
     assert.ok(late.lanes.bass.every((event) => Math.abs(event.filter.cutoff - 0.75) < 1e-6));
@@ -687,6 +689,7 @@ function morphPair(setupA: (project: Project) => void, setupB: (project: Project
   setupB(project);
   project = record(project);
   project.working = clone(project.journal[0].lanes);
+  project.progression = clone(project.journal[0].progression);
   project.transition = "medium";
   return launchScene(project, "002", 0);
 }
@@ -720,8 +723,8 @@ describe("harmony", () => {
     project.working.bass.gen2.hits = 0;
     project.working.bass.pitch = modulated(0.5 + 1 / 14);
     project.working.bass.follow = 1;
-    project.working.chords.mood = 0;
-    project.working.chords.tension = 0;
+    project.progression.mood = 0;
+    project.progression.tension = 0;
     const followed = generatePhrase(project).lanes.bass[0].note;
     project.working.bass.follow = 0;
     const free = generatePhrase(project).lanes.bass[0].note;
@@ -756,9 +759,9 @@ describe("harmony", () => {
   it("follows the sounding chord tones, including chromatic ones off the scale", () => {
     const project = bar(defaultProject());
     project.global.scale = "minor";
-    project.working.chords.mood = 0;
-    project.working.chords.tension = 0;
-    project.working.chords.count = 1;
+    project.progression.mood = 0;
+    project.progression.tension = 0;
+    project.progression.count = 1;
     project.working.bass.follow = 1;
     project.working.bass.pitch = modulated(0.5 + 1 / 7);
     project.working.bass.gen1 = { ...project.working.bass.gen1, length: 16, hits: 4, rotate: 0 };
@@ -774,9 +777,9 @@ describe("harmony", () => {
   it("holds a block for the chord and repeats an arp inside it", () => {
     const project = bar(defaultProject(), 1);
     project.global.phrase = 1;
-    project.working.chords.count = 1;
-    project.working.chords.length = 4;
-    project.working.chords.variation = 0;
+    project.progression.count = 1;
+    project.progression.length = 4;
+    project.progression.variation = 0;
     const chordTicks = 16 * 48;
     project.working.chords.rate = modulated(0);
     project.working.chords.tone = modulated(1);
@@ -801,12 +804,12 @@ describe("harmony", () => {
   it("keeps a descending walk inside the selected octave", () => {
     const project = bar(defaultProject(), 1);
     project.global.phrase = 4;
-    project.working.chords.count = 8;
-    project.working.chords.motion = 1;
-    project.working.chords.way = 1;
-    project.working.chords.variation = 0;
+    project.progression.count = 8;
+    project.progression.motion = 1;
+    project.progression.way = 1;
+    project.progression.variation = 0;
     project.working.chords.rate = modulated(0);
-    project.working.chords.tension = 0.5;
+    project.progression.tension = 0.5;
     const notes = generatePhrase(project).lanes.chords.map((event) => event.note);
     assert.ok(notes.length > 8);
     const low = Math.min(...notes);
@@ -818,9 +821,9 @@ describe("harmony", () => {
   it("rereads rate and gate before the chord ends", () => {
     const project = bar(defaultProject(), 1);
     project.global.phrase = 1;
-    project.working.chords.count = 1;
-    project.working.chords.length = 4;
-    project.working.chords.variation = 0;
+    project.progression.count = 1;
+    project.progression.length = 4;
+    project.progression.variation = 0;
     const chordTicks = 16 * 48;
     project.working.chords.rate = modulated(0.5, 2, 16, 0.5);
     project.working.chords.gate = modulated(0.5);
@@ -862,14 +865,14 @@ describe("harmony", () => {
 
   it("fits chord lengths to the bar grid and shortens passing chords", () => {
     const project = defaultProject();
-    project.working.chords.count = 3;
-    project.working.chords.length = 4;
-    project.working.chords.variation = 0;
+    project.progression.count = 3;
+    project.progression.length = 4;
+    project.progression.variation = 0;
     const even = generatePhrase(project).harmony.map((event) => event.lengthTicks / 48);
     assert.equal(even.reduce((sum, length) => sum + length, 0), 64);
     assert.deepEqual(even, [16, 16, 32]);
-    project.working.chords.count = 4;
-    project.working.chords.variation = 3;
+    project.progression.count = 4;
+    project.progression.variation = 3;
     const passed = generatePhrase(project).harmony.map((event) => event.lengthTicks / 48);
     assert.equal(passed.reduce((sum, length) => sum + length, 0), 64);
     assert.ok(Math.min(...passed) < Math.max(...passed));
@@ -878,11 +881,11 @@ describe("harmony", () => {
 
   it("places every chord root on the selected key and mode", () => {
     const project = defaultProject();
-    project.working.chords.start = 0;
-    project.working.chords.motion = 1;
-    project.working.chords.way = 0;
-    project.working.chords.count = 7;
-    project.working.chords.variation = 0;
+    project.progression.start = 0;
+    project.progression.motion = 1;
+    project.progression.way = 0;
+    project.progression.count = 7;
+    project.progression.variation = 0;
     project.global.phrase = 4;
     project.global.bar = 4;
 
@@ -983,8 +986,9 @@ describe("capture, wander, sets", () => {
 
     const chords = setCaptureDepth(setCaptureIntensity(defaultProject(), "hard"), "generators");
     const chordNotes = captureLane(chords, "chords", "notes");
-    assert.equal(chordNotes.working.chords.start, chords.working.chords.start);
-    assert.equal(chordNotes.working.chords.count, chords.working.chords.count);
+    assert.equal(chordNotes.working.chords.tone.value, chords.working.chords.tone.value);
+    assert.notEqual(chordNotes.working.chords.tone.pattern, chords.working.chords.tone.pattern);
+    assert.equal(chordNotes.progression.start, chords.progression.start);
   });
 
   it("moves values and euclid shape but leaves pattern cycle amount when depth is values", () => {
@@ -1234,7 +1238,7 @@ describe("capture, wander, sets", () => {
     project = createSet(project, "A");
     for (let n = 0; n < 40; n++) {
       const id = String(200 + n);
-      project.journal.push({ id, lanes: clone(project.working), space: clone(project.space) });
+      project.journal.push({ id, lanes: clone(project.working), progression: clone(project.progression), space: clone(project.space) });
       project = addSceneToSet(project, project.activeSetId!, id);
     }
     assert.equal(project.sets[0].sceneIds.length, 32);

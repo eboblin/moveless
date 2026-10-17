@@ -21,6 +21,7 @@ import {
   isDrum,
   isPitched,
   LANES,
+  PROGRESSION_KEYS,
   QUALITY_SEMITONES,
   type ChordLane,
   type DrumLane,
@@ -32,6 +33,7 @@ import {
   type Lanes,
   type Phrase,
   type PitchedLane,
+  type Progression,
   type Project,
   type Scene,
   type TimedEvent,
@@ -105,6 +107,7 @@ function stampGlobal(mix: (n: number) => void, text: (s: string) => void, projec
     mix(project.macros[id] ?? 0);
   }
   for (const lane of LANES) mix(project.lock[lane] ? 1 : 0);
+  for (const key of PROGRESSION_KEYS) mix(project.progression[key]);
 }
 
 function idleStamp(project: Project): [number, number] {
@@ -226,9 +229,9 @@ export function chordToneIndex(unit: number, count: number): number {
 }
 
 /** Resting note of the chord tone knob: first chord, value only, no pattern. */
-export function restingChordToneLabel(lane: ChordLane, global: GlobalSettings): string {
+export function restingChordToneLabel(lane: ChordLane, progression: Progression, global: GlobalSettings): string {
   const steps = sixteenthSteps(global.phrase, global.bar);
-  const harm = generateHarmony(lane, global, steps)[0];
+  const harm = generateHarmony(progression, global, steps)[0];
   if (!harm) return "—";
   const scale = scaleOf(global.scale);
   const rootPc = mod(global.root + global.transpose, 12);
@@ -280,7 +283,7 @@ function phraseOf(project: Project, working: Lanes): Phrase {
   const bassSteps = laneSteps(working, "bass", global);
   const leadSteps = laneSteps(working, "lead", global);
   const chordSteps = sixteenthSteps(global.phrase, global.bar);
-  const harmony = generateHarmony(working.chords, global, Math.max(bassSteps, leadSteps, chordSteps));
+  const harmony = generateHarmony(project.progression, global, Math.max(bassSteps, leadSteps, chordSteps));
   const lanes = {} as Phrase["lanes"];
   const steps = {} as Phrase["steps"];
   for (const lane of LANES) {

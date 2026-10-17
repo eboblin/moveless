@@ -1,4 +1,4 @@
-import type { ContextId, LaneId, PageRef } from "../core/types.ts";
+import type { ContextId, PageRef } from "../core/types.ts";
 
 export type UiMode = "journal" | "set";
 
@@ -31,7 +31,7 @@ export interface UiState {
   captureGenerator: string | null;
   /** True after a page-pad capture during hold — release must not also group-reroll. */
   captureAction: boolean;
-  heldLane: LaneId | null;
+  heldContext: ContextId | null;
   heldPage: number | null;
   focus: Focus | null;
   notice: Notice | null;
@@ -62,7 +62,7 @@ export function defaultUi(): UiState {
     captureHeld: false,
     captureGenerator: null,
     captureAction: false,
-    heldLane: null,
+    heldContext: null,
     heldPage: null,
     focus: null,
     notice: null,
@@ -76,5 +76,5 @@ export function openSetMode(ui: UiState): UiState {
 }
 
 export function applyBookmark(ui: UiState, ref: PageRef): UiState {
-  return { ...ui, context: ref.context, page: ref.page, heldLane: null };
+  return { ...ui, context: ref.context, page: ref.page, heldContext: null };
 }

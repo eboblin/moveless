@@ -23,17 +23,6 @@ const EUCLID_KIND = {
   probability: "switch",
 } as const;
 
-const CHORD_PLAIN = {
-  start: "switch",
-  count: "switch",
-  length: "switch",
-  motion: "switch",
-  variation: "switch",
-  mood: "switch",
-  tension: "switch",
-  way: "switch",
-} as const;
-
 type Sink = (path: string, kind: MorphKind, value: number) => void;
 
 function emitMod(sink: Sink, prefix: string, value: Modulated, timbre: boolean): void {
@@ -87,9 +76,6 @@ function emitPitched(sink: Sink, id: string, lane: PitchedLane): void {
 }
 
 function emitChords(sink: Sink, lane: ChordLane): void {
-  for (const key of Object.keys(CHORD_PLAIN) as (keyof typeof CHORD_PLAIN)[]) {
-    sink(`chords.${key}`, CHORD_PLAIN[key], lane[key]);
-  }
   emitMod(sink, "chords.tone", lane.tone, false);
   emitMod(sink, "chords.octave", lane.octave, false);
   emitMod(sink, "chords.rate", lane.rate, false);

@@ -65,7 +65,7 @@ export function renderScreen(
   now = Date.now(),
   pixels: Uint8Array = new Uint8Array(WIDTH * HEIGHT),
 ): Screen {
-  const peek = ui.heldLane;
+  const peek = ui.heldContext;
   const context = peek ?? ui.context;
   const pageIndex = peek ? ui.heldPage ?? ui.page : ui.page;
   const pages = pagesFor(context);
@@ -77,24 +77,25 @@ export function renderScreen(
   const header = figureHeader(project, context, focusState?.path ?? null) ?? (focus ? fullName(focus) : laneHeader(project, context, page));
   const vizLane: LaneId | null = isAux(context) ? null : context;
   const generator = vizLane && focusState?.generator ? focusState.generator : null;
-  const mixer = !notice && !capture && context === "mix";
-  const viz = capture ? "capture" : notice ? "notice" : mixer ? "mixer" : generator ? "generator" : vizLane ? "phrase" : "none";
+  const mixer = !notice && !capture && page?.group === "mix";
+  const bars = !notice && !capture && page?.id === "prog";
+  const viz = capture ? "capture" : notice ? "notice" : mixer ? "mixer" : generator ? "generator" : vizLane || bars ? "phrase" : "none";
   pixels.fill(0);
   drawPager(pixels, Math.min(pageIndex, Math.max(0, pages.length - 1)), pages.length);
   if (!mixer) drawParamSeparator(pixels);
-  const chordRoll = vizLane === "chords" && page?.id !== "prog" && !capture;
-  const showPhrase = !notice && !mixer && !generator && !capture && vizLane !== null;
+  const chordRoll = vizLane === "chords" && !capture;
+  const showPhrase = !notice && !mixer && !generator && !capture && (vizLane !== null || bars);
   const phrase = showPhrase ? generatePhrase(project) : null;
   if (notice) fillViz(pixels);
   else if (mixer) drawMixer(pixels, project, focus);
   else if (generator) drawGenerator(pixels, project, context, generator, focusState?.showPattern ?? false, playing ? stepAt(project, tick) : -1);
+  else if (bars && phrase) drawChordBars(pixels, phrase, playing ? stepAt(project, tick) : -1);
   else if (chordRoll && phrase) drawChordRoll(pixels, phrase, playing ? stepAt(project, tick) : -1);
-  else if (vizLane === "chords" && phrase) drawChordBars(pixels, phrase, playing ? stepAt(project, tick) : -1);
   else if (vizLane && phrase) drawPhrase(pixels, project, phrase, vizLane, playing ? stepAt(project, tick) : -1);
   const labels = mixer
     ? [{ x: 1, y: 1, text: header.slice(0, LINE_LIMIT) }, ...mixerChannelLabels(project, focus)]
     : drawLabels(project, context, page, focus, header);
-  if (phrase && vizLane === "chords" && !chordRoll) labels.push(...chordNameLabels(project, phrase));
+  if (phrase && bars) labels.push(...chordNameLabels(project, phrase));
   if (notice) labels.push(...noticeLabels(notice.title, notice.value));
   if (capture) labels.push(...captureMenuLabels(project));
   const digits = mixer || !page ? [] : paramDigits(project, context, page, focus);
@@ -218,7 +219,7 @@ function centered(text: string): number {
 }
 
 function isAux(context: ContextId): context is AuxId {
-  return context === "space" || context === "mix" || context === "global" || context === "perf";
+  return context === "aux";
 }
 
 function laneTag(project: Project, context: ContextId): string {
@@ -580,10 +581,10 @@ function figureHeader(project: Project, context: ContextId, path: string | null)
   if ((context === "bass" || context === "lead" || context === "chords") && path === "octave.value") {
     return `OCT ${octaveNumber(readControl(project, context, "octave.value"))}`;
   }
-  if (context === "global" && path === "root") return pitchClassName(project.global.root);
-  if (context === "global" && path === "scale") return scaleTitle(project.global.scale);
+  if (path === "root") return pitchClassName(project.global.root);
+  if (path === "scale") return scaleTitle(project.global.scale);
   if (context !== "chords") return null;
-  if (path === "tone.value") return restingChordToneLabel(project.working.chords, project.global);
+  if (path === "tone.value") return restingChordToneLabel(project.working.chords, project.progression, project.global);
   if (path === "rate.value") return chordFigure(readControl(project, "chords", "rate.value")).label.slice(0, LINE_LIMIT);
   return null;
 }
@@ -594,12 +595,12 @@ function knobAmount(project: Project, context: ContextId, binding: Binding): Dis
     return { kind: "big", n: Math.abs(n), negative: n < 0 };
   }
   if (context === "chords" && binding.path === "tone.value") {
-    return { kind: "wide", text: restingChordToneLabel(project.working.chords, project.global), negative: false };
+    return { kind: "wide", text: restingChordToneLabel(project.working.chords, project.progression, project.global), negative: false };
   }
-  if (context === "global" && binding.path === "root") {
+  if (binding.path === "root") {
     return { kind: "wide", text: pitchClassName(project.global.root), negative: false };
   }
-  if (context === "global" && binding.path === "scale") {
+  if (binding.path === "scale") {
     return { kind: "wide", text: scaleShort(project.global.scale), negative: false };
   }
   return displayAmount(readControl(project, context, binding.path), binding);

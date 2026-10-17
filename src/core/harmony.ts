@@ -4,9 +4,9 @@ import { mod } from "./motif.ts";
 import {
   QUALITY_SEMITONES,
   SCALES,
-  type ChordLane,
   type GlobalSettings,
   type HarmonicEvent,
+  type Progression,
   type ScaleId,
 } from "./types.ts";
 
@@ -210,15 +210,15 @@ function walkSign(way: number, index: number, seed: number): number {
   return hash01(seed, "chords", "dir", index) < 0.5 ? -1 : 1;
 }
 
-export function generateHarmony(chords: ChordLane, global: GlobalSettings, steps: number): HarmonicEvent[] {
+export function generateHarmony(progression: Progression, global: GlobalSettings, steps: number): HarmonicEvent[] {
   const phraseSteps = sixteenthSteps(global.phrase, global.bar);
   const span = Math.max(phraseSteps, Math.round(steps));
-  const variation = Math.max(0, Math.min(3, Math.round(chords.variation)));
-  const lengths = chordLengths(chords.count, chords.length, variation, global.seed, span, global.bar);
-  const quality = qualityIndex(clamp01(chords.mood), clamp01(chords.tension));
-  const motion = Math.max(0, Math.min(7, Math.round(chords.motion)));
-  const way = Math.max(0, Math.min(3, Math.round(chords.way)));
-  let degree = Math.max(-7, Math.min(7, Math.round(chords.start)));
+  const variation = Math.max(0, Math.min(3, Math.round(progression.variation)));
+  const lengths = chordLengths(progression.count, progression.length, variation, global.seed, span, global.bar);
+  const quality = qualityIndex(clamp01(progression.mood), clamp01(progression.tension));
+  const motion = Math.max(0, Math.min(7, Math.round(progression.motion)));
+  const way = Math.max(0, Math.min(3, Math.round(progression.way)));
+  let degree = Math.max(-7, Math.min(7, Math.round(progression.start)));
   const events: HarmonicEvent[] = [];
   let step = 0;
   lengths.forEach((lengthSteps, index) => {

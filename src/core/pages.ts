@@ -1,4 +1,4 @@
-import { LANE_CODE, LANES, SCALE_IDS, SOUND, type ContextId, type LaneId } from "./types.ts";
+import { LANE_CODE, LANES, SCALE_IDS, SOUND, STEPS, type ContextId, type LaneId } from "./types.ts";
 
 export interface Binding {
   path: string;
@@ -135,7 +135,7 @@ function sendPage(): Page {
 
 export function lanePages(lane: LaneId): Page[] {
   if (lane === "chords") {
-    return [progPage(), playPage(), pair("tone", "TONE", "octave", "OCTAVE", "notes"), ...soundPages(SOUND.chords), filterPage(), sendPage()];
+    return [playPage(), pair("tone", "TONE", "octave", "OCTAVE", "notes"), ...soundPages(SOUND.chords), filterPage(), sendPage()];
   }
   const pitched = lane === "bass" || lane === "lead";
   return [
@@ -161,6 +161,15 @@ export function mixPage(): Page {
       num("master", "MASTER", 0, 1, 0.01),
     ]),
   };
+}
+
+export function progPages(): Page[] {
+  return [progPage()];
+}
+
+/** Progression, space, mixer, global, then the two macro pages. One pad row. */
+export function auxPages(): Page[] {
+  return [...progPages(), ...spacePages(), mixPage(), ...globalPages(), ...perfPages()];
 }
 
 export function spacePages(): Page[] {
@@ -259,15 +268,7 @@ const pageCache = new Map<ContextId, Page[]>();
 export function pagesFor(context: ContextId): Page[] {
   const hit = pageCache.get(context);
   if (hit) return hit;
-  const pages = context === "mix"
-    ? [mixPage()]
-    : context === "global"
-      ? globalPages()
-      : context === "perf"
-        ? perfPages()
-        : context === "space"
-          ? spacePages()
-          : lanePages(context);
+  const pages = context === "aux" ? auxPages() : lanePages(context);
   pageCache.set(context, pages);
   return pages;
 }
@@ -334,7 +335,7 @@ export function pageGroupColor(context: ContextId, index: number): number {
   return PAGE_GROUP_COLOR[pageGroup(context, index)];
 }
 
-const CATALOG: readonly ContextId[] = [...LANES, "space", "mix", "global", "perf"];
+const CATALOG: readonly ContextId[] = STEPS;
 
 /** First binding with this path. Ranges are the same on every lane that has the knob. */
 export function bindingFor(path: string): Binding | null {

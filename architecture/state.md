@@ -10,9 +10,9 @@
 
 - **Scene** — неизменяемый снимок семи lane. Идентификатор `001`, `002`, … При Record сцена получает псевдослучайный цвет пэда из яркой палитры Move, он хранится на сцене. Journal только дописывается.
 - **Working** — живой документ той же формы. Морф пишет в него. Энкодер пишет сразу и снимает это поле с морфа. Record копирует working.
-- **Project** — journal, sets (до 32 ссылок на сцены), mixer (7 уровней и master), global, macro offsets (ручки Perf FX), 4 bookmark'а, mute, lock, transition, wander, clipboard. В сцену это не входит.
+- **Project** — journal, sets (до 32 ссылок на сцены), mixer (7 уровней и master), global, macro offsets, 4 bookmark'а, mute, lock, transition, wander, clipboard. В сцену это не входит.
 
-`heard = clamp(stored + macroOffset)` считается в момент генерации фразы. Record offset не запекает. У locked lane offset не применяется. Perf FX пишет те же offsets: DENS сдвигает probability евклида, REP — repeat и ratchet count, RATE — ratchet rate и rate аккордов. Ключ без ручки, если он уже лежит в файле, по-прежнему применяется.
+`heard = clamp(stored + macroOffset)` считается в момент генерации фразы. Record offset не запекает. У locked lane offset не применяется. Страницы macro пишут те же offsets: DENS сдвигает probability евклида, REP — repeat и ratchet count, RATE — ratchet rate и rate аккордов. Ключ без ручки, если он уже лежит в файле, по-прежнему применяется.
 
 Mute убирает lane из слышимого выхода. Harmonic events Chords при mute остаются, bass и lead продолжают их читать.
 

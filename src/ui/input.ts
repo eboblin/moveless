@@ -21,7 +21,7 @@ import {
   toggleLock,
   toggleMute,
 } from "../core/performance.ts";
-import { CAPTURE_DEPTHS, CAPTURE_INTENSITIES, CAPTURE_SCOPES, LANES, MENU_CC, TRANSITIONS, WANDERS, type LaneId, type Project } from "../core/types.ts";
+import { CAPTURE_DEPTHS, CAPTURE_INTENSITIES, CAPTURE_SCOPES, isLane, LANES, MENU_CC, STEPS, TRANSITIONS, WANDERS, type LaneId, type Project } from "../core/types.ts";
 import { resetControl, writeControl } from "./controls.ts";
 import { bindingPaths, pageCount, pageGroup, pagesFor } from "../core/pages.ts";
 import { applyBookmark, focusHoldTicks, HOLD_MS, HOLD_TICKS, type Notice, type UiState } from "./state.ts";
@@ -83,44 +83,39 @@ function onCc(session: Session, cc: number, value: number, press: boolean): Sess
 }
 
 function onStep(session: Session, index: number, press: boolean): Session {
-  if (index < 7) {
-    const lane = LANES[index];
+  const step = STEPS[index];
+  if (!step) return session;
+  if (isLane(step)) {
     if (session.ui.deleteHeld && press) {
       return {
         ...session,
-        project: resetLane(session.project, lane),
-        ui: { ...session.ui, heldLane: lane },
+        project: resetLane(session.project, step),
+        ui: { ...session.ui, heldContext: step },
       };
     }
     if (session.ui.loopHeld && press) {
-      return { ...session, project: toggleLock(session.project, lane) };
+      return { ...session, project: toggleLock(session.project, step) };
     }
     if (session.ui.muteHeld && press) {
-      return { ...session, project: toggleMute(session.project, lane) };
+      return { ...session, project: toggleMute(session.project, step) };
     }
-    if (!press) {
-      if (session.ui.heldLane !== lane) return session;
-      const count = pageCount(lane);
-      const page = Math.min(session.ui.heldPage ?? session.ui.page, count - 1);
-      return {
-        ...session,
-        ui: {
-          ...session.ui,
-          heldLane: null,
-          heldPage: null,
-          context: lane,
-          page,
-        },
-      };
-    }
-    return { ...session, ui: { ...session.ui, heldLane: lane } };
   }
-  if (!press) return session;
-  if (index === 7) return { ...session, ui: { ...session.ui, context: "space", page: 0, heldLane: null } };
-  if (index === 8) return { ...session, ui: { ...session.ui, context: "mix", page: 0, heldLane: null } };
-  if (index === 9) return { ...session, ui: { ...session.ui, context: "global", page: 0, heldLane: null } };
-  if (index === 10) return { ...session, ui: { ...session.ui, context: "perf", page: 0, heldLane: null } };
-  return session;
+  if (!press) {
+    if (session.ui.heldContext !== step) return session;
+    const count = pageCount(step);
+    const page = Math.min(session.ui.heldPage ?? session.ui.page, count - 1);
+    return {
+      ...session,
+      ui: {
+        ...session.ui,
+        heldContext: null,
+        heldPage: null,
+        context: step,
+        page,
+      },
+    };
+  }
+  return { ...session, ui: { ...session.ui, heldContext: step } };
 }
 
 function onPad(session: Session, index: number, press: boolean): Session {
@@ -133,17 +128,16 @@ function onPad(session: Session, index: number, press: boolean): Session {
   if (session.ui.captureHeld) {
     return onCapturePad(session, row, col);
   }
-  if (session.ui.heldLane && (top || second)) {
+  if (session.ui.heldContext && (top || second)) {
     const page = top ? col : 8 + col;
-    const lane = session.ui.heldLane;
-    const count = pageCount(lane);
-    if (page >= count) return session;
-    return { ...session, ui: { ...session.ui, context: lane, page, heldPage: page } };
+    const held = session.ui.heldContext;
+    if (page >= pageCount(held)) return session;
+    return { ...session, ui: { ...session.ui, context: held, page, heldPage: page } };
   }
   if (session.ui.wheelTouch && top) {
     return selectPage(session, col);
   }
-  if (session.ui.wheelTouch && second && col < 2) {
+  if (session.ui.wheelTouch && second) {
     return selectPage(session, 8 + col);
   }
   if (session.ui.wheelTouch && bottom) {
@@ -258,13 +252,14 @@ function turnEncoder(session: Session, index: number, value: number): Session {
 
 /** Reroll one generator as soon as its encoder is touched or turned while Capture is held. */
 function captureFromEncoder(session: Session, path: string, held: boolean): Session | null {
-  const lane = session.ui.heldLane ?? session.ui.context;
-  if (lane === "global" || lane === "space") return null;
-  if (lane === "mix" || lane === "perf") {
-    const focusBinding = bindingByPath(lane, path) ?? { path, label: path };
+  const context = session.ui.heldContext ?? session.ui.context;
+  if (context === "aux") {
+    const kind = surfaceKind(path);
+    if (!kind) return null;
+    const focusBinding = bindingByPath(context, path) ?? { path, label: path };
     return {
       ...session,
-      project: captureSurface(session.project, lane, [path]),
+      project: captureSurface(session.project, kind, [path]),
       ui: {
         ...session.ui,
         captureGenerator: path,
@@ -274,10 +269,10 @@ function captureFromEncoder(session: Session, path: string, held: boolean): Sess
   }
   const target = generatorTarget(path);
   if (!target) return null;
-  const focusBinding = bindingByPath(session.ui.context, path) ?? { path, label: target };
+  const focusBinding = bindingByPath(context, path) ?? { path, label: target };
   return {
     ...session,
-    project: captureGenerator(session.project, lane, target),
+    project: captureGenerator(session.project, context, target),
     ui: {
       ...session.ui,
       captureGenerator: target,
@@ -320,15 +315,16 @@ function onCapture(session: Session, press: boolean): Session {
   if (press) {
     return { ...session, ui: { ...session.ui, captureHeld: true, captureGenerator: null, captureAction: false } };
   }
-  const lane = session.ui.heldLane ?? session.ui.context;
-  const rawPage = session.ui.heldLane ? session.ui.heldPage ?? session.ui.page : session.ui.page;
-  const page = Math.min(rawPage, Math.max(0, pageCount(lane) - 1));
+  const context = session.ui.heldContext ?? session.ui.context;
+  const rawPage = session.ui.heldContext ? session.ui.heldPage ?? session.ui.page : session.ui.page;
+  const page = Math.min(rawPage, Math.max(0, pageCount(context) - 1));
   const already = session.ui.captureGenerator || session.ui.captureAction;
   let project = session.project;
-  if (!already && (lane === "mix" || lane === "perf")) {
-    project = captureSurface(project, lane, surfacePaths(lane, project.captureScope, page));
-  } else if (lane !== "mix" && lane !== "global" && lane !== "perf" && lane !== "space" && !already) {
-    project = rerollCapture(project, lane, page);
+  if (!already && context === "aux") {
+    const surface = auxSurface(project.captureScope, page);
+    if (surface) project = captureSurface(project, surface.kind, surface.paths);
+  } else if (isLane(context) && !already) {
+    project = rerollCapture(project, context, page);
   }
   return {
     ...session,
@@ -345,14 +341,20 @@ function bindingByPath(context: Session["ui"]["context"], path: string) {
   return undefined;
 }
 
-function surfacePaths(context: "mix" | "perf", scope: Project["captureScope"], page: number): string[] {
-  const pages = pagesFor(context);
-  const ofPage = (index: number) => {
-    const current = pages[Math.min(index, Math.max(0, pages.length - 1))];
-    return current ? bindingPaths(current) : [];
-  };
-  if (scope === "page") return ofPage(page);
-  return pages.flatMap((_, index) => ofPage(index));
+function surfaceKind(path: string): "mix" | "perf" | null {
+  if (path.startsWith("macro.")) return "perf";
+  if (path === "master" || (LANES as readonly string[]).includes(path)) return "mix";
+  return null;
+}
+
+/** Mixer and macro pages of the section button. Progression, space and global stay put. */
+function auxSurface(scope: Project["captureScope"], page: number): { kind: "mix" | "perf"; paths: string[] } | null {
+  const pages = pagesFor("aux");
+  const current = pages[Math.min(page, Math.max(0, pages.length - 1))];
+  if (!current || (current.group !== "mix" && current.group !== "macro")) return null;
+  const kind = current.group === "mix" ? "mix" : "perf";
+  const chosen = scope === "page" ? [current] : pages.filter((item) => item.group === current.group);
+  return { kind, paths: chosen.flatMap((item) => bindingPaths(item)) };
 }
 
 function rerollCapture(project: Project, lane: LaneId, page: number): Project {

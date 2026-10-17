@@ -1,6 +1,6 @@
 import { ticksPerBar } from "./clock.ts";
 import { clone } from "./clone.ts";
-import { defaultSpace } from "./defaults.ts";
+import { defaultProgression, defaultSpace } from "./defaults.ts";
 import { fieldsOf, getPath, morphValue, setPath } from "./fields.ts";
 import { LANES, SPACE_DELAY, SPACE_REVERB, isDrum, isPitched, TRANSITION_BARS, type LaneId, type Lanes, type MorphState, type Project, type Scene, type Space, type TransitionId } from "./types.ts";
 
@@ -74,7 +74,15 @@ export function applyMorph(project: Project, tick: number): Project {
   const space = mergeSpace(project.morph.startSpace, target.space ?? defaultSpace(), project.space, t, punched);
   const done = tick >= project.morph.originTick && t >= 1;
   if (!done) return { ...project, working, space, morph: { ...project.morph, t } };
-  return { ...project, working, space, morph: null, activeSceneId: target.id, wanderPreviousTarget: target.id };
+  return {
+    ...project,
+    working,
+    space,
+    progression: clone(target.progression ?? defaultProgression()),
+    morph: null,
+    activeSceneId: target.id,
+    wanderPreviousTarget: target.id,
+  };
 }
 
 export function retarget(project: Project, scene: Scene, tick: number): Project {

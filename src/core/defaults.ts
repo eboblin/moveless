@@ -16,6 +16,7 @@ import {
   type PitchedLane,
   type Project,
   type GlobalSettings,
+  type Progression,
   type Space,
 } from "./types.ts";
 
@@ -173,7 +174,7 @@ function pitched(lane: "bass" | "lead", follow: number): PitchedLane {
   };
 }
 
-function chords(): ChordLane {
+export function defaultProgression(): Progression {
   return {
     start: 0,
     count: 4,
@@ -183,6 +184,11 @@ function chords(): ChordLane {
     mood: 0,
     tension: 0.15,
     way: 3,
+  };
+}
+
+function chords(): ChordLane {
+  return {
     tone: home("chords.tone", 0),
     octave: home("chords.octave", unitForOctave(4)),
     rate: home("chords.rate", 0),
@@ -268,6 +274,7 @@ export function defaultProject(): Project {
     mute,
     lock,
     working: defaultLanes(),
+    progression: defaultProgression(),
     space: defaultSpace(),
     transition: "fast",
     wander: null,

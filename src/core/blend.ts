@@ -66,10 +66,7 @@ export function blendPhrases(
       t,
     );
   }
-  const harmony = project.lock.chords
-    ? fromPhrase.harmony.slice()
-    : pickHarmony(fromPhrase.harmony, toPhrase.harmony, project);
-  return { lanes, harmony, steps };
+  return { lanes, harmony: fromPhrase.harmony, steps };
 }
 
 /**
@@ -106,18 +103,6 @@ function pickBeats(fromEvents: readonly TimedEvent[], toEvents: readonly TimedEv
     if (tookDestination(project, event.tick)) out.push(event);
   }
   out.sort((a, b) => a.tick - b.tick || a.note - b.note);
-  return out;
-}
-
-function pickHarmony(from: Phrase["harmony"], to: Phrase["harmony"], project: Project): Phrase["harmony"] {
-  const out: Phrase["harmony"] = [];
-  for (const event of from) {
-    if (!tookDestination(project, event.startTick)) out.push(event);
-  }
-  for (const event of to) {
-    if (tookDestination(project, event.startTick)) out.push(event);
-  }
-  out.sort((a, b) => a.startTick - b.startTick);
   return out;
 }
 
