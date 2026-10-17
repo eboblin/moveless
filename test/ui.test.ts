@@ -31,13 +31,17 @@ describe("pages and leds", () => {
     assert.equal(pageCount("kick"), 9);
     assert.equal(pageCount("bass"), 11);
     assert.equal(pageCount("lead"), 11);
-    assert.equal(pageCount("chords"), 8);
+    assert.equal(pageCount("chords"), 9);
+    assert.equal(pageGroup("chords", 0), "pattern");
     assert.equal(pageGroup("kick", 7), "fx");
     assert.equal(pageGroup("kick", 8), "fx");
     assert.equal(pageGroup("bass", 9), "fx");
     assert.equal(pageGroup("bass", 10), "fx");
-    assert.equal(pageGroup("chords", 6), "fx");
+    assert.equal(pageGroup("chords", 2), "notes");
+    assert.equal(pageGroupColor("chords", 2), 14);
+    assert.equal(lanePages("chords")[2]?.groups[0], "VEL");
     assert.equal(pageGroup("chords", 7), "fx");
+    assert.equal(pageGroup("chords", 8), "fx");
     assert.equal(pageGroupColor("kick", 7), 9);
     assert.equal(lanePages("bass").at(-1)?.groups[0], "REV");
     assert.equal(lanePages("bass").at(-1)?.groups[1], "DLY");
@@ -175,8 +179,10 @@ describe("pages and leds", () => {
     assert.equal(bass[16].color, 20);
     assert.equal(bass[17].color, 9);
     const chords = padLeds(project, "journal", { ...defaultUi(), wheelTouch: true, context: "chords" });
-    assert.equal(chords[24].color, 14);
+    assert.equal(chords[24].color, 3);
+    assert.equal(chords[26].color, 14);
     assert.equal(chords[28].color, 20);
+    assert.equal(chords[16].color, 9);
   });
 
   it("blinks the current pads on the wall clock at a quarter of the tempo", () => {
@@ -352,7 +358,7 @@ describe("surface", () => {
 
   it("edits the focused parameter and draws the phrase under a fixed header", () => {
     let state = session();
-    state.project.working.kick.gen1 = { ...state.project.working.kick.gen1, length: 16, hits: 4, rotate: 0, probability: 1 };
+    state.project.working.kick.gen1 = { ...state.project.working.kick.gen1, length: 15, hits: 4, rotate: 0, probability: 1 };
     state.project.working.kick.gen2.hits = 0;
     state = reduce(state, { kind: "cc", data1: 71, data2: 127 });
     assert.ok(state.project.working.kick.gen1.length < 16);
@@ -709,7 +715,7 @@ describe("surface", () => {
     assert.ok(pitchSpread(roll) > 1);
     assert.ok(columnSpan(roll, 0) > 1);
     assert.ok(columnSpan(roll, 0) < VIZ_H / 2);
-    const sound = renderScreen(project, { ...defaultUi(), context: "chords", page: 2 }, 0);
+    const sound = renderScreen(project, { ...defaultUi(), context: "chords", page: 3 }, 0);
     assert.equal(
       sound.labels.some((label) => label.y >= HEADER_H && label.y < HEADER_H + VIZ_H && /^[A-G]/.test(label.text)),
       false,
@@ -1371,9 +1377,12 @@ describe("virtual detents", () => {
     assert.deepEqual(knob("transpose").detents, [0]);
     assert.deepEqual(knob("start").detents, [0]);
 
-    const length = knob("gen1.length");
-    assert.equal(length.detents, undefined);
-    assert.equal(stepKnob(16, length, 1, null).value, 17);
+    assert.deepEqual(knob("gen1.length").detents, [1, 2, 4, 8, 16, 32, 64]);
+    assert.deepEqual(knob("gen2.length").detents, [1, 2, 4, 8, 16, 32, 64]);
+
+    const hits = knob("gen1.hits");
+    assert.equal(hits.detents, undefined);
+    assert.equal(stepKnob(16, hits, 1, null).value, 17);
   });
 
   it("leaves a rested detent on the next click", () => {

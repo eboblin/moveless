@@ -199,6 +199,7 @@ function chords(): ChordLane {
     octave: home("chords.octave", unitForOctave(4)),
     rate: home("chords.rate", 0),
     gate: home("chords.gate", 0.7),
+    velocity: home("chords.velocity", 0.85),
     sound: sound("chords"),
     filter: laneFilter("chords"),
     send: laneSend("chords"),

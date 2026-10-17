@@ -138,6 +138,8 @@ export interface ChordLane {
   octave: Modulated;
   rate: Modulated;
   gate: Modulated;
+  /** Loudness of each chord note. */
+  velocity: Modulated;
   sound: Record<string, Modulated>;
   filter: LaneFilter;
   send: LaneSend;

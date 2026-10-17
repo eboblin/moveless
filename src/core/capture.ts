@@ -169,7 +169,6 @@ function readNumber(root: unknown, path: string): number | null {
 export function captureLane(project: Project, lane: LaneId, scope: LaneCapture = "pattern"): Project {
   if (project.lock[lane]) return project;
   if (scope === "notes" && laneFamily(lane) === "drum") return project;
-  if (scope === "pattern" && laneFamily(lane) === "chords") return project;
   if (project.captureIntensity === "clear") return clearLane(project, lane, scope);
   let next = project;
   scopePages(lane, scope).forEach((paths, index) => {
@@ -186,7 +185,7 @@ function clearLane(project: Project, lane: LaneId, scope: LaneCapture): Project 
   const roll = (...parts: (string | number)[]) =>
     hash01(project.global.seed, "capture", nonce, lane, scope, intensity, depth, ...parts);
   if (scope === "all") {
-    if (lane !== "chords") randomizePattern(working, lane, roll, intensity, depth);
+    randomizePattern(working, lane, roll, intensity, depth);
     if (lane === "bass" || lane === "lead" || lane === "chords") randomizeNotes(working, lane, roll, intensity, depth);
     randomizeSound(working[lane].sound, intensity, depth);
     randomizeFilter(working[lane].filter, intensity, depth);
@@ -365,7 +364,12 @@ function randomizePattern(
   intensity: CaptureIntensity,
   depth: CaptureDepth,
 ): void {
-  if (lane === "chords") return;
+  if (lane === "chords") {
+    const chords = lanes.chords;
+    chords.rate = touchModulated(chords.rate, intensity, depth);
+    chords.gate = touchModulated(chords.gate, intensity, depth);
+    return;
+  }
   const target = lanes[lane];
   target.gen1 = touchEuclid(target.gen1, intensity, depth);
   target.gen2 = touchEuclid(target.gen2, intensity, depth);
@@ -400,8 +404,7 @@ function randomizeNotes(
   const chords = lanes.chords;
   chords.tone = touchModulated(chords.tone, intensity, depth);
   chords.octave = touchModulated(chords.octave, intensity, depth);
-  chords.rate = touchModulated(chords.rate, intensity, depth);
-  chords.gate = touchModulated(chords.gate, intensity, depth);
+  chords.velocity = touchModulated(chords.velocity, intensity, depth);
 }
 
 function randomizeSound(sound: Record<string, Modulated>, intensity: CaptureIntensity, depth: CaptureDepth): void {

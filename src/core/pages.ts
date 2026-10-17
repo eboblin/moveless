@@ -173,7 +173,7 @@ function powersOfTwo(min: number, max: number): number[] {
 }
 
 function detentsOf(path: string, min: number, max: number): readonly number[] | undefined {
-  if (path.endsWith(".cycle")) return powersOfTwo(min, max);
+  if (path.endsWith(".cycle") || path === "gen1.length" || path === "gen2.length") return powersOfTwo(min, max);
   if (path === "filter.cutoff.value" || path === "pitch.value") return [0.5];
   if (min < 0 && max > 0) return [0];
   return undefined;
@@ -297,8 +297,9 @@ function pitchedPages(lane: PitchedId): Page[] {
 
 function chordPages(): Page[] {
   return [
-    page("play", "PLAY", ["RATE", "GATE"], "notes", [...vpca("rate", "RATE"), ...vpca("gate", "GATE")]),
+    page("play", "PLAY", ["RATE", "GATE"], "pattern", [...vpca("rate", "RATE"), ...vpca("gate", "GATE")]),
     pair("tone", "TONE", "octave", "OCTAVE", "notes"),
+    page("velocity", "VEL", ["VEL", null], "notes", vpca("velocity", "VEL")),
     ...soundPages(SOUND.chords),
     filterPage(),
     sendPage(),

@@ -476,7 +476,7 @@ function chordAudio(
         sample,
         sampleOffset: sampleOffset(sample),
         note,
-        velocity: 0.85,
+        velocity: evalModulated(withMacro(lane.velocity, macro(macros, "velocity")), start / SIXTEENTH_TICKS),
         lengthTicks,
         step: Math.floor(harm.startTick / SIXTEENTH_TICKS),
         sound: rendered,
