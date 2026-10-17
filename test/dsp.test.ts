@@ -42,12 +42,12 @@ describe("dsp adapter", () => {
   });
 
   it("bypasses the lane filter at 50 and cuts lows or highs toward the ends", () => {
-    const dry = { low: 0.2, band: 0.4, inEnv: 0, outEnv: 0 };
+    const dry = { low: 0.2, band: 0.4 };
     assert.equal(filterSample(dry, 0.4, 0.5, 1), 0.4);
     assert.equal(dry.low, 0);
     assert.equal(dry.band, 0);
     const tone = (freq: number, cutoff: number) => {
-      const state = { low: 0, band: 0, inEnv: 0, outEnv: 0 };
+      const state = { low: 0, band: 0 };
       let energy = 0;
       for (let i = 0; i < 8000; i++) {
         const input = Math.sin((2 * Math.PI * freq * i) / 44100);
@@ -59,7 +59,7 @@ describe("dsp adapter", () => {
     assert.ok(tone(80, 0) < tone(80, 0.5) * 0.25);
     assert.ok(tone(8000, 1) < tone(8000, 0.5) * 0.25);
     const saw = (cutoff: number) => {
-      const state = { low: 0, band: 0, inEnv: 0, outEnv: 0 };
+      const state = { low: 0, band: 0 };
       let energy = 0;
       for (let i = 0; i < 8000; i++) {
         const input = ((i * 110) / 44100) % 1 * 2 - 1;
@@ -71,6 +71,34 @@ describe("dsp adapter", () => {
     const open = saw(0.5);
     assert.ok(saw(0.3) > open * 0.5);
     assert.ok(saw(0.8) > open * 0.5);
+  });
+
+  it("rings an acid peak on the low-pass corner without lifting the note under it", () => {
+    const sine = (freq: number, cutoff: number, resonance: number) => {
+      const state = { low: 0, band: 0 };
+      let energy = 0;
+      let peak = 0;
+      for (let i = 0; i < 12000; i++) {
+        const input = Math.sin((2 * Math.PI * freq * i) / 44100);
+        const out = filterSample(state, input, cutoff, resonance);
+        assert.ok(Number.isFinite(out));
+        if (i > 4000) {
+          energy += out * out;
+          peak = Math.max(peak, Math.abs(out));
+        }
+      }
+      return { energy, peak };
+    };
+    const shaped = 0.7 * 0.7;
+    const corner = 12000 * (90 / 12000) ** shaped;
+    const quiet = sine(corner, 0.85, 0).energy;
+    const mid = sine(corner, 0.85, 0.5).energy;
+    const acid = sine(corner, 0.85, 1);
+    assert.ok(mid > quiet * 4);
+    assert.ok(acid.energy > quiet * 8);
+    assert.ok(acid.peak < 2.3);
+    const under = sine(80, 0.85, 0).energy;
+    assert.ok(sine(80, 0.85, 1).energy < under * 4);
   });
 
   it("schedules the downbeat kick inside the first audio block", () => {

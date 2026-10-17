@@ -51,7 +51,7 @@ typedef struct {
     int lane;
     float phase, phase2, env, noise_env, freq, decay, noise_decay;
     float noise, drive, tone, pan, spread, snap, bright, bend, body, low, base;
-    float cutoff, resonance, flt, band, in_env, out_env;
+    float cutoff, resonance, flt, band;
     float env_k, noise_k, click_k, click_env, click_tau;
     int age, loop;
 } Drum;
@@ -59,7 +59,7 @@ typedef struct {
 typedef struct {
     int on;
     float phase, phase2, env, freq, shape, detune, fm, noise, cutoff, resonance, attack, release, width, gain, low, band;
-    float in_env, out_env, release_k;
+    float release_k;
     int age, left, lane, loop;
 } Note;
 
@@ -439,8 +439,6 @@ static void arm_drum(Engine *engine, int lane, int note, int velocity, const cha
     drum->low = 0;
     drum->flt = 0;
     drum->band = 0;
-    drum->in_env = 0;
-    drum->out_env = 0;
     drum->click_env = 1.0f;
     refresh_drum_env(drum);
     refresh_click(drum);
@@ -483,53 +481,53 @@ static Note *arm_note(Engine *engine, int note_num, int velocity, int ticks, con
     note->gain = velocity / 127.0f;
     note->low = 0;
     note->band = 0;
-    note->in_env = 0;
-    note->out_env = 0;
     refresh_release(note);
     stamp_note(engine, note);
     return note;
 }
 
-/* 0.5 is dry. Below that a high-pass, above it a low-pass. Distance from center is squared.
-   A slow envelope trims level back toward the input, capped so the stopband stays quiet. */
-static float filter_sample(float *low, float *band, float *in_env, float *out_env, float input, float cutoff, float resonance) {
+/* Peaks above the passband squash into a thick acid tone instead of a spike. */
+static float clip_peak(float x) {
+    float a = fabsf(x);
+    if (a <= 1.25f) return x;
+    float over = a - 1.25f;
+    float y = 1.25f + over / (1.0f + over);
+    return x < 0.0f ? -y : y;
+}
+
+/* 0.5 is dry. Below that a resonant high-pass, above it a resonant low-pass.
+   Distance from center is squared. Resonance is the peak on that corner (Q up to 14). */
+static float filter_sample(float *low, float *band, float input, float cutoff, float resonance) {
     float offset = cutoff - 0.5f;
     float amount = fabsf(offset) * 2.0f;
     if (amount > 1.0f) amount = 1.0f;
     if (amount < 1e-4f) {
-        float power = input * input;
         *low = 0;
         *band = 0;
-        *in_env = power;
-        *out_env = power;
         return input;
     }
     float shaped = amount * amount;
-    float reso = resonance * resonance * amount;
-    float base;
-    if (offset > 0.0f) {
-        float coef = 1.0f - shaped * 0.985f;
-        *low += (input - *low) * coef;
-        base = *low;
-    } else {
-        float coef = 0.015f + shaped * 0.905f;
-        *low += (input - *low) * coef;
-        base = input - *low;
-    }
-    if (reso <= 1e-4f) {
-        *band = 0;
-    } else {
-        float diff = input - *low;
-        *band += (diff - *band) * (0.08f + reso * 0.45f);
-        base += *band * reso * 4.0f;
-    }
-    *in_env += (input * input - *in_env) * 0.001f;
-    *out_env += (base * base - *out_env) * 0.001f;
-    float denom = *out_env > 1e-8f ? *out_env : 1e-8f;
-    float gain = sqrtf(*in_env / denom);
-    if (gain > 8.0f) gain = 8.0f;
-    if (gain < 0.25f) gain = 0.25f;
-    return base * gain;
+    int lp = offset > 0.0f;
+    float hz = lp ? 12000.0f * powf(90.0f / 12000.0f, shaped) : 40.0f * powf(7000.0f / 40.0f, shaped);
+    float reso = resonance;
+    if (reso < 0.0f) reso = 0.0f;
+    if (reso > 1.0f) reso = 1.0f;
+    float q = 0.707f * powf(14.0f / 0.707f, reso);
+    float nyq = SR * 0.45f;
+    if (hz > nyq) hz = nyq;
+    float g = tanf((TWO_PI * 0.5f) * hz / SR);
+    float k = 1.0f / q;
+    float a1 = 1.0f / (1.0f + g * (g + k));
+    float a2 = g * a1;
+    float a3 = g * a2;
+    float v3 = input - *low;
+    float v1 = a1 * *band + a2 * v3;
+    float v2 = *low + a2 * *band + a3 * v3;
+    *band = 2.0f * v1 - *band;
+    *low = 2.0f * v2 - *low;
+    float raw = lp ? v2 : input - k * v1 - v2;
+    float trim = lp ? 1.0f + shaped * 0.5f : 1.0f + shaped * 2.5f;
+    return clip_peak(raw * trim);
 }
 
 static float drum_sample(Engine *engine, Drum *drum) {
@@ -551,7 +549,7 @@ static float drum_sample(Engine *engine, Drum *drum) {
     float gain = 1.0f + drive * 8.0f;
     float driven = drum->low * gain;
     driven = driven / (1.0f + fabsf(driven));
-    float filtered = filter_sample(&drum->flt, &drum->band, &drum->in_env, &drum->out_env, driven, drum->cutoff, drum->resonance);
+    float filtered = filter_sample(&drum->flt, &drum->band, driven, drum->cutoff, drum->resonance);
     drum->env *= drum->env_k;
     drum->noise_env *= drum->noise_k;
     drum->click_env *= drum->click_k;
@@ -580,7 +578,7 @@ static void note_sample(Engine *engine, Note *note, float *left, float *right) {
     float noisy = primary;
     if (need_second) noisy += second * 0.35f * fabsf(det_off) * 2.0f;
     if (note->noise > 1e-3f) noisy += rng(engine) * note->noise * 0.85f;
-    float resonated = filter_sample(&note->low, &note->band, &note->in_env, &note->out_env, noisy, note->cutoff, note->resonance);
+    float resonated = filter_sample(&note->low, &note->band, noisy, note->cutoff, note->resonance);
     float attack_samples = 1.0f + note->attack * 0.2f * SR;
     /* Hold full level for the whole note. Release is the tail after that length. */
     if (note->left > 0 && (float)note->age < attack_samples) note->env = ((float)note->age + 1.0f) / attack_samples;

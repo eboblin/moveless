@@ -76,8 +76,6 @@ interface DrumVoice {
   resonance: number;
   flt: number;
   band: number;
-  inEnv: number;
-  outEnv: number;
   base: number;
   loop: number;
   envK: number;
@@ -107,8 +105,6 @@ interface NoteVoice {
   gain: number;
   low: number;
   band: number;
-  inEnv: number;
-  outEnv: number;
   lane: number;
   loop: number;
   releaseK: number;
@@ -323,8 +319,6 @@ function armDrum(drum: DrumVoice, event: BlockEvent | LoopEvent, pitch: number, 
   drum.low = 0;
   drum.flt = 0;
   drum.band = 0;
-  drum.inEnv = 0;
-  drum.outEnv = 0;
   drum.clickEnv = 1;
   refreshDrumEnv(drum);
   refreshClick(drum);
@@ -352,8 +346,6 @@ function armNote(engine: Engine, note: NoteVoice, event: BlockEvent | LoopEvent,
   note.gain = event.velocity / 127;
   note.low = 0;
   note.band = 0;
-  note.inEnv = 0;
-  note.outEnv = 0;
   refreshRelease(note);
   stampNote(engine, note);
 }
@@ -376,12 +368,10 @@ function drumSample(engine: Engine, drum: DrumVoice): number {
   drum.low += (mixed - drum.low) * coef;
   // Drive is squared so the top of the knob stays the smash zone, not a dead plateau.
   const driven = shapeDrive(drum.low, drum.drive * drum.drive);
-  const slot = { low: drum.flt, band: drum.band, inEnv: drum.inEnv, outEnv: drum.outEnv };
+  const slot = { low: drum.flt, band: drum.band };
   const filtered = filterSample(slot, driven, drum.cutoff, drum.resonance);
   drum.flt = slot.low;
   drum.band = slot.band;
-  drum.inEnv = slot.inEnv;
-  drum.outEnv = slot.outEnv;
 
   drum.env *= drum.envK;
   drum.noiseEnv *= drum.noiseK;
@@ -533,60 +523,50 @@ function refreshRelease(note: NoteVoice): void {
   note.releaseK = Math.exp(-1 / ((0.04 + note.release * 1.6) * SAMPLE_RATE));
 }
 
-/** ~23 ms. Slow enough that the trim does not reshape the wave. */
-const MAKEUP_K = 0.001;
-/** Stopband stays quiet. Eight times brings a thinned band back without undoing the cut. */
-const MAKEUP_MAX = 8;
-const MAKEUP_MIN = 0.25;
+const Q_MIN = 0.707;
+const Q_MAX = 14;
+
+/** Peaks above the passband squash into a thick acid tone instead of a spike. */
+function clipPeak(x: number): number {
+  const a = Math.abs(x);
+  if (a <= 1.25) return x;
+  const y = 1.25 + (a - 1.25) / (1 + (a - 1.25));
+  return x < 0 ? -y : y;
+}
 
 /**
- * One knob, two filters. 0.5 is dry. Below that a high-pass opens toward 0,
- * above it a low-pass closes toward 1. Distance from the center is squared.
- * Resonance is the band around that cutoff and falls silent at 0.5.
- * A slow envelope trims the result toward the input level so the lane does not
- * drop out of the mix. Drums keep this memory in `flt`, apart from the tone low-pass.
+ * One knob, two filters. 0.5 is dry. Below that a resonant high-pass opens
+ * toward 0, above it a resonant low-pass closes toward 1. Distance from the
+ * center is squared. Resonance is the peak on that corner: the top of the
+ * knob is an acid sweep, and that peak is not level-matched away.
+ * `low` and `band` are the two integrators. Drums keep them in `flt`/`band`,
+ * apart from the tone low-pass.
  */
-export function filterSample(
-  state: { low: number; band: number; inEnv: number; outEnv: number },
-  input: number,
-  cutoff: number,
-  resonance: number,
-): number {
+export function filterSample(state: { low: number; band: number }, input: number, cutoff: number, resonance: number): number {
   const offset = cutoff - 0.5;
   const amount = Math.min(1, Math.abs(offset) * 2);
   if (amount < 1e-4) {
     state.low = 0;
     state.band = 0;
-    const power = input * input;
-    state.inEnv = power;
-    state.outEnv = power;
     return input;
   }
   const shaped = amount * amount;
-  const reso = resonance * resonance * amount;
-  let base: number;
-  if (offset > 0) {
-    const coef = 1 - shaped * 0.985;
-    state.low += (input - state.low) * coef;
-    base = state.low;
-  } else {
-    const coef = 0.015 + shaped * 0.905;
-    state.low += (input - state.low) * coef;
-    base = input - state.low;
-  }
-  if (reso <= 1e-4) {
-    state.band = 0;
-  } else {
-    const diff = input - state.low;
-    state.band += (diff - state.band) * (0.08 + reso * 0.45);
-    base += state.band * reso * 4;
-  }
-  state.inEnv += (input * input - state.inEnv) * MAKEUP_K;
-  state.outEnv += (base * base - state.outEnv) * MAKEUP_K;
-  let gain = Math.sqrt(state.inEnv / Math.max(state.outEnv, 1e-8));
-  if (gain > MAKEUP_MAX) gain = MAKEUP_MAX;
-  if (gain < MAKEUP_MIN) gain = MAKEUP_MIN;
-  return base * gain;
+  const lp = offset > 0;
+  const hz = lp ? 12000 * (90 / 12000) ** shaped : 40 * (7000 / 40) ** shaped;
+  const q = Q_MIN * (Q_MAX / Q_MIN) ** Math.max(0, Math.min(1, resonance));
+  const g = Math.tan((Math.PI * Math.min(hz, SAMPLE_RATE * 0.45)) / SAMPLE_RATE);
+  const k = 1 / q;
+  const a1 = 1 / (1 + g * (g + k));
+  const a2 = g * a1;
+  const a3 = g * a2;
+  const v3 = input - state.low;
+  const v1 = a1 * state.band + a2 * v3;
+  const v2 = state.low + a2 * state.band + a3 * v3;
+  state.band = 2 * v1 - state.band;
+  state.low = 2 * v2 - state.low;
+  const raw = lp ? v2 : input - k * v1 - v2;
+  const trim = lp ? 1 + shaped * 0.5 : 1 + shaped * 2.5;
+  return clipPeak(raw * trim);
 }
 
 function evalMotion(motion: LaneMotion, step: number): number {
@@ -719,7 +699,7 @@ function emptyDrum(): DrumVoice {
   return {
     on: false, lane: 0, phase: 0, phase2: 0, env: 0, noiseEnv: 0, age: 0, freq: 0,
     decay: 0.2, noiseDecay: 0.15, noise: 0, drive: 0, tone: 0.5, pan: 0.5, spread: 0,
-    snap: 0, bright: 0.4, bend: 0, body: 1, low: 0, cutoff: 0.5, resonance: 0, flt: 0, band: 0, inEnv: 0, outEnv: 0, base: 0, loop: 0,
+    snap: 0, bright: 0.4, bend: 0, body: 1, low: 0, cutoff: 0.5, resonance: 0, flt: 0, band: 0, base: 0, loop: 0,
     envK: 1, noiseK: 1, clickK: 1, clickEnv: 1, clickTau: 10,
   };
 }
@@ -728,6 +708,6 @@ function emptyNote(): NoteVoice {
   return {
     on: false, phase: 0, phase2: 0, env: 0, age: 0, left: 0, freq: 0, shape: 0, detune: 0.5,
     fm: 0, noise: 0, cutoff: 0.5, resonance: 0, attack: 0, release: 0.4, width: 0, gain: 0,
-    low: 0, band: 0, inEnv: 0, outEnv: 0, lane: 0, loop: 0, releaseK: 1,
+    low: 0, band: 0, lane: 0, loop: 0, releaseK: 1,
   };
 }
