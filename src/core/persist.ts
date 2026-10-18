@@ -32,6 +32,8 @@ export interface StoredUi {
   context: ContextId;
   page: number;
   mode: "journal" | "set";
+  /** Transport. A file written before this field boots running. */
+  playing: boolean;
 }
 
 export interface StoredBundle {
@@ -63,7 +65,7 @@ export function serializeStored(project: Project, ui: StoredUi): string {
   return JSON.stringify({
     version: STORE_VERSION,
     project: sanitizeProject(project),
-    ui: { context: ui.context, page: ui.page, mode: ui.mode },
+    ui: { context: ui.context, page: ui.page, mode: ui.mode, playing: ui.playing },
   });
 }
 
@@ -159,13 +161,14 @@ function acceptClipboard(raw: Record<string, unknown>, journal: { id: string }[]
 }
 
 function mergeUi(raw: unknown): StoredUi {
-  const base: StoredUi = { context: "kick", page: 0, mode: "journal" };
+  const base: StoredUi = { context: "kick", page: 0, mode: "journal", playing: true };
   if (!isRecord(raw)) return base;
   const context = asContext(raw.context) ?? base.context;
   const mode = raw.mode === "set" || raw.mode === "journal" ? raw.mode : base.mode;
   const count = Math.max(1, pageCount(context));
   const page = Math.min(Math.max(0, asInt(raw.page, 0)), count - 1);
-  return { context, page, mode };
+  const playing = raw.playing === false ? false : true;
+  return { context, page, mode, playing };
 }
 
 const PROGRESSION_CLAMP: Record<(typeof PROGRESSION_KEYS)[number], [number, number, boolean]> = {

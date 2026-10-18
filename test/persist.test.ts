@@ -32,7 +32,7 @@ describe("project persist", () => {
     project = setCaptureDepth(setCaptureScope(setCaptureIntensity(project, "hard"), "lane"), "generators");
     project.working.kick.gen1.hits = 7;
     project = { ...project, sets: [{ id: "set-1", name: "A", sceneIds: ["001"] }], activeSetId: "set-1" };
-    const ui = { context: "bass" as const, page: 2, mode: "set" as const };
+    const ui = { context: "bass" as const, page: 2, mode: "set" as const, playing: false };
     const raw = serializeStored(project, ui);
     const parsed = parseStored(raw);
     assert.ok(parsed);
@@ -46,11 +46,12 @@ describe("project persist", () => {
     assert.equal(parsed.ui.context, "bass");
     assert.equal(parsed.ui.page, 2);
     assert.equal(parsed.ui.mode, "set");
+    assert.equal(parsed.ui.playing, false);
   });
 
   it("fills space and sends when an older project never stored them", () => {
     const project = defaultProject();
-    const raw = JSON.parse(serializeStored(project, { context: "kick", page: 0, mode: "journal" })) as {
+    const raw = JSON.parse(serializeStored(project, { context: "kick", page: 0, mode: "journal", playing: true })) as {
       project: { space?: unknown; working: { bass: { send?: unknown } } };
     };
     delete raw.project.space;
@@ -64,7 +65,7 @@ describe("project persist", () => {
 
   it("keeps the factory progression when an older file never stored one", () => {
     const project = record(defaultProject());
-    const raw = JSON.parse(serializeStored(project, { context: "kick", page: 0, mode: "journal" })) as {
+    const raw = JSON.parse(serializeStored(project, { context: "kick", page: 0, mode: "journal", playing: true })) as {
       project: {
         progression?: unknown;
         working: { chords: { start?: number; count?: number } };
@@ -96,7 +97,7 @@ describe("project persist", () => {
     };
     project.wander = "fast";
     project.wanderOriginTick = 999;
-    const parsed = parseStored(serializeStored(project, { context: "kick", page: 0, mode: "journal" }));
+    const parsed = parseStored(serializeStored(project, { context: "kick", page: 0, mode: "journal", playing: true }));
     assert.ok(parsed);
     assert.equal(parsed.project.morph, null);
     assert.equal(parsed.project.wander, "fast");
@@ -121,6 +122,7 @@ describe("project persist", () => {
     assert.ok(parsed.project.working.kick);
     assert.equal(parsed.ui.context, "snare");
     assert.equal(parsed.ui.page, 8);
+    assert.equal(parsed.ui.playing, true);
   });
 
   it("replaces an old chord lane with defaults", () => {
@@ -212,13 +214,13 @@ describe("project persist", () => {
   it("drops clipboard when the scene is gone", () => {
     const project = record(defaultProject());
     project.clipboardSceneIds = ["missing"];
-    const parsed = parseStored(serializeStored(project, { context: "kick", page: 0, mode: "journal" }));
+    const parsed = parseStored(serializeStored(project, { context: "kick", page: 0, mode: "journal", playing: true }));
     assert.ok(parsed);
     assert.deepEqual(parsed.project.clipboardSceneIds, []);
     const legacy = parseStored(JSON.stringify({
       version: 1,
       project: { ...project, clipboardSceneIds: undefined, clipboardSceneId: "001" },
-      ui: { context: "kick", page: 0, mode: "journal" },
+      ui: { context: "kick", page: 0, mode: "journal", playing: true },
     }));
     assert.deepEqual(legacy?.project.clipboardSceneIds, ["001"]);
   });
@@ -226,7 +228,7 @@ describe("project persist", () => {
   it("loads and saves through host file bindings", () => {
     const files = memoryFiles();
     const project = setCaptureIntensity(defaultProject(), "clear");
-    const ui = { context: "hat" as const, page: 1, mode: "journal" as const };
+    const ui = { context: "hat" as const, page: 1, mode: "journal" as const, playing: true };
     assert.equal(saveStoredProject(project, ui, files), true);
     assert.ok(PROJECT_PATH in files.store);
     const loaded = loadStoredProject(files);
