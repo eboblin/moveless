@@ -128,7 +128,7 @@ export interface PadSurface {
 }
 
 /**
- * Playing and morph-target pads share one blink. Target also shades
+ * Playing and morph-target pads share one pulse. Target also shades
  * dark→dim→bright by morph progress. An empty journal/set still shows pad 0 as the
  * current working scene. Capture-hold and wheel-touch replace the grid with overlays.
  */
@@ -289,13 +289,67 @@ function pageOverlay(base: Led[], context: ContextId, page: number): Led[] {
   return out;
 }
 
-/** The playing scene blinks between its colour and white. */
+/** The playing scene pulses between its colour and white. */
 function currentSceneLed(color: number): Led {
   return { family: "yellow", color, blink: true, blinkTo: LED.white };
 }
 
 function pageLed(context: ContextId, index: number, current: boolean): Led {
   return { family: "yellow", color: pageGroupColor(context, index), blink: current };
+}
+
+/**
+ * Pad MIDI. Channel 0 sets the colour and stops a pulse. Channel 9 is Push's
+ * pulsing quarter: the velocity is the other colour, and the device breathes
+ * between them for one quarter note. A second channel-0 message cuts the pulse,
+ * so the host must not repeat it while the pair is unchanged.
+ */
+const PAD_NOTE_ON = 0x90;
+const PAD_PULSE = 0x99;
+
+export function padPackets(note: number, led: Led): number[][] {
+  const rest: number[] = [0x09, PAD_NOTE_ON, note, led.color];
+  if (!led.blink) return [rest];
+  return [rest, [0x09, PAD_PULSE, note, led.blinkTo ?? LED.off]];
+}
+
+/** USB-MIDI realtime. Start resets the shared pulse phase; clock advances it one 24th. */
+const PULSE_START = [0x0f, 0xfa, 0x00, 0x00];
+const PULSE_CLOCK = [0x0f, 0xf8, 0x00, 0x00];
+
+export interface PulseClock {
+  started: boolean;
+  originMs: number;
+  sent: number;
+  tempo: number;
+}
+
+export const PULSE_CLOCK_IDLE: PulseClock = { started: false, originMs: 0, sent: 0, tempo: 0 };
+
+/**
+ * Keep every pad pulse on one wall-clock grid. A new pulse joins that phase,
+ * so opening Mute or Capture does not restart the breath. Start is sent only
+ * on a quarter boundary (and again after a tempo change); clocks are 24 per quarter.
+ */
+export function advancePulseClock(state: PulseClock, now: number, tempo: number): { state: PulseClock; packets: number[][] } {
+  const safe = Math.max(1, tempo);
+  const quarter = 60_000 / safe;
+  const step = quarter / 24;
+  if (!state.started || state.tempo !== safe) {
+    const into = now % quarter;
+    const nearStart = into <= step;
+    const nearEnd = quarter - into <= step;
+    if (!nearStart && !nearEnd) {
+      return { state: state.started ? { ...state, started: false, tempo: safe } : state, packets: [] };
+    }
+    const origin = nearStart ? now - into : now - into + quarter;
+    return { state: { started: true, originMs: origin, sent: 0, tempo: safe }, packets: [PULSE_START] };
+  }
+  const due = Math.floor((now - state.originMs) / step + 1e-6);
+  let count = due - state.sent;
+  if (count <= 0) return { state, packets: [] };
+  if (count > 4) count = 4;
+  return { state: { ...state, sent: state.sent + count }, packets: Array.from({ length: count }, () => PULSE_CLOCK) };
 }
 
 /** Half a quarter note at this tempo, in milliseconds. The blink runs on the wall clock. */

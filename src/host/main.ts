@@ -8,7 +8,7 @@ import { formatSpace } from "../dsp/space.ts";
 import { packPhraseBody } from "../dsp/voice.ts";
 import { reduce, type MidiMsg, type Session } from "../ui/input.ts";
 import { CAPTURE_CC, DOWN_CC, MENU_CC, MUTE_CC, PLAY_CC, UP_CC } from "../core/types.ts";
-import { blinkHalfMs, directionLit, ledColorAt, menuLed, modeButtonLed, padLeds, playLed, stepLeds, trackLeds } from "../ui/leds.ts";
+import { advancePulseClock, blinkHalfMs, directionLit, ledColorAt, menuLed, modeButtonLed, padLeds, padPackets, playLed, PULSE_CLOCK_IDLE, stepLeds, trackLeds, type PulseClock } from "../ui/leds.ts";
 import { plotAmount, plotMinus } from "../ui/digits.ts";
 import {
   CHAR_W,
@@ -148,7 +148,7 @@ function blit(pixels: Uint8Array): void {
 }
 
 let sentSteps: number[] = [];
-let sentPads: number[] = [];
+let sentPads: string[] = [];
 let sentTracks: number[] = [];
 let sentMenu = -1;
 let sentPlay = -1;
@@ -170,6 +170,7 @@ let ledProject: Project | null = null;
 let ledUi: UiState | null = null;
 let ledPlaying = false;
 let ledPeek: string | null = null;
+let pulseClock: PulseClock = PULSE_CLOCK_IDLE;
 
 function screenChanged(): boolean {
   const ui = session.ui;
@@ -299,10 +300,11 @@ function paintLeds(): void {
     host.move_midi_internal_send?.([0x0B, 0xB0, TRACK_CC + index, color]);
   });
   padLeds(session.project, session.ui.mode, session.ui, tick).forEach((led, index) => {
-    const color = ledColorAt(led, now, tempo);
-    if (sentPads[index] === color) return;
-    sentPads[index] = color;
-    host.move_midi_internal_send?.([0x09, 0x90, 68 + index, color]);
+    const packets = padPackets(68 + index, led);
+    const key = packets.map((packet) => packet.join(",")).join(";");
+    if (sentPads[index] === key) return;
+    sentPads[index] = key;
+    for (const packet of packets) host.move_midi_internal_send?.(packet);
   });
   const play = playLed(session.playing);
   if (sentPlay !== play) {
@@ -321,7 +323,16 @@ function paintLeds(): void {
   }
 }
 
+function paintPulseClock(): void {
+  const host = globalThis as HostGlobals;
+  if (!host.move_midi_internal_send) return;
+  const next = advancePulseClock(pulseClock, Date.now(), session.project.global.tempo);
+  pulseClock = next.state;
+  for (const packet of next.packets) host.move_midi_internal_send(packet);
+}
+
 function paint(): void {
+  paintPulseClock();
   if (screenChanged()) paintScreen();
   if (ledsChanged()) paintLeds();
 }
@@ -384,6 +395,7 @@ export function init(): void {
   ledUi = null;
   ledPlaying = false;
   ledPeek = null;
+  pulseClock = PULSE_CLOCK_IDLE;
   const host = globalThis as HostGlobals;
   host.set_font?.(MODULE_FONT);
   syncVoice(true);

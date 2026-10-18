@@ -8,7 +8,7 @@ import { applyMorph } from "../src/core/morph.ts";
 import { createSet, journalPadIds, journalPageCount, launchScene, record } from "../src/core/performance.ts";
 import { generatePhrase } from "../src/core/phrase.ts";
 import { bindingFor, lanePages, pageCount, pageGroup, pageGroupColor, pagesFor } from "../src/core/pages.ts";
-import { LED, blinkHalfMs, directionLit, ledColorAt, menuLed, modeButtonLed, offColor, padLeds, PLAY_LED_ON, playLed, shadeColor, stepLed, stepLeds, trackLeds } from "../src/ui/leds.ts";
+import { LED, advancePulseClock, blinkHalfMs, directionLit, ledColorAt, menuLed, modeButtonLed, offColor, padLeds, padPackets, PLAY_LED_ON, playLed, PULSE_CLOCK_IDLE, shadeColor, stepLed, stepLeds, trackLeds } from "../src/ui/leds.ts";
 import { DIGIT_H, displayAmount, plotAmount } from "../src/ui/digits.ts";
 import { DIGIT_Y, FONT_H, HEADER_H, HEIGHT, NAME_Y, PAGER_Y, PARAM_COL_W, PARAM_H, SEP_Y, TITLE_Y, VALUE_Y, VIZ_H, pixel, renderScreen, type Screen } from "../src/ui/screen.ts";
 import { defaultUi, HOLD_MS, HOLD_TICKS, openSetMode } from "../src/ui/state.ts";
@@ -198,7 +198,7 @@ describe("pages and leds", () => {
     assert.equal(chords[16].color, 9);
   });
 
-  it("blinks the current pads on the wall clock at a quarter of the tempo", () => {
+  it("pulses pads on the device and keeps the step blink on the wall clock", () => {
     assert.equal(playLed(true), PLAY_LED_ON);
     assert.equal(playLed(false), 0);
     assert.equal(modeButtonLed(true), PLAY_LED_ON);
@@ -206,26 +206,56 @@ describe("pages and leds", () => {
     const tempo = 120;
     const half = blinkHalfMs(tempo);
     assert.equal(half, 250);
+    const step = stepLed({ ...defaultProject(), wander: "fast" as const }, "kick", "kick");
+    assert.equal(step.blink, true);
+    assert.equal(ledColorAt(step, 0, tempo), step.color);
+    assert.equal(ledColorAt(step, half, tempo), step.blinkTo ?? LED.off);
+    assert.equal(ledColorAt(step, half * 2, tempo), step.color);
     const project = { ...defaultProject(), wander: "fast" as const };
     const wheel = padLeds(project, "journal", { wheelTouch: true, context: "kick", page: 0 });
     const capture = padLeds(project, "journal", { captureHeld: true });
-    const current = [
-      stepLed(project, "kick", "kick"),
-      padLeds(project, "journal")[0],
-      wheel[24],
-      wheel[1],
-      wheel[4],
-      capture[3],
-      capture[8],
-      capture[13],
-      capture[24],
-    ];
-    for (const lit of current) {
+    const pads = [
+      [68, padLeds(project, "journal")[0]],
+      [92, wheel[24]],
+      [69, wheel[1]],
+      [72, wheel[4]],
+      [71, capture[3]],
+      [76, capture[8]],
+      [81, capture[13]],
+      [92, capture[24]],
+    ] as const;
+    for (const [note, lit] of pads) {
       assert.equal(lit.blink, true);
-      assert.equal(ledColorAt(lit, 0, tempo), lit.color);
-      assert.equal(ledColorAt(lit, half, tempo), lit.blinkTo ?? LED.off);
-      assert.equal(ledColorAt(lit, half * 2, tempo), lit.color);
+      assert.deepEqual(padPackets(note, lit), [
+        [0x09, 0x90, note, lit.color],
+        [0x09, 0x99, note, lit.blinkTo ?? LED.off],
+      ]);
     }
+    const steady = padLeds(project, "journal")[1];
+    assert.equal(steady.blink, false);
+    assert.deepEqual(padPackets(69, steady), [[0x09, 0x90, 69, steady.color]]);
+  });
+
+  it("arms the shared pulse on a quarter and does not restart it mid-cycle", () => {
+    const quarter = 500;
+    const step = quarter / 24;
+    const mid = advancePulseClock(PULSE_CLOCK_IDLE, 100, 120);
+    assert.deepEqual(mid.packets, []);
+    assert.equal(mid.state.started, false);
+    const armed = advancePulseClock(PULSE_CLOCK_IDLE, 1000, 120);
+    assert.deepEqual(armed.packets, [[0x0f, 0xfa, 0x00, 0x00]]);
+    assert.equal(armed.state.originMs, 1000);
+    assert.equal(armed.state.sent, 0);
+    const held = advancePulseClock(armed.state, 1000 + step / 2, 120);
+    assert.deepEqual(held.packets, []);
+    const ticked = advancePulseClock(armed.state, 1000 + step + 0.1, 120);
+    assert.deepEqual(ticked.packets, [[0x0f, 0xf8, 0x00, 0x00]]);
+    assert.equal(ticked.state.sent, 1);
+    const again = advancePulseClock(ticked.state, 1000 + step + 0.1, 120);
+    assert.deepEqual(again.packets, []);
+    const retimed = advancePulseClock(ticked.state, 1000 + quarter / 2, 90);
+    assert.equal(retimed.state.started, false);
+    assert.deepEqual(retimed.packets, []);
   });
 });
 
