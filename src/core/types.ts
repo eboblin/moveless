@@ -206,6 +206,10 @@ export const WANDERS: readonly WanderId[] = ["fast", "medium", "slow", "glacial"
 export const MENU_CC = 50;
 /** Transport play. The button LED has one color: bright while running, dark when stopped. */
 export const PLAY_CC = 85;
+/** Mute peek. White button, bright while the peek is held or latched. */
+export const MUTE_CC = 88;
+/** Capture peek. White button, bright while the peek is held or latched. */
+export const CAPTURE_CC = 52;
 /** Loop. Runs one Capture pass with the stored depth, scope and intensity. */
 export const LOOP_CC = 58;
 /** White up/down buttons. Journal pages or sets, bright only when that neighbor exists. */

@@ -7,8 +7,8 @@ import { phraseLoop, soundMotions } from "../dsp/schedule.ts";
 import { formatSpace } from "../dsp/space.ts";
 import { packPhraseBody } from "../dsp/voice.ts";
 import { reduce, type MidiMsg, type Session } from "../ui/input.ts";
-import { DOWN_CC, MENU_CC, PLAY_CC, UP_CC } from "../core/types.ts";
-import { blinkHalfMs, directionLit, ledColorAt, menuLed, padLeds, playLed, stepLeds, trackLeds } from "../ui/leds.ts";
+import { CAPTURE_CC, DOWN_CC, MENU_CC, MUTE_CC, PLAY_CC, UP_CC } from "../core/types.ts";
+import { blinkHalfMs, directionLit, ledColorAt, menuLed, modeButtonLed, padLeds, playLed, stepLeds, trackLeds } from "../ui/leds.ts";
 import { plotAmount, plotMinus } from "../ui/digits.ts";
 import {
   CHAR_W,
@@ -152,6 +152,8 @@ let sentPads: number[] = [];
 let sentTracks: number[] = [];
 let sentMenu = -1;
 let sentPlay = -1;
+let sentMute = -1;
+let sentCapture = -1;
 let sentUp = -1;
 let sentDown = -1;
 const TRACK_CC = 40;
@@ -307,6 +309,16 @@ function paintLeds(): void {
     sentPlay = play;
     host.move_midi_internal_send([0x0B, 0xB0, PLAY_CC, play]);
   }
+  const mute = modeButtonLed(session.ui.muteHeld || session.ui.muteLatched);
+  if (sentMute !== mute) {
+    sentMute = mute;
+    host.move_midi_internal_send([0x0B, 0xB0, MUTE_CC, mute]);
+  }
+  const capture = modeButtonLed(session.ui.captureHeld || session.ui.captureLatched);
+  if (sentCapture !== capture) {
+    sentCapture = capture;
+    host.move_midi_internal_send([0x0B, 0xB0, CAPTURE_CC, capture]);
+  }
 }
 
 function paint(): void {
@@ -356,6 +368,8 @@ export function init(): void {
   sentTracks = [];
   sentMenu = -1;
   sentPlay = -1;
+  sentMute = -1;
+  sentCapture = -1;
   sentUp = -1;
   sentDown = -1;
   paintProject = null;

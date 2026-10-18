@@ -87,6 +87,11 @@ export function directionLit(index: number, count: number): { up: number; down: 
 /** Bright step of a single-color button. Play cannot take a palette color. */
 export const PLAY_LED_ON = 0x7c;
 
+/** Lit while a white-button mode is held or latched. */
+export function modeButtonLed(active: boolean): number {
+  return active ? PLAY_LED_ON : 0;
+}
+
 /** Lit while the transport runs, dark when it is stopped. */
 export function playLed(playing: boolean): number {
   return playing ? PLAY_LED_ON : 0;
@@ -184,7 +189,7 @@ function capturePadLeds(project: Project, surface: PadSurface): Led[] {
     out[8 + col] = { family: "yellow", color: DEPTH_COLOR[id], blink: project.captureDepth === id };
   });
   CAPTURE_SCOPES.forEach((id, col) => {
-    out[8 + CAPTURE_DEPTHS.length + col] = { family: "yellow", color: 3, blink: project.captureScope === id };
+    out[12 + col] = { family: "yellow", color: 3, blink: project.captureScope === id };
   });
   CAPTURE_INTENSITIES.forEach((id) => {
     const col = id === "clear" ? 0 : 2 + ["soft", "medium", "hard"].indexOf(id);

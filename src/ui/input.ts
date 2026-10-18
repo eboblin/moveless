@@ -23,7 +23,7 @@ import {
   toggleLock,
   toggleMute,
 } from "../core/performance.ts";
-import { CAPTURE_DEPTHS, CAPTURE_SCOPES, DOWN_CC, isLane, LANES, LOOP_CC, MENU_CC, PLAY_CC, STEPS, TRANSITIONS, UP_CC, WANDERS, type ContextId, type LaneId, type Project } from "../core/types.ts";
+import { CAPTURE_CC, CAPTURE_DEPTHS, CAPTURE_SCOPES, DOWN_CC, isLane, LANES, LOOP_CC, MENU_CC, MUTE_CC, PLAY_CC, STEPS, TRANSITIONS, UP_CC, WANDERS, type ContextId, type LaneId, type Project } from "../core/types.ts";
 import { resetControl, writeControl } from "./controls.ts";
 import { bindingFor, bindingPaths, mixerPage, pageCount, pageGroup, pagesFor } from "../core/pages.ts";
 import { applyBookmark, FOCUS_HOLD_MS, focusHoldTicks, HOLD_MS, HOLD_TICKS, holdIsShort, mutePeekOpen, peekKind, rememberPage, type Notice, type UiState } from "./state.ts";
@@ -59,7 +59,7 @@ function onNote(session: Session, note: number, press: boolean): Session {
 }
 
 function onCc(session: Session, cc: number, value: number, press: boolean): Session {
-  if (cc === 88) return onMute(session, press);
+  if (cc === MUTE_CC) return onMute(session, press);
   if (cc === SHIFT) return { ...session, ui: { ...session.ui, shiftHeld: press } };
   if (cc === MENU_CC && press) {
     const mode = session.ui.mode === "set" ? "journal" : "set";
@@ -70,7 +70,7 @@ function onCc(session: Session, cc: number, value: number, press: boolean): Sess
   }
   if (cc === 60) return onCopy(session, press);
   if (cc === 119) return { ...session, ui: { ...session.ui, deleteHeld: press } };
-  if (cc === 52) return onCapture(session, press);
+  if (cc === CAPTURE_CC) return onCapture(session, press);
   if (cc === LOOP_CC && press) return applyCapture(session);
   if (cc === 118 && press) return { ...session, project: recordInto(session.project, session.ui.mode === "set") };
   if (cc === PLAY_CC && press) return { ...session, playing: !session.playing };
@@ -186,8 +186,8 @@ function onCapturePad(session: Session, row: number, col: number): Session {
   if (row === 1 && col < CAPTURE_DEPTHS.length) {
     return markCapture(session, setCaptureDepth(session.project, CAPTURE_DEPTHS[col]));
   }
-  if (row === 1 && col >= CAPTURE_DEPTHS.length && col < CAPTURE_DEPTHS.length + CAPTURE_SCOPES.length) {
-    return markCapture(session, setCaptureScope(session.project, CAPTURE_SCOPES[col - CAPTURE_DEPTHS.length]));
+  if (row === 1 && col >= 4 && col < 4 + CAPTURE_SCOPES.length) {
+    return markCapture(session, setCaptureScope(session.project, CAPTURE_SCOPES[col - 4]));
   }
   if (row === 0 && col === 0) return markCapture(session, setCaptureIntensity(session.project, "clear"));
   if (row === 0 && col >= 2 && col <= 4) {
