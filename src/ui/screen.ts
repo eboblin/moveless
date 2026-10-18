@@ -88,7 +88,8 @@ export function renderScreen(
   const bars = !notice && !capture && !mixer && page?.id === "prog";
   const viz = capture ? "capture" : notice ? "notice" : mixer ? "mixer" : generator ? "generator" : vizLane || bars ? "phrase" : "none";
   pixels.fill(0);
-  drawPager(pixels, mixer ? 0 : Math.min(pageIndex, Math.max(0, pages.length - 1)), mixer ? 1 : pages.length);
+  const laneMark = (LANES as readonly ContextId[]).indexOf(context);
+  drawPager(pixels, mixer ? laneMark : Math.min(pageIndex, Math.max(0, pages.length - 1)), mixer ? MIX_CHANNELS.length : pages.length);
   if (!mixer) drawParamSeparator(pixels);
   const chordRoll = vizLane === "chords" && !capture;
   const showPhrase = !notice && !mixer && !generator && !capture && (vizLane !== null || bars);

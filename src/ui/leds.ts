@@ -135,7 +135,7 @@ export function padLeds(project: Project, mode: "journal" | "set", surface?: Pad
   const context = surface?.context ?? "kick";
   const page = surface?.page ?? 0;
   const kind = peekKind(surface ?? {});
-  if (kind === "mute") return mutePeekLeds(project, context);
+  if (kind === "mute") return mutePeekLeds(project);
   if (kind === "capture") return capturePadLeds(project, surface ?? {});
   if (surface?.wheelTouch) return wheelPadLeds(project, context, page);
   const scenes = scenePadLeds(project, mode, tick, surface?.journalPage ?? 0, surface?.copyHeld ?? false);
@@ -152,17 +152,16 @@ const PEEK_TONE = 8;
 const PEEK_LOCK = 22;
 const PEEK_DIM = 0.5;
 
-function mutePeekLeds(project: Project, context: ContextId): Led[] {
+function mutePeekLeds(project: Project): Led[] {
   const out = Array.from({ length: 32 }, () => led("off", false));
   LANES.forEach((lane, col) => {
-    const active = context === lane;
     const hue = isDrum(lane) ? PEEK_DRUM : PEEK_TONE;
     const muted = shadeColor(hue, project.mute[lane] ? PEEK_DIM : 1);
     const soloed = shadeColor(hue, project.solo[lane] ? 1 : PEEK_DIM);
     const locked = shadeColor(PEEK_LOCK, project.lock[lane] ? 1 : PEEK_DIM);
-    out[24 + col] = { family: "yellow", color: muted, blink: active, blinkTo: active ? offColor(hue) : undefined };
-    out[16 + col] = { family: "yellow", color: soloed, blink: active, blinkTo: active ? offColor(hue) : undefined };
-    out[8 + col] = { family: "purple", color: locked, blink: active, blinkTo: active ? offColor(PEEK_LOCK) : undefined };
+    out[24 + col] = { family: "yellow", color: muted, blink: false };
+    out[16 + col] = { family: "yellow", color: soloed, blink: false };
+    out[8 + col] = { family: "purple", color: locked, blink: false };
   });
   return out;
 }

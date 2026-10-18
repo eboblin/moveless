@@ -526,6 +526,14 @@ describe("surface", () => {
       assert.equal(pixel(screen, x, faderBottom), (x + faderBottom) % 2 === 0 ? 1 : 0);
     }
     assert.equal(pixel(screen, kickMid + 1, faderBottom), 1);
+    assert.equal(pixel(screen, 0, PAGER_Y), 1);
+    assert.equal(pixel(screen, 14, PAGER_Y), 1);
+    assert.equal(pixel(screen, 15, PAGER_Y), 0);
+    const bassMix = renderScreen(project, { ...openMutePeek({ project, ui: defaultUi(), tick: 0, playing: false }).ui, context: "bass" }, 0);
+    assert.equal(pixel(bassMix, 1, PAGER_Y), 0);
+    assert.equal(pixel(bassMix, 64, PAGER_Y), 1);
+    assert.equal(pixel(bassMix, 78, PAGER_Y), 1);
+    assert.equal(pixel(bassMix, 79, PAGER_Y), 0);
     const hatMid = 32 + 8;
     for (const x of [hatMid - 1, hatMid, hatMid + 1]) {
       assert.equal(pixel(screen, x, faderBottom), (x + faderBottom) % 2 === 0 ? 1 : 0);
@@ -710,7 +718,11 @@ describe("surface", () => {
     assert.equal(pixel(turned, 36, PAGER_Y), 1);
     assert.equal(pixel(turned, 37, PAGER_Y), 1);
     const mix = renderScreen(defaultProject(), openMutePeek(session()).ui, 0);
-    assert.ok([...Array(128).keys()].every((x) => pixel(mix, x, PAGER_Y) === 1));
+    assert.equal(pixel(mix, 0, PAGER_Y), 1);
+    assert.equal(pixel(mix, 14, PAGER_Y), 1);
+    assert.equal(pixel(mix, 15, PAGER_Y), 0);
+    assert.equal(pixel(mix, 16, PAGER_Y), 1);
+    assert.equal(pixel(mix, 17, PAGER_Y), 0);
     assert.equal(mix.viz, "mixer");
     assert.ok(mix.labels.some((label) => label.text === "KCK" && label.y === HEIGHT - FONT_H - 1));
     const bassProject = defaultProject();
@@ -1414,8 +1426,7 @@ describe("surface", () => {
     let state = openMutePeek(session());
     const leds = padLeds(state.project, "journal", state.ui);
     assert.equal(leds[24].color, 5);
-    assert.equal(leds[24].blink, true);
-    assert.equal(leds[24].blinkTo, offColor(5));
+    assert.equal(leds[24].blink, false);
     assert.equal(leds[25].blink, false);
     assert.equal(leds[31].color, 0);
     assert.equal(leds[0].color, 0);
