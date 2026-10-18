@@ -289,7 +289,7 @@ export function defaultProject(): Project {
     wanderOriginTick: 0,
     activeSceneId: null,
     morph: null,
-    clipboardSceneId: null,
+    clipboardSceneIds: [],
     captureNonce: 0,
     captureIntensity: "medium",
     captureScope: "group",

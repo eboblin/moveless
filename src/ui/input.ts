@@ -3,13 +3,14 @@ import {
   captureGenerator,
   capturePaths,
   captureSurface,
-  copyScene,
+  clampJournalPage,
   cycleSet,
   deleteSet,
   resetLane,
   launchScene,
   pasteClipboard,
-  record,
+  recordInto,
+  toggleClipboard,
   removeSceneFromJournal,
   removeSceneFromSet,
   journalPadIds,
@@ -21,10 +22,11 @@ import {
   toggleLock,
   toggleMute,
 } from "../core/performance.ts";
-import { CAPTURE_DEPTHS, CAPTURE_INTENSITIES, CAPTURE_SCOPES, isLane, MENU_CC, PLAY_CC, STEPS, TRANSITIONS, WANDERS, type LaneId, type Project } from "../core/types.ts";
+import { CAPTURE_DEPTHS, CAPTURE_INTENSITIES, CAPTURE_SCOPES, DOWN_CC, isLane, MENU_CC, PLAY_CC, STEPS, TRANSITIONS, UP_CC, WANDERS, type LaneId, type Project } from "../core/types.ts";
 import { resetControl, writeControl } from "./controls.ts";
 import { bindingFor, bindingPaths, pageCount, pageGroup, pagesFor } from "../core/pages.ts";
 import { applyBookmark, FOCUS_HOLD_MS, focusHoldTicks, HOLD_MS, HOLD_TICKS, rememberPage, type Notice, type UiState } from "./state.ts";
+import { journalPageCount } from "../core/journal.ts";
 
 export interface MidiMsg {
   kind: "note" | "cc";
@@ -70,15 +72,12 @@ function onCc(session: Session, cc: number, value: number, press: boolean): Sess
   if (cc === 60) return onCopy(session, press);
   if (cc === 119) return { ...session, ui: { ...session.ui, deleteHeld: press } };
   if (cc === 52) return onCapture(session, press);
-  if (cc === 118 && press) return { ...session, project: record(session.project) };
+  if (cc === 118 && press) return { ...session, project: recordInto(session.project, session.ui.mode === "set") };
   if (cc === PLAY_CC && press) return { ...session, playing: !session.playing };
   if (cc >= 71 && cc <= 78) return turnEncoder(session, cc - 71, value);
   if (cc === 14) return turnWheel(session, value);
   if (cc >= 40 && cc <= 43) return onTrack(session, cc - 40, press);
-  if ((cc === 54 || cc === 55) && press && session.ui.mode === "set") {
-    if (cc === 54 && session.ui.deleteHeld) return deleteActiveSet(session);
-    return { ...session, project: cycleSet(session.project, cc === 55 ? -1 : 1) };
-  }
+  if ((cc === DOWN_CC || cc === UP_CC) && press) return onArrow(session, cc === UP_CC ? -1 : 1);
   return session;
 }
 
@@ -152,7 +151,9 @@ function onPad(session: Session, index: number, press: boolean): Session {
       ui: { ...session.ui, notice: modeNotice("WANDER", project.wander ? project.wander.toUpperCase() : "OFF") },
     };
   }
-  const pads = session.ui.mode === "set" ? setPadIds(session.project) : journalPadIds(session.project);
+  const pads = session.ui.mode === "set"
+    ? setPadIds(session.project)
+    : journalPadIds(session.project, session.ui.journalPage);
   if (session.ui.deleteHeld) {
     const id = pads[index];
     if (!id) return session;
@@ -160,10 +161,17 @@ function onPad(session: Session, index: number, press: boolean): Session {
       if (!session.project.activeSetId) return session;
       return { ...session, project: removeSceneFromSet(session.project, session.project.activeSetId, id) };
     }
-    return { ...session, project: removeSceneFromJournal(session.project, id) };
+    const project = removeSceneFromJournal(session.project, id);
+    return { ...session, project, ui: { ...session.ui, journalPage: clampJournalPage(session.ui.journalPage, project.journal.length) } };
   }
-  if (session.ui.mode === "set" && session.ui.copyHeld) {
-    return { ...session, project: pasteClipboard(session.project) };
+  if (session.ui.copyHeld) {
+    const id = pads[index];
+    if (!id) return session;
+    return {
+      ...session,
+      project: toggleClipboard(session.project, id),
+      ui: { ...session.ui, copyPicked: true },
+    };
   }
   const sceneId = pads[index];
   if (!sceneId) return session;
@@ -370,11 +378,45 @@ function rerollCapture(project: Project, lane: LaneId, page: number): Project {
   return captureLane(project, lane, scope === "sound" || scope === "notes" || scope === "fx" ? scope : "pattern");
 }
 
+function onArrow(session: Session, direction: -1 | 1): Session {
+  if (session.ui.mode === "set") {
+    if (direction > 0 && session.ui.deleteHeld) return deleteActiveSet(session);
+    return { ...session, project: cycleSet(session.project, direction) };
+  }
+  const count = journalPageCount(session.project.journal.length);
+  const page = Math.max(0, Math.min(count - 1, session.ui.journalPage + direction));
+  return { ...session, ui: { ...session.ui, journalPage: page } };
+}
+
 function onCopy(session: Session, press: boolean): Session {
-  if (!press) return { ...session, ui: { ...session.ui, copyHeld: false } };
-  const newest = session.project.journal.at(-1);
-  const project = newest ? copyScene(session.project, newest.id) : session.project;
-  return { ...session, project, ui: { ...session.ui, copyHeld: true } };
+  if (press) {
+    return {
+      ...session,
+      project: { ...session.project, clipboardSceneIds: [] },
+      ui: {
+        ...session.ui,
+        copyHeld: true,
+        copyDownTick: session.tick,
+        copyDownMs: Date.now(),
+        copyPicked: false,
+        copySnapshot: session.project.clipboardSceneIds,
+      },
+    };
+  }
+  const heldTicks = session.ui.copyDownTick === null ? 0 : session.tick - session.ui.copyDownTick;
+  const heldMs = session.ui.copyDownMs === null ? 0 : Date.now() - session.ui.copyDownMs;
+  const short = heldTicks < HOLD_TICKS && heldMs < HOLD_MS;
+  const selecting = !short || session.ui.copyPicked;
+  let project = session.project;
+  if (!selecting) {
+    project = { ...project, clipboardSceneIds: session.ui.copySnapshot ?? [] };
+    if (session.ui.mode === "set") project = pasteClipboard(project);
+  }
+  return {
+    ...session,
+    project,
+    ui: { ...session.ui, copyHeld: false, copyDownTick: null, copyDownMs: null, copyPicked: false, copySnapshot: null },
+  };
 }
 
 function onTrack(session: Session, index: number, press: boolean): Session {

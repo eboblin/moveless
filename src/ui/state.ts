@@ -40,6 +40,15 @@ export interface UiState {
   loopHeld: boolean;
   shiftHeld: boolean;
   copyHeld: boolean;
+  /** Tick and wall clock when Copy went down, so a short click can paste. */
+  copyDownTick: number | null;
+  copyDownMs: number | null;
+  /** A pad was toggled during this Copy hold, so release must not also paste. */
+  copyPicked: boolean;
+  /** List from before this Copy press. A short click pastes it; a long press replaces it. */
+  copySnapshot: string[] | null;
+  /** Journal page. 0 is the newest 32 scenes. */
+  journalPage: number;
   deleteHeld: boolean;
   captureHeld: boolean;
   captureGenerator: string | null;
@@ -105,6 +114,11 @@ export function defaultUi(): UiState {
     loopHeld: false,
     shiftHeld: false,
     copyHeld: false,
+    copyDownTick: null,
+    copyDownMs: null,
+    copyPicked: false,
+    copySnapshot: null,
+    journalPage: 0,
     deleteHeld: false,
     captureHeld: false,
     captureGenerator: null,

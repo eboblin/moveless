@@ -1,5 +1,6 @@
 import { defaultProgression, defaultProject, defaultSpace } from "./defaults.ts";
 import { clone } from "./clone.ts";
+import { ensureTrailingEmpty } from "./journal.ts";
 import {
   CAPTURE_DEPTHS,
   CAPTURE_INTENSITIES,
@@ -53,9 +54,8 @@ export function sanitizeProject(project: Project): Project {
   const next = clone(project);
   next.morph = null;
   next.wanderOriginTick = 0;
-  if (next.clipboardSceneId && !next.journal.some((scene) => scene.id === next.clipboardSceneId)) {
-    next.clipboardSceneId = null;
-  }
+  const known = new Set(next.journal.map((scene) => scene.id));
+  next.clipboardSceneIds = next.clipboardSceneIds.filter((id) => known.has(id));
   return next;
 }
 
@@ -112,7 +112,7 @@ function mergeProject(raw: Record<string, unknown>): Project {
         return context ? { context, page: Math.max(0, page) } : null;
       })
     : base.bookmarks;
-  return {
+  return ensureTrailingEmpty({
     ...base,
     motifBankVersion: asInt(raw.motifBankVersion, base.motifBankVersion),
     nextSceneId: Math.max(1, asInt(raw.nextSceneId, base.nextSceneId)),
@@ -140,15 +140,22 @@ function mergeProject(raw: Record<string, unknown>): Project {
         ? (raw.activeSceneId as string | null)
         : base.activeSceneId,
     morph: null,
-    clipboardSceneId:
-      typeof raw.clipboardSceneId === "string" || raw.clipboardSceneId === null
-        ? (raw.clipboardSceneId as string | null)
-        : base.clipboardSceneId,
+    clipboardSceneIds: acceptClipboard(raw, acceptJournal(journal)),
     captureNonce: Math.max(0, asInt(raw.captureNonce, base.captureNonce)),
     captureIntensity: asIntensity(raw.captureIntensity) ?? base.captureIntensity,
     captureScope: asScope(raw.captureScope) ?? base.captureScope,
     captureDepth: asDepth(raw.captureDepth) ?? base.captureDepth,
-  };
+  });
+}
+
+function acceptClipboard(raw: Record<string, unknown>, journal: { id: string }[]): string[] {
+  const known = new Set(journal.map((scene) => scene.id));
+  const list = Array.isArray(raw.clipboardSceneIds)
+    ? raw.clipboardSceneIds
+    : typeof raw.clipboardSceneId === "string"
+      ? [raw.clipboardSceneId]
+      : [];
+  return list.filter((id): id is string => typeof id === "string" && known.has(id));
 }
 
 function mergeUi(raw: unknown): StoredUi {

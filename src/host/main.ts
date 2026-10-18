@@ -1,14 +1,14 @@
 import { SAMPLE_RATE } from "../core/clock.ts";
 import { defaultProject } from "../core/defaults.ts";
-import { advance } from "../core/performance.ts";
+import { advance, clampJournalPage, journalPageCount, wanderCandidates } from "../core/performance.ts";
 import { generatePhrase } from "../core/phrase.ts";
 import { loadStoredProject, saveStoredProject, type HostFiles, type StoredUi } from "../core/persist.ts";
 import { phraseLoop, soundMotions } from "../dsp/schedule.ts";
 import { formatSpace } from "../dsp/space.ts";
 import { packPhraseBody } from "../dsp/voice.ts";
 import { reduce, type MidiMsg, type Session } from "../ui/input.ts";
-import { MENU_CC, PLAY_CC } from "../core/types.ts";
-import { blinkHalfMs, ledColorAt, menuLed, padLeds, playLed, stepLeds, trackLeds } from "../ui/leds.ts";
+import { DOWN_CC, MENU_CC, PLAY_CC, UP_CC } from "../core/types.ts";
+import { blinkHalfMs, directionLit, ledColorAt, menuLed, padLeds, playLed, stepLeds, trackLeds } from "../ui/leds.ts";
 import { plotAmount, plotMinus } from "../ui/digits.ts";
 import {
   CHAR_W,
@@ -152,6 +152,8 @@ let sentPads: number[] = [];
 let sentTracks: number[] = [];
 let sentMenu = -1;
 let sentPlay = -1;
+let sentUp = -1;
+let sentDown = -1;
 const TRACK_CC = 40;
 const frame = new Uint8Array(WIDTH * HEIGHT);
 let paintProject: Project | null = null;
@@ -246,6 +248,15 @@ function paintScreen(): void {
   }
 }
 
+function arrowBrightness(): { up: number; down: number } {
+  if (session.ui.mode === "set") {
+    const index = session.project.sets.findIndex((set) => set.id === session.project.activeSetId);
+    return directionLit(Math.max(0, index), session.project.sets.length);
+  }
+  const count = journalPageCount(session.project.journal.length);
+  return directionLit(clampJournalPage(session.ui.journalPage, session.project.journal.length), count);
+}
+
 function paintLeds(): void {
   const host = globalThis as HostGlobals;
   if (!host.move_midi_internal_send) return;
@@ -258,10 +269,19 @@ function paintLeds(): void {
     sentSteps[index] = color;
     host.move_midi_internal_send?.([0x09, 0x90, 16 + index, color]);
   });
-  const menu = menuLed(session.ui.mode).color;
+  const menu = menuLed(session.ui.mode);
   if (sentMenu !== menu) {
     sentMenu = menu;
     host.move_midi_internal_send([0x0B, 0xB0, MENU_CC, menu]);
+  }
+  const arrows = arrowBrightness();
+  if (sentUp !== arrows.up) {
+    sentUp = arrows.up;
+    host.move_midi_internal_send([0x0B, 0xB0, UP_CC, arrows.up]);
+  }
+  if (sentDown !== arrows.down) {
+    sentDown = arrows.down;
+    host.move_midi_internal_send([0x0B, 0xB0, DOWN_CC, arrows.down]);
   }
   trackLeds(session.project, session.ui.context, session.ui.page).forEach((led, index) => {
     const color = ledColorAt(led, now, tempo);
@@ -303,7 +323,11 @@ function advanceClock(): void {
     session = { ...session, tick: session.tick + (dt / 1000) * SAMPLE_RATE / samplesPerTick };
   }
   const before = session.project;
-  session = { ...session, project: advance(session.project, session.tick) };
+  const journalPage = clampJournalPage(session.ui.journalPage, session.project.journal.length);
+  session = {
+    ...session,
+    project: advance(session.project, session.tick, wanderCandidates(session.project, session.ui.mode, journalPage)),
+  };
   markDirty(before);
   syncVoice(starting);
 }
@@ -325,6 +349,8 @@ export function init(): void {
   sentTracks = [];
   sentMenu = -1;
   sentPlay = -1;
+  sentUp = -1;
+  sentDown = -1;
   paintProject = null;
   paintUi = null;
   paintPlaying = false;

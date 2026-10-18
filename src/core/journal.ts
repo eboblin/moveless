@@ -48,9 +48,21 @@ function emptyPads(): (string | null)[] {
   return Array.from({ length: SET_CAPACITY }, () => null);
 }
 
-export function journalPadIds(project: Project): (string | null)[] {
+/** Page 0 is the newest window of 32. Higher pages are older. */
+export function journalPageCount(sceneCount: number): number {
+  return Math.max(1, Math.ceil(sceneCount / SET_CAPACITY));
+}
+
+export function clampJournalPage(page: number, sceneCount: number): number {
+  return Math.max(0, Math.min(page, journalPageCount(sceneCount) - 1));
+}
+
+export function journalPadIds(project: Project, page = 0): (string | null)[] {
   const slots = emptyPads();
-  project.journal.slice(-SET_CAPACITY).forEach((scene, index) => {
+  const clamped = clampJournalPage(page, project.journal.length);
+  const end = project.journal.length - clamped * SET_CAPACITY;
+  const start = Math.max(0, end - SET_CAPACITY);
+  project.journal.slice(start, end).forEach((scene, index) => {
     slots[index] = scene.id;
   });
   return slots;
@@ -72,6 +84,12 @@ export function sceneIdsForPads(project: Project): (string | null)[] {
   return journalPadIds(project);
 }
 
+/** Set mode stays inside the active set. Journal mode uses the page on screen. */
+export function wanderCandidates(project: Project, mode: "journal" | "set", journalPage = 0): (string | null)[] {
+  if (mode === "set") return setPadIds(project);
+  return journalPadIds(project, journalPage);
+}
+
 export function launchScene(project: Project, sceneId: string, tick: number): Project {
   const current = applyMorph(project, tick);
   const scene = current.journal.find((item) => item.id === sceneId);
@@ -88,7 +106,7 @@ export function pickWanderCandidate(ids: readonly string[], previous: string | n
   return use[index];
 }
 
-export function advance(project: Project, tick: number): Project {
+export function advance(project: Project, tick: number, candidates?: readonly (string | null)[]): Project {
   let next = applyMorph(project, tick);
   if (!next.wander) return next;
   const interval = WANDER_BARS[next.wander] * ticksPerBar(next.global.bar);
@@ -96,7 +114,8 @@ export function advance(project: Project, tick: number): Project {
   let guard = 0;
   while (tick - origin >= interval && guard < 8) {
     origin += interval;
-    const pick = pickWanderCandidate(sceneIdsForPads(next).filter((id): id is string => id !== null), next.wanderPreviousTarget, next.global.seed, origin);
+    const pool = candidates ?? sceneIdsForPads(next);
+    const pick = pickWanderCandidate(pool.filter((id): id is string => id !== null), next.wanderPreviousTarget, next.global.seed, origin);
     const scene = pick ? next.journal.find((item) => item.id === pick) : undefined;
     next = { ...next, wanderOriginTick: origin };
     if (scene) {
@@ -140,9 +159,44 @@ export function resetLane(project: Project, lane: LaneId): Project {
   return { ...project, working, morph: { ...project.morph, punched } };
 }
 
+function freshSetId(sets: { id: string }[]): string {
+  const used = new Set(sets.map((set) => set.id));
+  let n = sets.length + 1;
+  while (used.has(`set-${n}`)) n += 1;
+  return `set-${n}`;
+}
+
 export function createSet(project: Project, name: string): Project {
-  const set = { id: `set-${project.sets.length + 1}`, name, sceneIds: [] as string[] };
+  const id = freshSetId(project.sets);
+  const set = { id, name, sceneIds: [] as string[] };
   return { ...project, sets: [...project.sets, set], activeSetId: set.id };
+}
+
+/** One empty set after the last filled one. An empty project gets a single empty set and it becomes active. */
+export function ensureTrailingEmpty(project: Project): Project {
+  if (!project.sets.length) {
+    const set = { id: "set-1", name: "1", sceneIds: [] as string[] };
+    return { ...project, sets: [set], activeSetId: set.id };
+  }
+  const last = project.sets[project.sets.length - 1];
+  const sets = last.sceneIds.length > 0
+    ? [...project.sets, { id: freshSetId(project.sets), name: String(project.sets.length + 1), sceneIds: [] as string[] }]
+    : project.sets;
+  const activeSetId = project.activeSetId && sets.some((set) => set.id === project.activeSetId)
+    ? project.activeSetId
+    : sets[0].id;
+  if (sets === project.sets && activeSetId === project.activeSetId) return project;
+  return { ...project, sets, activeSetId };
+}
+
+/** Journal always. Set mode also links the new scene onto the active set. */
+export function recordInto(project: Project, intoSet: boolean): Project {
+  let next = record(project);
+  if (!intoSet) return next;
+  next = ensureTrailingEmpty(next);
+  const id = next.activeSceneId;
+  if (id && next.activeSetId) next = addSceneToSet(next, next.activeSetId, id);
+  return ensureTrailingEmpty(next);
 }
 
 export function cycleSet(project: Project, direction: number): Project {
@@ -152,14 +206,26 @@ export function cycleSet(project: Project, direction: number): Project {
   return { ...project, activeSetId: project.sets[next].id };
 }
 
-export function copyScene(project: Project, sceneId: string): Project {
+export function toggleClipboard(project: Project, sceneId: string): Project {
   if (!project.journal.some((scene) => scene.id === sceneId)) return project;
-  return { ...project, clipboardSceneId: sceneId };
+  const has = project.clipboardSceneIds.includes(sceneId);
+  return {
+    ...project,
+    clipboardSceneIds: has
+      ? project.clipboardSceneIds.filter((id) => id !== sceneId)
+      : [...project.clipboardSceneIds, sceneId],
+  };
 }
 
+/** Append marked scenes that still fit. Links already in the set are skipped. */
 export function pasteClipboard(project: Project): Project {
-  if (!project.clipboardSceneId || !project.activeSetId) return project;
-  return addSceneToSet(project, project.activeSetId, project.clipboardSceneId);
+  let next = project.activeSetId ? project : ensureTrailingEmpty(project);
+  const setId = next.activeSetId;
+  if (!setId) return next;
+  for (const id of next.clipboardSceneIds) next = addSceneToSet(next, setId, id);
+  const placed = new Set(next.sets.find((set) => set.id === setId)?.sceneIds ?? []);
+  next = { ...next, clipboardSceneIds: next.clipboardSceneIds.filter((id) => !placed.has(id)) };
+  return ensureTrailingEmpty(next);
 }
 
 export function addSceneToSet(project: Project, setId: string, sceneId: string): Project {
@@ -191,7 +257,7 @@ export function removeSceneFromJournal(project: Project, sceneId: string): Proje
       ...set,
       sceneIds: set.sceneIds.filter((id) => id !== sceneId),
     })),
-    clipboardSceneId: project.clipboardSceneId === sceneId ? null : project.clipboardSceneId,
+    clipboardSceneIds: project.clipboardSceneIds.filter((id) => id !== sceneId),
     activeSceneId: project.activeSceneId === sceneId ? null : project.activeSceneId,
     wanderPreviousTarget: project.wanderPreviousTarget === sceneId ? null : project.wanderPreviousTarget,
     morph: project.morph?.targetId === sceneId ? null : project.morph,
@@ -201,7 +267,7 @@ export function removeSceneFromJournal(project: Project, sceneId: string): Proje
 export function deleteSet(project: Project, setId: string): Project {
   const sets = project.sets.filter((set) => set.id !== setId);
   const activeSetId = project.activeSetId === setId ? (sets[0]?.id ?? null) : project.activeSetId;
-  return { ...project, sets, activeSetId };
+  return ensureTrailingEmpty({ ...project, sets, activeSetId });
 }
 
 export function setMacro(project: Project, id: string, offset: number): Project {

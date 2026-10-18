@@ -5,13 +5,13 @@ import { unitForIndex } from "../src/core/clock.ts";
 import { defaultProject } from "../src/core/defaults.ts";
 import { modulated } from "../src/core/modulate.ts";
 import { applyMorph } from "../src/core/morph.ts";
-import { createSet, launchScene, record } from "../src/core/performance.ts";
+import { createSet, journalPadIds, journalPageCount, launchScene, record } from "../src/core/performance.ts";
 import { generatePhrase } from "../src/core/phrase.ts";
 import { bindingFor, lanePages, pageCount, pageGroup, pageGroupColor, pagesFor } from "../src/core/pages.ts";
-import { LED, blinkHalfMs, ledColorAt, menuLed, padLeds, PLAY_LED_ON, playLed, shadeColor, stepLed, stepLeds, trackLeds } from "../src/ui/leds.ts";
+import { LED, blinkHalfMs, directionLit, ledColorAt, menuLed, padLeds, PLAY_LED_ON, playLed, shadeColor, stepLed, stepLeds, trackLeds } from "../src/ui/leds.ts";
 import { DIGIT_H, displayAmount, plotAmount } from "../src/ui/digits.ts";
 import { DIGIT_Y, FONT_H, HEADER_H, HEIGHT, NAME_Y, PAGER_Y, PARAM_COL_W, PARAM_H, SEP_Y, TITLE_Y, VALUE_Y, VIZ_H, pixel, renderScreen, type Screen } from "../src/ui/screen.ts";
-import { defaultUi, openSetMode } from "../src/ui/state.ts";
+import { defaultUi, HOLD_MS, HOLD_TICKS, openSetMode } from "../src/ui/state.ts";
 import { reduce, relDelta, type Session } from "../src/ui/input.ts";
 import { DETENT_CLICKS, DETENT_REST_MS, stepKnob } from "../src/ui/controls.ts";
 
@@ -1153,14 +1153,58 @@ describe("surface", () => {
   });
 
   it("pastes a journal reference into the active set", () => {
-    let state = openSetMode({ ...session().ui });
     let project = record(defaultProject());
-    project = { ...project, sets: [{ id: "set-1", name: "A", sceneIds: [] }], activeSetId: "set-1" };
-    let current: Session = { project, ui: state, tick: 0, playing: false };
+    project = record(project);
+    let current: Session = { project, ui: defaultUi(), tick: 0, playing: false };
     current = reduce(current, { kind: "cc", data1: 60, data2: 127 });
     current = reduce(current, { kind: "note", data1: 68, data2: 127 });
-    assert.deepEqual(current.project.sets[0].sceneIds, ["001"]);
+    current = reduce(current, { kind: "note", data1: 69, data2: 127 });
+    const marked = padLeds(current.project, "journal", current.ui)[0];
+    assert.equal(marked.color, 126);
+    assert.equal(marked.blink, true);
+    assert.equal(marked.blinkTo, current.project.journal[0].color);
+    current = reduce(current, { kind: "cc", data1: 60, data2: 0 });
+    assert.deepEqual(current.project.clipboardSceneIds, ["001", "002"]);
+    assert.equal(padLeds(current.project, "journal", current.ui)[0].color, current.project.journal[0].color);
+    current = { ...current, ui: openSetMode(current.ui) };
+    current = reduce(current, { kind: "cc", data1: 60, data2: 127 });
+    current = reduce(current, { kind: "cc", data1: 60, data2: 0 });
+    assert.deepEqual(current.project.sets[0].sceneIds, ["001", "002"]);
+    assert.deepEqual(current.project.sets.at(-1)?.sceneIds, []);
+    assert.deepEqual(current.project.clipboardSceneIds, []);
+    assert.equal(padLeds(current.project, "set", current.ui)[0].color, current.project.journal[0].color);
+    current = { ...current, ui: { ...current.ui, mode: "journal" } };
+    current = reduce(current, { kind: "cc", data1: 60, data2: 127 });
+    current = reduce(current, { kind: "note", data1: 68, data2: 127 });
+    current = reduce({ ...current, tick: HOLD_TICKS }, { kind: "cc", data1: 60, data2: 0 });
+    assert.deepEqual(current.project.clipboardSceneIds, ["001"]);
+    current = reduce(current, { kind: "cc", data1: 60, data2: 127 });
+    current = reduce({
+      ...current,
+      tick: current.tick + HOLD_TICKS,
+      ui: { ...current.ui, copyDownMs: Date.now() - HOLD_MS - 1 },
+    }, { kind: "cc", data1: 60, data2: 0 });
+    assert.deepEqual(current.project.clipboardSceneIds, []);
     assert.equal(relDelta(65), -63);
+  });
+
+  it("records into the set and turns journal pages", () => {
+    let state: Session = { ...session(), ui: { ...defaultUi(), mode: "set" } };
+    state = reduce(state, { kind: "cc", data1: 118, data2: 127 });
+    assert.equal(state.project.journal.length, 1);
+    assert.deepEqual(state.project.sets[0].sceneIds, ["001"]);
+    assert.deepEqual(state.project.sets[1].sceneIds, []);
+    assert.equal(state.project.activeSetId, "set-1");
+
+    let project = defaultProject();
+    for (let n = 0; n < 33; n++) project = record(project);
+    state = { project, ui: defaultUi(), tick: 0, playing: false };
+    assert.equal(directionLit(0, journalPageCount(project.journal.length)).down, PLAY_LED_ON);
+    assert.equal(directionLit(0, journalPageCount(project.journal.length)).up, 0);
+    state = reduce(state, { kind: "cc", data1: 54, data2: 127 });
+    assert.equal(state.ui.journalPage, 1);
+    assert.equal(journalPadIds(state.project, state.ui.journalPage)[0], "001");
+    assert.equal(directionLit(1, journalPageCount(33)).up, PLAY_LED_ON);
   });
 
   it("restores a lane to factory defaults with Delete and its step", () => {
@@ -1213,13 +1257,13 @@ describe("surface", () => {
     project = record(project);
     project = { ...project, sets: [{ id: "set-1", name: "A", sceneIds: ["002"] }], activeSetId: "set-1" };
     state = { project, ui: defaultUi(), tick: 0, playing: false };
-    assert.equal(menuLed(state.ui.mode).family, "yellow");
+    assert.equal(menuLed(state.ui.mode), PLAY_LED_ON);
     assert.equal(renderScreen(state.project, state.ui, 0).header.includes("JRN"), false);
     state = reduce(state, { kind: "note", data1: 68, data2: 127 });
     assert.equal(state.project.morph?.targetId, "001");
     state = reduce(state, { kind: "cc", data1: 50, data2: 127 });
     assert.equal(state.ui.mode, "set");
-    assert.equal(menuLed(state.ui.mode).family, "purple");
+    assert.equal(menuLed(state.ui.mode), 0);
     assert.equal(renderScreen(state.project, state.ui, 0).header.includes("SET"), false);
     const setNotice = renderScreen(state.project, state.ui, 0, false, (state.ui.notice?.untilMs ?? 0) - 1);
     assert.equal(setNotice.viz, "notice");

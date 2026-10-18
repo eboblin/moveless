@@ -210,11 +210,17 @@ describe("project persist", () => {
   });
 
   it("drops clipboard when the scene is gone", () => {
-    const project = defaultProject();
-    project.clipboardSceneId = "missing";
+    const project = record(defaultProject());
+    project.clipboardSceneIds = ["missing"];
     const parsed = parseStored(serializeStored(project, { context: "kick", page: 0, mode: "journal" }));
     assert.ok(parsed);
-    assert.equal(parsed.project.clipboardSceneId, null);
+    assert.deepEqual(parsed.project.clipboardSceneIds, []);
+    const legacy = parseStored(JSON.stringify({
+      version: 1,
+      project: { ...project, clipboardSceneIds: undefined, clipboardSceneId: "001" },
+      ui: { context: "kick", page: 0, mode: "journal" },
+    }));
+    assert.deepEqual(legacy?.project.clipboardSceneIds, ["001"]);
   });
 
   it("loads and saves through host file bindings", () => {

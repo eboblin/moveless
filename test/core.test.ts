@@ -18,10 +18,15 @@ import {
   launchScene,
   pickWanderCandidate,
   record,
+  recordInto,
+  pasteClipboard,
   removeSceneFromJournal,
   removeSceneFromSet,
   sceneColor,
   sceneIdsForPads,
+  journalPadIds,
+  journalPageCount,
+  wanderCandidates,
   setCaptureDepth,
   setCaptureIntensity,
   setMacro,
@@ -1213,7 +1218,7 @@ describe("capture, wander, sets", () => {
     project = createSet(project, "B");
     project = addSceneToSet(project, "set-2", "001");
     project = addSceneToSet(project, "set-2", "002");
-    project = { ...project, clipboardSceneId: "001", activeSceneId: "001", wanderPreviousTarget: "001" };
+    project = { ...project, clipboardSceneIds: ["001"], activeSceneId: "001", wanderPreviousTarget: "001" };
     project = removeSceneFromJournal(project, "001");
     assert.deepEqual(
       project.journal.map((scene) => scene.id),
@@ -1221,7 +1226,7 @@ describe("capture, wander, sets", () => {
     );
     assert.deepEqual(project.sets[0].sceneIds, []);
     assert.deepEqual(project.sets[1].sceneIds, ["002"]);
-    assert.equal(project.clipboardSceneId, null);
+    assert.deepEqual(project.clipboardSceneIds, []);
     assert.equal(project.activeSceneId, null);
     assert.equal(project.wanderPreviousTarget, null);
     const onlySet = removeSceneFromSet(
@@ -1230,6 +1235,35 @@ describe("capture, wander, sets", () => {
       "002",
     );
     assert.deepEqual(onlySet.sets[0].sceneIds, ["001"]);
+  });
+
+  it("links a recorded scene into the set and keeps one empty set after it", () => {
+    const linked = recordInto(defaultProject(), true);
+    assert.deepEqual(linked.sets[0].sceneIds, ["001"]);
+    assert.deepEqual(linked.sets[1].sceneIds, []);
+    assert.equal(linked.activeSetId, "set-1");
+    assert.equal(recordInto(defaultProject(), false).sets.length, 0);
+  });
+
+  it("pastes marked scenes until the set is full and skips ones already there", () => {
+    let project = defaultProject();
+    for (let n = 0; n < 3; n++) project = record(project);
+    project = createSet(project, "A");
+    project = { ...project, clipboardSceneIds: ["001", "002", "001", "003"] };
+    project = pasteClipboard(project);
+    assert.deepEqual(project.sets[0].sceneIds, ["001", "002", "003"]);
+    assert.deepEqual(project.sets.at(-1)?.sceneIds, []);
+  });
+
+  it("wanders inside the active set and pages the journal from the newest window", () => {
+    let project = defaultProject();
+    for (let n = 0; n < 33; n++) project = record(project);
+    project = createSet(project, "A");
+    project = addSceneToSet(project, project.activeSetId!, "001");
+    assert.deepEqual(wanderCandidates(project, "set").filter(Boolean), ["001"]);
+    assert.equal(journalPageCount(project.journal.length), 2);
+    assert.equal(journalPadIds(project, 0)[0], "002");
+    assert.equal(journalPadIds(project, 1)[0], "001");
   });
 
   it("fills pads from the journal until a set has scenes, and stops at 32", () => {

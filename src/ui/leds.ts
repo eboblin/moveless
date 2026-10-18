@@ -74,8 +74,17 @@ export function stepLeds(project: Project, context: ContextId): Led[] {
   return out;
 }
 
-export function menuLed(mode: "journal" | "set"): Led {
-  return led(mode === "set" ? "purple" : "yellow", false);
+/** Menu is a white button. Lit in Journal, dark in Set. */
+export function menuLed(mode: "journal" | "set"): number {
+  return mode === "journal" ? PLAY_LED_ON : 0;
+}
+
+/** Up is the lower index, down the higher one. Bright only when that neighbor exists. */
+export function directionLit(index: number, count: number): { up: number; down: number } {
+  return {
+    up: index > 0 ? PLAY_LED_ON : 0,
+    down: index < count - 1 ? PLAY_LED_ON : 0,
+  };
 }
 
 /** Bright step of a single-color button. Play cannot take a palette color. */
@@ -106,6 +115,8 @@ export interface PadSurface {
   context?: ContextId;
   page?: number;
   lanePages?: Partial<Record<ContextId, number>>;
+  copyHeld?: boolean;
+  journalPage?: number;
 }
 
 /**
@@ -118,7 +129,7 @@ export function padLeds(project: Project, mode: "journal" | "set", surface?: Pad
   const page = surface?.page ?? 0;
   if (surface?.captureHeld) return capturePadLeds(project);
   if (surface?.wheelTouch) return wheelPadLeds(project, context, page);
-  const scenes = scenePadLeds(project, mode, tick);
+  const scenes = scenePadLeds(project, mode, tick, surface?.journalPage ?? 0, surface?.copyHeld ?? false);
   if (surface?.heldContext) {
     const shown = surface.heldPage ?? surface.lanePages?.[surface.heldContext] ?? (surface.heldContext === context ? page : -1);
     return pageOverlay(scenes, surface.heldContext, shown);
@@ -158,8 +169,12 @@ export function shadeColor(color: number, amount: number): number {
   return color;
 }
 
-function scenePadLeds(project: Project, mode: "journal" | "set", tick: number): Led[] {
-  const ids = mode === "set" ? setPadIds(project) : journalPadIds(project);
+/** Pure green. Scene colors never use this index. */
+const SELECTED = 126;
+
+function scenePadLeds(project: Project, mode: "journal" | "set", tick: number, journalPage: number, copyHeld: boolean): Led[] {
+  const ids = mode === "set" ? setPadIds(project) : journalPadIds(project, journalPage);
+  const selected = copyHeld ? new Set(project.clipboardSceneIds) : null;
   if (ids.every((id) => id === null)) {
     return ids.map((_, index) => (index === 0 ? currentSceneLed(LED.working) : led("off", false)));
   }
@@ -173,6 +188,7 @@ function scenePadLeds(project: Project, mode: "journal" | "set", tick: number): 
     if (!id) return led("off", false);
     const scene = project.journal.find((item) => item.id === id);
     const color = scene?.color ?? sceneColor(id);
+    if (selected?.has(id)) return { family: "yellow", color: SELECTED, blink: true, blinkTo: color };
     if (targetId && id === targetId) {
       return { family: "yellow", color: shadeColor(color, targetAmount), blink: true };
     }
