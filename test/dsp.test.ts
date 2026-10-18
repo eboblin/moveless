@@ -419,6 +419,39 @@ describe("dsp adapter", () => {
     assert.equal(engine.drums[0].freq, freq);
   });
 
+  it("folds hat decay so the top of the knob is the old midpoint", () => {
+    const decay = (pitchLane: "snare" | "hat", unit: number) => {
+      const engine = createEngine();
+      loadPhrase(engine, [{
+        sample: 0, loop: 100000, lane: pitchLane, note: pitchLane === "hat" ? 42 : 38, velocity: 100, lengthTicks: 48,
+        params: mapSound(pitchLane, { decay: unit }),
+      }], 120, true);
+      renderClock(engine);
+      return engine.drums[pitchLane === "hat" ? 2 : 1].decay;
+    };
+    const seconds = (unit: number) => 0.005 + unit * unit * 0.95;
+    assert.ok(Math.abs(decay("hat", 1) - seconds(0.5)) < 1e-6);
+    assert.ok(Math.abs(decay("hat", 0.5) - seconds(0.25)) < 1e-6);
+    assert.ok(Math.abs(decay("snare", 1) - seconds(1)) < 1e-6);
+  });
+
+  it("tunes hats above the snare and keeps the top of the knob metallic", () => {
+    const freq = (lane: "snare" | "hat", note: number, pitch: number) => {
+      const engine = createEngine();
+      loadPhrase(engine, [{
+        sample: 0, loop: 100000, lane, note, velocity: 100, lengthTicks: 48,
+        params: mapSound(lane, { pitch }),
+      }], 120, true);
+      renderClock(engine);
+      return engine.drums[lane === "snare" ? 1 : 2].freq;
+    };
+    const snareTop = freq("snare", 38, 1);
+    const hatLow = freq("hat", 42, 0);
+    const hatHigh = freq("hat", 42, 1);
+    assert.ok(hatLow > snareTop);
+    assert.ok(hatHigh > hatLow * 16);
+  });
+
   it("maps every snare suffix onto a distinct live field", () => {
     const engine = createEngine();
     loadPhrase(engine, [{

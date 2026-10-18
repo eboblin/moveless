@@ -76,7 +76,7 @@ const SOUND_VALUE: Record<LaneId, Record<string, number>> = {
     pitch: 0.55,
     click: 0.52,
     snap: 0.16,
-    decay: 0.18,
+    decay: 0.36,
     tone: 0.58,
     drive: 0.06,
     pan: 0.5,

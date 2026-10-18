@@ -324,10 +324,15 @@ static float clampf01(float value) {
     return value;
 }
 
-/* Squared unit → seconds: low end stays clicky, top still reaches ~1 s. */
+/* Squared unit → seconds: low end stays clicky, top still reaches ~1 s.
+   Hats stop at the old midpoint: past ~50 the tail was unused. */
 static float drum_decay_seconds(float unit) {
     float u = clampf01(unit);
     return 0.005f + u * u * 0.95f;
+}
+
+static float hat_decay_unit(float unit) {
+    return clampf01(unit) * 0.5f;
 }
 
 static float drum_noise_decay_seconds(float unit) {
@@ -453,6 +458,7 @@ static void refresh_release(Note *note) {
 static void apply_drum(Drum *drum, int param, float unit) {
     switch (param) {
     case P_DCY:
+        if (drum->lane == 2) unit = hat_decay_unit(unit);
         drum->decay = drum_decay_seconds(unit);
         if (drum->lane == 2) drum->noise_decay = drum_noise_decay_seconds(unit);
         refresh_drum_env(drum);
@@ -572,9 +578,11 @@ static void arm_drum(Engine *engine, int lane, int note, int velocity, const cha
     drum->noise_env = vel;
     drum->age = 0;
     drum->base = base * dropped;
-    drum->freq = drum->base * (0.5f + pitch);
+    /* Snare tops out near 110 Hz. Hats start clear of that and run into thin metal. */
+    drum->freq = hat ? 280.0f * powf(2.0f, pitch * 4.75f) : drum->base * (0.5f + pitch);
     drum->loop = loop;
     float dcy_unit = read_param(params, "dcy", 0.5f);
+    if (hat) dcy_unit = hat_decay_unit(dcy_unit);
     drum->decay = drum_decay_seconds(dcy_unit);
     /* Hat has no tail knob — keep noise decay on the same throw as body decay. */
     drum->noise_decay = drum_noise_decay_seconds(read_param(params, "nedcy", hat ? dcy_unit : 0.45f));
@@ -702,12 +710,14 @@ static float drum_sample(Engine *engine, Drum *drum) {
     float click = rng(engine) * drum->click_env * drum->snap * (0.35f + drum->bright * 1.4f);
     float noisy = rng(engine) * drum->noise * (hat ? 0.45f + drum->bright * 0.7f : 1.0f);
     float mixed = body * drum->env + noisy * drum->noise_env + click;
-    float coef = 0.025f + drum->tone * drum->tone * 0.95f;
+    /* Hats high-pass: tone 0 sits just above the snare, tone 1 is thin metal. */
+    float coef = hat ? 0.08f + drum->tone * drum->tone * 0.57f : 0.025f + drum->tone * drum->tone * 0.95f;
     drum->low += (mixed - drum->low) * coef;
+    float voiced = hat ? mixed - drum->low : drum->low;
     /* Squared drive: useful throw stays audible; top of knob is the smash. */
     float drive = drum->drive * drum->drive;
     float gain = 1.0f + drive * 8.0f;
-    float driven = drum->low * gain;
+    float driven = voiced * gain;
     driven = driven / (1.0f + fabsf(driven));
     float filtered = filter_sample(&drum->flt, &drum->band, driven, drum->cutoff, drum->resonance);
     drum->env *= drum->env_k;

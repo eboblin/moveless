@@ -342,9 +342,10 @@ function armDrum(drum: DrumVoice, event: BlockEvent | LoopEvent, pitch: number, 
   drum.noiseEnv = vel;
   drum.age = 0;
   drum.base = base * dropped;
-  drum.freq = drum.base * (0.5 + pitch);
+  // Snare tops out near 110 Hz. Hats start clear of that and run into thin metal.
+  drum.freq = hat ? 280 * 2 ** (pitch * 4.75) : drum.base * (0.5 + pitch);
   drum.loop = loop;
-  const dcyUnit = read(event.params, ["dcy"], 0.5);
+  const dcyUnit = hat ? hatDecayUnit(read(event.params, ["dcy"], 0.5)) : read(event.params, ["dcy"], 0.5);
   drum.decay = drumDecaySeconds(dcyUnit);
   // Hat has no tail knob — noise used to keep a fixed ~100 ms hiss after body died.
   drum.noiseDecay = drumNoiseDecaySeconds(read(event.params, ["nedcy"], hat ? dcyUnit : 0.45));
@@ -414,10 +415,12 @@ function drumSample(engine: Engine, drum: DrumVoice): number {
 
   const noisy = rng(engine) * drum.noise * (hat ? 0.45 + drum.bright * 0.7 : 1);
   const mixed = bodyOsc * drum.env + noisy * drum.noiseEnv + click;
-  const coef = 0.025 + drum.tone * drum.tone * 0.95;
+  // Hats high-pass: tone 0 sits just above the snare, tone 1 is thin metal.
+  const coef = hat ? 0.08 + drum.tone * drum.tone * 0.57 : 0.025 + drum.tone * drum.tone * 0.95;
   drum.low += (mixed - drum.low) * coef;
+  const voiced = hat ? mixed - drum.low : drum.low;
   // Drive is squared so the top of the knob stays the smash zone, not a dead plateau.
-  const driven = shapeDrive(drum.low, drum.drive * drum.drive);
+  const driven = shapeDrive(voiced, drum.drive * drum.drive);
   const slot = { low: drum.flt, band: drum.band };
   const filtered = filterSample(slot, driven, drum.cutoff, drum.resonance);
   drum.flt = slot.low;
@@ -637,8 +640,9 @@ function laneLoop(engine: Engine, lane: number): number {
 
 function applyDrum(drum: DrumVoice, param: number, unit: number): void {
   if (param === P_DCY) {
-    drum.decay = drumDecaySeconds(unit);
-    if (drum.lane === 2) drum.noiseDecay = drumNoiseDecaySeconds(unit);
+    const decayUnit = drum.lane === 2 ? hatDecayUnit(unit) : unit;
+    drum.decay = drumDecaySeconds(decayUnit);
+    if (drum.lane === 2) drum.noiseDecay = drumNoiseDecaySeconds(decayUnit);
     refreshDrumEnv(drum);
   } else if (param === P_NEDCY) {
     drum.noiseDecay = drumNoiseDecaySeconds(unit);
@@ -850,6 +854,11 @@ function read(params: EngineParam[], keys: string[], fallback: number): number {
 function drumDecaySeconds(unit: number): number {
   const u = Math.max(0, Math.min(1, unit));
   return 0.005 + u * u * 0.95;
+}
+
+/** Hats: the old upper half of the knob was an unused tail, so 1 lands on the old 0.5. */
+function hatDecayUnit(unit: number): number {
+  return Math.max(0, Math.min(1, unit)) * 0.5;
 }
 
 function drumNoiseDecaySeconds(unit: number): number {
