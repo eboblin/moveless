@@ -1,6 +1,3 @@
-import { countFromUnit } from "./clock.ts";
-import { generateHits } from "./events.ts";
-import { evalModulated } from "./modulate.ts";
 import { generatePhrase } from "./phrase.ts";
 import { chordSymbol } from "./harmony.ts";
 import { isDrum, LANE_CODE, LANES, SCALES, type LaneId, type Phrase, type Project } from "./types.ts";
@@ -15,11 +12,12 @@ function lineFor(project: Project, lane: LaneId, phrase: Phrase): string {
   const steps = phrase.steps[lane];
   const chars = Array.from({ length: steps }, () => "-");
   if (isDrum(lane)) {
-    const hits = generateHits(project.working[lane].gen1, project.working[lane].gen2, steps, project.global.seed, lane);
-    hits.forEach((hit) => {
-      const count = countFromUnit(evalModulated(project.working[lane].ratchet.count, hit.step));
-      chars[hit.step] = count > 1 ? String(Math.min(9, count)) : "x";
-    });
+    const counts = new Map<number, number>();
+    for (const event of phrase.lanes[lane]) {
+      if (event.step < 0 || event.step >= chars.length) continue;
+      counts.set(event.step, (counts.get(event.step) ?? 0) + 1);
+    }
+    for (const [step, count] of counts) chars[step] = count > 1 ? String(Math.min(9, count)) : "x";
     return chars.join("");
   }
   if (lane === "bass" || lane === "lead") {

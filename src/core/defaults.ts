@@ -261,10 +261,12 @@ export function defaultLanes(): Lanes {
 
 export function defaultProject(): Project {
   const mute = {} as Project["mute"];
+  const solo = {} as Project["solo"];
   const lock = {} as Project["lock"];
   const mixer = { master: 1 } as Project["mixer"];
   for (const lane of LANES) {
     mute[lane] = false;
+    solo[lane] = false;
     lock[lane] = false;
     mixer[lane] = 1;
   }
@@ -279,6 +281,7 @@ export function defaultProject(): Project {
     macros: {},
     bookmarks: [null, null, null, null],
     mute,
+    solo,
     lock,
     working: defaultLanes(),
     progression: defaultProgression(),

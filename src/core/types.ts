@@ -206,6 +206,8 @@ export const WANDERS: readonly WanderId[] = ["fast", "medium", "slow", "glacial"
 export const MENU_CC = 50;
 /** Transport play. The button LED has one color: bright while running, dark when stopped. */
 export const PLAY_CC = 85;
+/** Loop. Runs one Capture pass with the stored depth, scope and intensity. */
+export const LOOP_CC = 58;
 /** White up/down buttons. Journal pages or sets, bright only when that neighbor exists. */
 export const UP_CC = 55;
 export const DOWN_CC = 54;
@@ -257,6 +259,8 @@ export interface Project {
   macros: Record<string, number>;
   bookmarks: (PageRef | null)[];
   mute: Record<LaneId, boolean>;
+  /** Additive solo. While any lane is soloed, only soloed unmuted lanes are heard. */
+  solo: Record<LaneId, boolean>;
   lock: Record<LaneId, boolean>;
   working: Lanes;
   /** Heard chord walk. Record copies this into the scene. A morph keeps it until landing. */

@@ -423,8 +423,13 @@ function perfPages(): Page[] {
   ];
 }
 
-/** Progression, space, mixer, global, then the two macro pages. One pad row. */
-const AUX_PAGES: Page[] = [progPage(), ...spacePages(), mixPage(), globalPage(), ...perfPages()];
+/** Progression, space, global, then the two macro pages. Mixer lives on the Mute peek. */
+const AUX_PAGES: Page[] = [progPage(), ...spacePages(), globalPage(), ...perfPages()];
+
+/** Eight mixer faders. Not an aux page; the Mute peek edits these knobs. */
+export function mixerPage(): Page {
+  return mixPage();
+}
 
 export function lanePages(lane: LaneId): Page[] {
   switch (laneFamily(lane)) {
@@ -515,3 +520,4 @@ export function bindingFor(path: string): Binding | null {
 }
 
 for (const context of STEPS) pagesFor(context);
+remember([mixerPage()]);

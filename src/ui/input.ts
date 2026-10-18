@@ -19,13 +19,14 @@ import {
   setCaptureScope,
   setPadIds,
   setWander,
+  toggleSolo,
   toggleLock,
   toggleMute,
 } from "../core/performance.ts";
-import { CAPTURE_DEPTHS, CAPTURE_INTENSITIES, CAPTURE_SCOPES, DOWN_CC, isLane, MENU_CC, PLAY_CC, STEPS, TRANSITIONS, UP_CC, WANDERS, type LaneId, type Project } from "../core/types.ts";
+import { CAPTURE_DEPTHS, CAPTURE_SCOPES, DOWN_CC, isLane, LANES, LOOP_CC, MENU_CC, PLAY_CC, STEPS, TRANSITIONS, UP_CC, WANDERS, type ContextId, type LaneId, type Project } from "../core/types.ts";
 import { resetControl, writeControl } from "./controls.ts";
-import { bindingFor, bindingPaths, pageCount, pageGroup, pagesFor } from "../core/pages.ts";
-import { applyBookmark, FOCUS_HOLD_MS, focusHoldTicks, HOLD_MS, HOLD_TICKS, rememberPage, type Notice, type UiState } from "./state.ts";
+import { bindingFor, bindingPaths, mixerPage, pageCount, pageGroup, pagesFor } from "../core/pages.ts";
+import { applyBookmark, FOCUS_HOLD_MS, focusHoldTicks, HOLD_MS, HOLD_TICKS, holdIsShort, mutePeekOpen, peekKind, rememberPage, type Notice, type UiState } from "./state.ts";
 import { journalPageCount } from "../core/journal.ts";
 
 export interface MidiMsg {
@@ -41,7 +42,6 @@ export interface Session {
   playing: boolean;
 }
 
-const LOOP = 58;
 const SHIFT = 49;
 
 export function reduce(session: Session, msg: MidiMsg): Session {
@@ -59,8 +59,7 @@ function onNote(session: Session, note: number, press: boolean): Session {
 }
 
 function onCc(session: Session, cc: number, value: number, press: boolean): Session {
-  if (cc === 88) return { ...session, ui: { ...session.ui, muteHeld: press } };
-  if (cc === LOOP) return { ...session, ui: { ...session.ui, loopHeld: press } };
+  if (cc === 88) return onMute(session, press);
   if (cc === SHIFT) return { ...session, ui: { ...session.ui, shiftHeld: press } };
   if (cc === MENU_CC && press) {
     const mode = session.ui.mode === "set" ? "journal" : "set";
@@ -72,6 +71,7 @@ function onCc(session: Session, cc: number, value: number, press: boolean): Sess
   if (cc === 60) return onCopy(session, press);
   if (cc === 119) return { ...session, ui: { ...session.ui, deleteHeld: press } };
   if (cc === 52) return onCapture(session, press);
+  if (cc === LOOP_CC && press) return applyCapture(session);
   if (cc === 118 && press) return { ...session, project: recordInto(session.project, session.ui.mode === "set") };
   if (cc === PLAY_CC && press) return { ...session, playing: !session.playing };
   if (cc >= 71 && cc <= 78) return turnEncoder(session, cc - 71, value);
@@ -92,12 +92,6 @@ function onStep(session: Session, index: number, press: boolean): Session {
         ui: { ...session.ui, heldContext: step, focus: null },
       };
     }
-    if (session.ui.loopHeld && press) {
-      return { ...session, project: toggleLock(session.project, step) };
-    }
-    if (session.ui.muteHeld && press) {
-      return { ...session, project: toggleMute(session.project, step) };
-    }
   }
   if (!press) {
     if (session.ui.heldContext !== step) return session;
@@ -115,14 +109,14 @@ function onStep(session: Session, index: number, press: boolean): Session {
 
 function onPad(session: Session, index: number, press: boolean): Session {
   if (!press) return session;
+  const kind = peekKind(session.ui);
+  if (kind === "mute") return onMutePad(session, index);
   const row = Math.floor(index / 8);
   const col = index % 8;
   const top = row === 3;
   const second = row === 2;
   const bottom = row === 0;
-  if (session.ui.captureHeld) {
-    return onCapturePad(session, row, col);
-  }
+  if (kind === "capture") return onCapturePad(session, row, col);
   if (session.ui.heldContext && (top || second)) {
     const page = top ? col : 8 + col;
     const held = session.ui.heldContext;
@@ -178,16 +172,27 @@ function onPad(session: Session, index: number, press: boolean): Session {
   return { ...session, project: launchScene(session.project, sceneId, session.tick) };
 }
 
-/** Capture overlay: depth, scope, and intensity. Any press blocks the release reroll. */
+/** Capture overlay. Top two rows pick a page. The next row is depth, then scope. The bottom row is intensity. */
 function onCapturePad(session: Session, row: number, col: number): Session {
-  if (row === 0 && col < CAPTURE_INTENSITIES.length) {
-    return markCapture(session, setCaptureIntensity(session.project, CAPTURE_INTENSITIES[col]));
+  if (row === 3 || row === 2) {
+    const page = row === 3 ? col : 8 + col;
+    const context = session.ui.heldContext ?? session.ui.context;
+    if (page >= pageCount(context)) return session;
+    if (session.ui.heldContext) {
+      return { ...session, ui: { ...rememberPage(session.ui, context, page), heldContext: context, heldPage: page } };
+    }
+    return selectPage(session, page);
   }
-  if (row === 1 && col < CAPTURE_SCOPES.length) {
-    return markCapture(session, setCaptureScope(session.project, CAPTURE_SCOPES[col]));
-  }
-  if (row === 2 && col < CAPTURE_DEPTHS.length) {
+  if (row === 1 && col < CAPTURE_DEPTHS.length) {
     return markCapture(session, setCaptureDepth(session.project, CAPTURE_DEPTHS[col]));
+  }
+  if (row === 1 && col >= CAPTURE_DEPTHS.length && col < CAPTURE_DEPTHS.length + CAPTURE_SCOPES.length) {
+    return markCapture(session, setCaptureScope(session.project, CAPTURE_SCOPES[col - CAPTURE_DEPTHS.length]));
+  }
+  if (row === 0 && col === 0) return markCapture(session, setCaptureIntensity(session.project, "clear"));
+  if (row === 0 && col >= 2 && col <= 4) {
+    const level = (["soft", "medium", "hard"] as const)[col - 2];
+    return markCapture(session, setCaptureIntensity(session.project, level));
   }
   return session;
 }
@@ -269,6 +274,15 @@ function turnEncoder(session: Session, index: number, value: number): Session {
 
 /** Reroll one generator as soon as its encoder is touched or turned while Capture is held. */
 function captureFromEncoder(session: Session, path: string, held: boolean): Session | null {
+  if (mutePeekOpen(session.ui)) {
+    if (surfaceKind(path) !== "mix") return null;
+    const focusBinding = bindingFor(path) ?? { path, label: path };
+    return {
+      ...session,
+      project: captureSurface(session.project, "mix", [path]),
+      ui: { ...session.ui, captureGenerator: path, focus: focusFor(session, focusBinding, held) },
+    };
+  }
   const context = session.ui.heldContext ?? session.ui.context;
   if (context === "aux") {
     const kind = surfaceKind(path);
@@ -323,31 +337,103 @@ export function generatorTarget(path: string): string | null {
 }
 
 function currentBinding(session: Session, index: number) {
+  if (mutePeekOpen(session.ui)) return mixerPage().bindings[index] ?? null;
   const pages = pagesFor(session.ui.context);
   const page = pages[Math.min(session.ui.page, pages.length - 1)];
   return page?.bindings[index] ?? null;
 }
 
+function onMute(session: Session, press: boolean): Session {
+  if (press) {
+    return {
+      ...session,
+      ui: {
+        ...session.ui,
+        muteHeld: true,
+        muteWasLatched: session.ui.muteLatched,
+        muteDownTick: session.tick,
+        muteDownMs: Date.now(),
+      },
+    };
+  }
+  const latched = holdIsShort(session.ui.muteDownTick, session.ui.muteDownMs, session.tick)
+    ? !session.ui.muteWasLatched
+    : session.ui.muteWasLatched;
+  return {
+    ...session,
+    ui: {
+      ...session.ui,
+      muteHeld: false,
+      muteLatched: latched,
+      captureLatched: latched ? false : session.ui.captureLatched,
+      muteDownTick: null,
+      muteDownMs: null,
+    },
+  };
+}
+
+/** Top row toggles mute, the next solos, the next locks. The eighth column and the bottom row stay dark. */
+function onMutePad(session: Session, index: number): Session {
+  const row = Math.floor(index / 8);
+  const col = index % 8;
+  const lane = LANES[col];
+  if (!lane || col > 6) return session;
+  if (row === 3) return { ...session, project: toggleMute(session.project, lane) };
+  if (row === 2) return { ...session, project: toggleSolo(session.project, lane) };
+  if (row === 1) return { ...session, project: toggleLock(session.project, lane) };
+  return session;
+}
+
 function onCapture(session: Session, press: boolean): Session {
   if (press) {
-    return { ...session, ui: { ...session.ui, captureHeld: true, captureGenerator: null, captureAction: false } };
+    return {
+      ...session,
+      ui: {
+        ...session.ui,
+        captureHeld: true,
+        captureWasLatched: session.ui.captureLatched,
+        captureDownTick: session.tick,
+        captureDownMs: Date.now(),
+        captureGenerator: null,
+        captureAction: false,
+      },
+    };
   }
+  const latched = holdIsShort(session.ui.captureDownTick, session.ui.captureDownMs, session.tick)
+    ? !session.ui.captureWasLatched
+    : session.ui.captureWasLatched;
+  return {
+    ...session,
+    ui: {
+      ...session.ui,
+      captureHeld: false,
+      captureLatched: latched,
+      muteLatched: latched ? false : session.ui.muteLatched,
+      captureDownTick: null,
+      captureDownMs: null,
+      captureGenerator: null,
+      captureAction: false,
+    },
+  };
+}
+
+/** One Capture pass. Loop runs this from any screen and leaves the peek where it is. */
+function applyCapture(session: Session): Session {
+  const { context, page } = captureTarget(session);
+  let project = session.project;
+  if (mutePeekOpen(session.ui)) project = captureSurface(project, "mix", bindingPaths(mixerPage()));
+  else if (context === "aux") {
+    const surface = auxSurface(project.captureScope, page);
+    if (surface) project = captureSurface(project, surface.kind, surface.paths);
+  } else if (isLane(context)) project = rerollCapture(project, context, page);
+  return { ...session, project };
+}
+
+function captureTarget(session: Session): { context: ContextId; page: number } {
   const context = session.ui.heldContext ?? session.ui.context;
   const rawPage = session.ui.heldContext ? session.ui.heldPage ?? session.ui.page : session.ui.page;
   const page = Math.min(rawPage, Math.max(0, pageCount(context) - 1));
-  const already = session.ui.captureGenerator || session.ui.captureAction;
-  let project = session.project;
-  if (!already && context === "aux") {
-    const surface = auxSurface(project.captureScope, page);
-    if (surface) project = captureSurface(project, surface.kind, surface.paths);
-  } else if (isLane(context) && !already) {
-    project = rerollCapture(project, context, page);
-  }
-  return {
-    ...session,
-    project,
-    ui: { ...session.ui, captureHeld: false, captureGenerator: null, captureAction: false },
-  };
+  return { context, page };
 }
 
 function surfaceKind(path: string): "mix" | "perf" | null {

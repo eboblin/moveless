@@ -7,6 +7,7 @@ import { applyMorph, retarget } from "./morph.ts";
 import {
   isDrum,
   isPitched,
+  LANES,
   SET_CAPACITY,
   WANDER_BARS,
   type LaneId,
@@ -136,6 +137,18 @@ export function setWander(project: Project, rate: WanderId | null, tick: number)
 
 export function toggleMute(project: Project, lane: LaneId): Project {
   return { ...project, mute: { ...project.mute, [lane]: !project.mute[lane] } };
+}
+
+export function toggleSolo(project: Project, lane: LaneId): Project {
+  return { ...project, solo: { ...project.solo, [lane]: !project.solo[lane] } };
+}
+
+/** Explicit mute wins. With any solo up, only soloed lanes that are not muted are heard. */
+export function laneHeard(project: Project, lane: LaneId): boolean {
+  if (project.mute[lane]) return false;
+  let anySolo = false;
+  for (const id of LANES) if (project.solo[id]) anySolo = true;
+  return !anySolo || project.solo[lane];
 }
 
 export function toggleLock(project: Project, lane: LaneId): Project {

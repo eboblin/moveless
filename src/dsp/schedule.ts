@@ -1,6 +1,7 @@
 import { clamp01, FRAMES_PER_BLOCK, SIXTEENTH_TICKS, tickToSample } from "../core/clock.ts";
 import { soundMacro, withMacro } from "../core/modulate.ts";
 import { generatePhrase, laneSteps, endpointLanes } from "../core/phrase.ts";
+import { laneHeard } from "../core/journal.ts";
 import { LANES, type LaneId, type LaneSend, type Modulated, type Phrase, type Project } from "../core/types.ts";
 import { mapFilter, mapSend, mapSound, type EngineParam } from "./map.ts";
 
@@ -42,7 +43,7 @@ export function phraseLoop(project: Project, phrase: Phrase = generatePhrase(pro
   const tempo = project.global.tempo;
   const out: LoopEvent[] = [];
   for (const lane of LANES) {
-    if (project.mute[lane]) continue;
+    if (!laneHeard(project, lane)) continue;
     const steps = Math.max(1, phrase.steps[lane]);
     const loop = Math.max(1, tickToSample(steps * SIXTEENTH_TICKS, tempo));
     const gain = project.mixer[lane] * project.mixer.master;
@@ -72,7 +73,7 @@ export function soundMotions(project: Project, phrase?: Phrase): Motion[] {
   const t = morph?.t ?? 0;
   const out: Motion[] = [];
   for (const lane of LANES) {
-    if (project.mute[lane]) continue;
+    if (!laneHeard(project, lane)) continue;
     const steps = Math.max(1, ready ? ready.steps[lane] : laneSteps(project.working, lane, project.global));
     const loop = Math.max(1, tickToSample(steps * SIXTEENTH_TICKS, tempo));
     const sound = ends ? ends.from[lane].sound : project.working[lane].sound;
@@ -190,7 +191,7 @@ export function eventsInBlock(project: Project, tick: number): BlockEvent[] {
   const end = start + FRAMES_PER_BLOCK;
   const out: BlockEvent[] = [];
   for (const lane of LANES) {
-    if (project.mute[lane]) continue;
+    if (!laneHeard(project, lane)) continue;
     const gain = project.mixer[lane] * project.mixer.master;
     for (const event of phrase.lanes[lane]) {
       if (event.sample < start || event.sample >= end) continue;

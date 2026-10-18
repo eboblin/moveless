@@ -39,10 +39,7 @@ export function generateHits(
   gen1: EuclidGen,
   gen2: EuclidGen,
   steps: number,
-  seed: number,
-  lane: LaneId,
   velocityMacro = 0,
-  probabilityMacro = 0,
 ): Hit[] {
   // Span may exceed a single Euclidean ring — rings tile via step % length so
   // pitched lanes can cover the full chord phrase.
@@ -66,13 +63,35 @@ export function generateHits(
       if (!pattern || length <= 0) continue;
       const local = ((step % length) + length) % length;
       if (!pattern[local]) continue;
-      const probability = clamp01(gen.probability + probabilityMacro);
-      if (probability <= 0) continue;
-      if (probability < 1 && hash01(seed, lane, which, "prob", step) >= probability) continue;
       fired.push(which);
       velocity = Math.max(velocity, evalModulated(withMacro(gen.velocity, velocityMacro), step));
     }
     if (fired.length) hits.push({ step, generators: fired, velocity });
   }
   return hits;
+}
+
+/** Probability is the last gate: each ratchet and each repeat rolls on its own. */
+export function keptVelocity(
+  gen1: EuclidGen,
+  gen2: EuclidGen,
+  generators: readonly (1 | 2)[],
+  seed: number,
+  lane: LaneId,
+  step: number,
+  index: number,
+  velocityMacro = 0,
+  probabilityMacro = 0,
+): number | null {
+  let velocity = 0;
+  let any = false;
+  for (const which of generators) {
+    const gen = which === 1 ? gen1 : gen2;
+    const probability = clamp01(gen.probability + probabilityMacro);
+    if (probability <= 0) continue;
+    if (probability < 1 && hash01(seed, lane, which, "prob", step, index) >= probability) continue;
+    any = true;
+    velocity = Math.max(velocity, evalModulated(withMacro(gen.velocity, velocityMacro), step));
+  }
+  return any ? velocity : null;
 }

@@ -126,6 +126,7 @@ function mergeProject(raw: Record<string, unknown>): Project {
     macros: isRecord(raw.macros) ? { ...base.macros, ...(raw.macros as Record<string, number>) } : base.macros,
     bookmarks,
     mute: { ...base.mute, ...(isRecord(raw.mute) ? (raw.mute as Project["mute"]) : {}) },
+    solo: { ...base.solo, ...(isRecord(raw.solo) ? (raw.solo as Project["solo"]) : {}) },
     lock: { ...base.lock, ...(isRecord(raw.lock) ? (raw.lock as Project["lock"]) : {}) },
     working: acceptLanes(raw.working),
     progression: mergeProgression(base.progression, raw.progression),

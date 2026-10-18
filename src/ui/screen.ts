@@ -1,4 +1,5 @@
 import { morphBarSide } from "../core/blend.ts";
+import { laneHeard } from "../core/journal.ts";
 import { SIXTEENTH_TICKS } from "../core/clock.ts";
 import { phraseStepsOf } from "../core/events.ts";
 import { chordSymbol, degreeNumeral, pitchClassName, scaleShort, scaleTitle } from "../core/harmony.ts";
@@ -8,7 +9,7 @@ import { CAPTURE_DEPTHS, CAPTURE_INTENSITIES, CAPTURE_SCOPES, isPitched, LANES, 
 import { DIGIT_H, displayAmount, type BigAmount, type DisplayAmount } from "./digits.ts";
 import { readControl } from "./controls.ts";
 import { bindingFor, pagesFor, type Binding, type Page } from "../core/pages.ts";
-import { focusVisible, type UiState } from "./state.ts";
+import { focusVisible, peekKind, type UiState } from "./state.ts";
 
 export const WIDTH = 128;
 export const HEIGHT = 64;
@@ -70,22 +71,24 @@ export function renderScreen(
   const pageIndex = peek ? ui.heldPage ?? ui.lanePages[peek] ?? 0 : ui.page;
   const pages = pagesFor(context);
   const page = pages[Math.min(pageIndex, pages.length - 1)];
-  const capture = ui.captureHeld;
+  const kind = peekKind(ui);
+  const capture = kind === "capture";
   const notice = !capture && ui.notice && now < ui.notice.untilMs ? ui.notice : null;
   const focusState = !notice && !capture && focusVisible(ui.focus, tick, now) ? ui.focus : null;
   const focus = focusState?.label ?? null;
   const focusBinding = focusState ? bindingFor(focusState.path) : null;
-  const header =
-    (focusBinding ? figureHeader(project, context, focusBinding) : null) ??
-    focusBinding?.title ??
-    (focus ? focus : laneHeader(project, context, page));
+  const mixer = !notice && !capture && kind === "mute";
+  const header = mixer
+    ? (focusBinding?.title ?? focus ?? "MIXER")
+    : (focusBinding ? figureHeader(project, context, focusBinding) : null) ??
+      focusBinding?.title ??
+      (focus ? focus : laneHeader(project, context, page));
   const vizLane: LaneId | null = isAux(context) ? null : context;
   const generator = vizLane && focusState?.generator ? focusState.generator : null;
-  const mixer = !notice && !capture && page?.group === "mix";
-  const bars = !notice && !capture && page?.id === "prog";
+  const bars = !notice && !capture && !mixer && page?.id === "prog";
   const viz = capture ? "capture" : notice ? "notice" : mixer ? "mixer" : generator ? "generator" : vizLane || bars ? "phrase" : "none";
   pixels.fill(0);
-  drawPager(pixels, Math.min(pageIndex, Math.max(0, pages.length - 1)), pages.length);
+  drawPager(pixels, mixer ? 0 : Math.min(pageIndex, Math.max(0, pages.length - 1)), mixer ? 1 : pages.length);
   if (!mixer) drawParamSeparator(pixels);
   const chordRoll = vizLane === "chords" && !capture;
   const showPhrase = !notice && !mixer && !generator && !capture && (vizLane !== null || bars);
@@ -157,6 +160,14 @@ function drawMixer(pixels: Uint8Array, project: Project, focus: string | null): 
         set(pixels, x, bottom, 1);
       }
     }
+    if (id !== "master" && !laneHeard(project, id)) {
+      for (let y = top; y <= bottom; y++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          const x = mid + dx;
+          if ((x + y) % 2 !== 0) set(pixels, x, y, 0);
+        }
+      }
+    }
   }
 }
 
@@ -166,7 +177,7 @@ function mixerChannelLabels(project: Project, focus: string | null): Label[] {
     const id = MIX_CHANNELS[i];
     const x0 = i * MIX_COL_W;
     if (id !== "master") {
-      const marks = `${project.mute[id] ? "M" : ""}${project.lock[id] ? "L" : ""}`;
+      const marks = `${project.mute[id] ? "M" : ""}${project.solo[id] ? "S" : ""}${project.lock[id] ? "L" : ""}`;
       if (marks) {
         labels.push({
           x: x0 + Math.max(0, Math.floor((MIX_COL_W - marks.length * CHAR_W) / 2)),
@@ -230,6 +241,7 @@ function laneTag(project: Project, context: ContextId): string {
   let tag = LANE_CODE[context];
   if (!isAux(context)) {
     if (project.mute[context]) tag += "M";
+    if (project.solo[context]) tag += "S";
     if (project.lock[context]) tag += "L";
   }
   return tag;

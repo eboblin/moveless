@@ -218,6 +218,28 @@ describe("euclid generator", () => {
     assert.deepEqual(ticks, [0, 48, 96, 144]);
   });
 
+  it("thins each ratchet and each repeat on its own", () => {
+    const project = bar(defaultProject());
+    project.working.kick.gen1 = { ...project.working.kick.gen1, length: 16, hits: 1, rotate: 0, probability: 0.45 };
+    project.working.kick.gen2.hits = 0;
+    project.working.kick.ratchet.count = modulated(1);
+    project.working.kick.ratchet.rate = modulated(unitForIndex(1, 6));
+    project.working.bass.gen1 = { ...project.working.bass.gen1, length: 16, hits: 1, rotate: 0, probability: 0.45 };
+    project.working.bass.gen2.hits = 0;
+    project.working.bass.repeat = modulated(1);
+    let kickPartial = false;
+    let bassPartial = false;
+    for (let seed = 1; seed <= 40 && (!kickPartial || !bassPartial); seed++) {
+      project.global.seed = seed;
+      const kick = generatePhrase(project).lanes.kick.length;
+      const bass = generatePhrase(project).lanes.bass.length;
+      kickPartial = kickPartial || (kick > 0 && kick < 8);
+      bassPartial = bassPartial || (bass > 0 && bass < 8);
+    }
+    assert.equal(kickPartial, true);
+    assert.equal(bassPartial, true);
+  });
+
   it("reads a modulator at the note time rather than the note count", () => {
     const project = bar(defaultProject());
     project.working.kick.gen1 = { ...project.working.kick.gen1, length: 16, hits: 4, rotate: 0, probability: 1 };

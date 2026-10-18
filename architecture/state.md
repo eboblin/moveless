@@ -10,11 +10,11 @@
 
 - **Scene** — неизменяемый снимок семи lane. Идентификатор `001`, `002`, … При Record сцена получает псевдослучайный цвет пэда из яркой палитры Move, он хранится на сцене. Journal только дописывается.
 - **Working** — живой документ той же формы. Морф пишет в него. Энкодер пишет сразу и снимает это поле с морфа. Record копирует working.
-- **Project** — journal, sets (до 32 ссылок на сцены), mixer (7 уровней и master), global, macro offsets, 4 bookmark'а, mute, lock, transition, wander, clipboard (список id сцен для вставки в сет; старый файл с одной строкой читается как список из одного id). В сцену это не входит.
+- **Project** — journal, sets (до 32 ссылок на сцены), mixer (7 уровней и master), global, macro offsets, 4 bookmark'а, mute, solo, lock, transition, wander, clipboard (список id сцен для вставки в сет; старый файл с одной строкой читается как список из одного id). В сцену это не входит.
 
 `heard = clamp(stored + macroOffset)` считается в момент генерации фразы. Record offset не запекает. У locked lane offset не применяется. Страницы macro пишут те же offsets: DENS сдвигает probability евклида, REP — repeat и ratchet count, RATE — ratchet rate и rate аккордов. Ключ без ручки, если он уже лежит в файле, по-прежнему применяется.
 
-Mute убирает lane из слышимого выхода. Harmonic events Chords при mute остаются, bass и lead продолжают их читать.
+Mute убирает lane из слышимого выхода. Harmonic events Chords при mute остаются, bass и lead продолжают их читать. Solo хранится отдельно и складывается: пока хотя бы один solo включён, слышны только незамьюченные solo-лейны. Явный mute сильнее solo. Снятие последнего solo возвращает прежние mute. Уровни микшера крутятся на экране долгого Mute, не на фиолетовой кнопке. Клетка на слайдере и лампа step показывают, слышен ли лейн, а не отдельный флаг mute или solo.
 
 ## Lane
 
@@ -34,10 +34,11 @@ Chords lane: генераторы `tone` / `octave` / `rate` / `gate` / `velocit
 phraseSteps = max(length1, length2)   // length 0 = off
 local = step mod length
 pattern = rotate(euclid(hits, length))
-if hash(seed, lane, gen, step) >= probability → skip hit
+expand ratchet / repeat
+if hash(seed, lane, gen, sourceStep, index) >= probability → skip that note
 ```
 
-`probability` 1 оставляет все удары кольца, 0 глушит генератор. Короткое кольцо повторяется внутри более длинной петли. На одном шаге оба попали → одно событие, velocity = max.
+`probability` считается последней, уже по разложенным ratchet и repeat: у каждой ноты свой бросок. 1 оставляет все ноты, 0 глушит генератор. Короткое кольцо повторяется внутри более длинной петли, и каждый повтор кольца бросает заново. На одном шаге оба попали → одно событие, velocity = max среди генераторов, прошедших бросок этой ноты.
 
 Модулятор (полный V/P/C/A), в том числе у gen.velocity:
 
@@ -53,7 +54,7 @@ out = clamp(value + motif(pattern, phase) * amount)
 
 192 PPQN. Темп и swing в Global. Swing 0 прямой; swing 1 задерживает нечётные шестнадцатые на половину шестнадцатой уже после сетки генератора. Фраза каждого lane играется по кругу на своей длине. Ход ведёт `dsp.so` по аудиоблокам, поэтому темп не зависит от того, как часто интерфейс успевает перерисоваться.
 
-Хеш вероятности: `seed + lane + generator + "prob" + step`. Идентификатора сцены в хеше нет.
+Хеш вероятности: `seed + lane + generator + "prob" + исходный шаг + номер ratchet или repeat`. Идентификатора сцены в хеше нет.
 
 Ratchet и Repeat считают исходное событие за единицу: count 1 — одно событие. Повторы Repeat сдвигаются на `step` ступеней лада.
 

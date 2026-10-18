@@ -37,7 +37,13 @@ export interface UiState {
   mode: UiMode;
   wheelTouch: boolean;
   muteHeld: boolean;
-  loopHeld: boolean;
+  /** Peek stays up after a short Mute tap. */
+  muteLatched: boolean;
+  /** Latch from before this Mute press, restored when the hold was long. */
+  muteWasLatched: boolean;
+  /** Tick and wall clock when Mute went down. */
+  muteDownTick: number | null;
+  muteDownMs: number | null;
   shiftHeld: boolean;
   copyHeld: boolean;
   /** Tick and wall clock when Copy went down, so a short click can paste. */
@@ -51,6 +57,12 @@ export interface UiState {
   journalPage: number;
   deleteHeld: boolean;
   captureHeld: boolean;
+  /** Peek stays up after a short Capture tap. */
+  captureLatched: boolean;
+  /** Latch from before this Capture press, restored when the hold was long. */
+  captureWasLatched: boolean;
+  captureDownTick: number | null;
+  captureDownMs: number | null;
   captureGenerator: string | null;
   /** True after a page-pad capture during hold — release must not also group-reroll. */
   captureAction: boolean;
@@ -67,6 +79,42 @@ export interface UiState {
 export const HOLD_TICKS = 80;
 /** Wall-clock hold, so a bookmark can be stored while the transport is stopped. */
 export const HOLD_MS = 400;
+
+/** A tap under either threshold. A stopped clock still counts as short via the wall clock. */
+export function holdIsShort(downTick: number | null, downMs: number | null, tick: number, now = Date.now()): boolean {
+  const heldTicks = downTick === null ? 0 : tick - downTick;
+  const heldMs = downMs === null ? 0 : now - downMs;
+  return heldTicks < HOLD_TICKS && heldMs < HOLD_MS;
+}
+
+export type PeekKind = "mute" | "capture";
+
+export interface PeekFlags {
+  muteHeld?: boolean;
+  muteLatched?: boolean;
+  muteDownMs?: number | null;
+  captureHeld?: boolean;
+  captureLatched?: boolean;
+  captureDownMs?: number | null;
+}
+
+/** The peek on screen. A held button beats the other button's latch. */
+export function peekKind(ui: PeekFlags): PeekKind | null {
+  const captureHeld = ui.captureHeld ?? false;
+  const muteHeld = ui.muteHeld ?? false;
+  if (captureHeld && muteHeld) {
+    return (ui.captureDownMs ?? 0) >= (ui.muteDownMs ?? 0) ? "capture" : "mute";
+  }
+  if (captureHeld) return "capture";
+  if (muteHeld) return "mute";
+  if (ui.captureLatched) return "capture";
+  if (ui.muteLatched) return "mute";
+  return null;
+}
+
+export function mutePeekOpen(ui: PeekFlags): boolean {
+  return peekKind(ui) === "mute";
+}
 
 /** 300 ms of musical time at the current tempo. */
 export function focusHoldTicks(tempo: number): number {
@@ -111,7 +159,10 @@ export function defaultUi(): UiState {
     mode: "journal",
     wheelTouch: false,
     muteHeld: false,
-    loopHeld: false,
+    muteLatched: false,
+    muteWasLatched: false,
+    muteDownTick: null,
+    muteDownMs: null,
     shiftHeld: false,
     copyHeld: false,
     copyDownTick: null,
@@ -121,6 +172,10 @@ export function defaultUi(): UiState {
     journalPage: 0,
     deleteHeld: false,
     captureHeld: false,
+    captureLatched: false,
+    captureWasLatched: false,
+    captureDownTick: null,
+    captureDownMs: null,
     captureGenerator: null,
     captureAction: false,
     heldContext: null,

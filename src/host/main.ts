@@ -22,7 +22,7 @@ import {
   cellTextX,
   renderScreen,
 } from "../ui/screen.ts";
-import { defaultUi, focusVisible, rememberPage, type UiState } from "../ui/state.ts";
+import { defaultUi, focusVisible, peekKind, rememberPage, type UiState } from "../ui/state.ts";
 import type { Project } from "../core/types.ts";
 
 interface HostGlobals {
@@ -162,10 +162,12 @@ let paintPlaying = false;
 let paintStep = -1;
 let paintNotice = false;
 let paintFocus = false;
+let paintPeek: string | null = null;
 let ledPhase = -1;
 let ledProject: Project | null = null;
 let ledUi: UiState | null = null;
 let ledPlaying = false;
+let ledPeek: string | null = null;
 
 function screenChanged(): boolean {
   const ui = session.ui;
@@ -173,13 +175,15 @@ function screenChanged(): boolean {
   const now = Date.now();
   const notice = !!(ui.notice && now < ui.notice.untilMs);
   const focus = focusVisible(ui.focus, session.tick, now);
+  const peek = peekKind(ui);
   if (
     paintProject === session.project &&
     paintUi === ui &&
     paintPlaying === session.playing &&
     paintStep === step &&
     paintNotice === notice &&
-    paintFocus === focus
+    paintFocus === focus &&
+    paintPeek === peek
   ) {
     return false;
   }
@@ -189,16 +193,19 @@ function screenChanged(): boolean {
   paintStep = step;
   paintNotice = notice;
   paintFocus = focus;
+  paintPeek = peek;
   return true;
 }
 
 function ledsChanged(): boolean {
   const phase = Math.floor(Date.now() / blinkHalfMs(session.project.global.tempo));
-  if (ledPhase === phase && ledProject === session.project && ledUi === session.ui && ledPlaying === session.playing) return false;
+  const peek = peekKind(session.ui);
+  if (ledPhase === phase && ledProject === session.project && ledUi === session.ui && ledPlaying === session.playing && ledPeek === peek) return false;
   ledPhase = phase;
   ledProject = session.project;
   ledUi = session.ui;
   ledPlaying = session.playing;
+  ledPeek = peek;
   return true;
 }
 
@@ -357,10 +364,12 @@ export function init(): void {
   paintStep = -1;
   paintNotice = false;
   paintFocus = false;
+  paintPeek = null;
   ledPhase = -1;
   ledProject = null;
   ledUi = null;
   ledPlaying = false;
+  ledPeek = null;
   const host = globalThis as HostGlobals;
   host.set_font?.(MODULE_FONT);
   syncVoice(true);

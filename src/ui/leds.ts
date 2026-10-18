@@ -1,11 +1,12 @@
 import { morphProgress } from "../core/morph.ts";
-import { sceneColor, journalPadIds, setPadIds } from "../core/performance.ts";
+import { sceneColor, journalPadIds, laneHeard, setPadIds } from "../core/performance.ts";
 import {
   CAPTURE_DEPTHS,
   CAPTURE_INTENSITIES,
   CAPTURE_SCOPES,
   isDrum,
   isLane,
+  LANES,
   STEPS,
   TRANSITIONS,
   WANDERS,
@@ -13,7 +14,8 @@ import {
   type LaneId,
   type Project,
 } from "../core/types.ts";
-import { pageCount, pageGroupColor } from "../core/pages.ts";
+import { pageCount, pageGroup, pageGroupColor, pagesFor } from "../core/pages.ts";
+import { peekKind } from "./state.ts";
 
 export const LED = {
   off: 0,
@@ -53,15 +55,10 @@ export function laneFamily(lane: LaneId): "red" | "yellow" {
 }
 
 export function stepLed(project: Project, context: ContextId, lane: LaneId): Led {
+  if (!laneHeard(project, lane)) return led("off", false);
   const current = context === lane;
-  const locked = project.lock[lane];
-  const muted = project.mute[lane];
-  if (current && locked) return led("lock", true);
-  if (current) return led(laneFamily(lane), true);
-  if (muted && locked) return led("lock", false);
-  if (muted) return led("off", false);
-  if (locked) return led("lock", false);
-  return led(laneFamily(lane), false);
+  if (project.lock[lane]) return led("lock", current);
+  return led(laneFamily(lane), current);
 }
 
 export function auxLed(current: boolean): Led {
@@ -110,6 +107,8 @@ export function trackLeds(project: Project, context: ContextId, page: number): L
 export interface PadSurface {
   wheelTouch?: boolean;
   captureHeld?: boolean;
+  captureLatched?: boolean;
+  captureDownMs?: number | null;
   heldContext?: ContextId | null;
   heldPage?: number | null;
   context?: ContextId;
@@ -117,6 +116,10 @@ export interface PadSurface {
   lanePages?: Partial<Record<ContextId, number>>;
   copyHeld?: boolean;
   journalPage?: number;
+  muteHeld?: boolean;
+  muteLatched?: boolean;
+  muteDownMs?: number | null;
+  muteDownTick?: number | null;
 }
 
 /**
@@ -127,7 +130,9 @@ export interface PadSurface {
 export function padLeds(project: Project, mode: "journal" | "set", surface?: PadSurface, tick = 0): Led[] {
   const context = surface?.context ?? "kick";
   const page = surface?.page ?? 0;
-  if (surface?.captureHeld) return capturePadLeds(project);
+  const kind = peekKind(surface ?? {});
+  if (kind === "mute") return mutePeekLeds(project, context);
+  if (kind === "capture") return capturePadLeds(project, surface ?? {});
   if (surface?.wheelTouch) return wheelPadLeds(project, context, page);
   const scenes = scenePadLeds(project, mode, tick, surface?.journalPage ?? 0, surface?.copyHeld ?? false);
   if (surface?.heldContext) {
@@ -137,10 +142,52 @@ export function padLeds(project: Project, mode: "journal" | "set", surface?: Pad
   return scenes;
 }
 
-/** Bottom: delete + low/med/high. Row above: lane/group/page. Row above that: all/generators/values. Top row stays off. */
-function capturePadLeds(project: Project): Led[] {
+/** Drums, melody, and lock sit in palette 1–26 so a muted or unlocked pad can dim. */
+const PEEK_DRUM = 5;
+const PEEK_TONE = 8;
+const PEEK_LOCK = 22;
+const PEEK_DIM = 0.5;
+
+function mutePeekLeds(project: Project, context: ContextId): Led[] {
   const out = Array.from({ length: 32 }, () => led("off", false));
-  CAPTURE_INTENSITIES.forEach((id, col) => {
+  LANES.forEach((lane, col) => {
+    const active = context === lane;
+    const hue = isDrum(lane) ? PEEK_DRUM : PEEK_TONE;
+    const muted = shadeColor(hue, project.mute[lane] ? PEEK_DIM : 1);
+    const soloed = shadeColor(hue, project.solo[lane] ? 1 : PEEK_DIM);
+    const locked = shadeColor(PEEK_LOCK, project.lock[lane] ? 1 : PEEK_DIM);
+    out[24 + col] = { family: "yellow", color: muted, blink: active, blinkTo: active ? offColor(hue) : undefined };
+    out[16 + col] = { family: "yellow", color: soloed, blink: active, blinkTo: active ? offColor(hue) : undefined };
+    out[8 + col] = { family: "purple", color: locked, blink: active, blinkTo: active ? offColor(PEEK_LOCK) : undefined };
+  });
+  return out;
+}
+
+const DEPTH_COLOR = { all: 11, generators: 5, values: 25 } as const;
+
+/** Top two rows are the lane's pages. The next row is depth then scope. The bottom row is intensity. */
+function capturePadLeds(project: Project, surface: PadSurface): Led[] {
+  const context = surface.heldContext ?? surface.context ?? "kick";
+  const rawPage = surface.heldContext ? surface.heldPage ?? surface.page ?? 0 : surface.page ?? 0;
+  const page = Math.min(rawPage, Math.max(0, pageCount(context) - 1));
+  const out = Array.from({ length: 32 }, () => led("off", false));
+  const count = pageCount(context);
+  const blinkTo = project.captureIntensity === "clear" ? LED.red : DEPTH_COLOR[project.captureDepth];
+  for (let index = 0; index < count; index++) {
+    const slot = index < 8 ? 24 + index : 16 + (index - 8);
+    if (index >= 16) break;
+    const color = pageGroupColor(context, index);
+    const hit = captureTouchesPage(project, context, index, page);
+    out[slot] = { family: "yellow", color, blink: hit, blinkTo: hit ? blinkTo : undefined };
+  }
+  CAPTURE_DEPTHS.forEach((id, col) => {
+    out[8 + col] = { family: "yellow", color: DEPTH_COLOR[id], blink: project.captureDepth === id };
+  });
+  CAPTURE_SCOPES.forEach((id, col) => {
+    out[8 + CAPTURE_DEPTHS.length + col] = { family: "yellow", color: 3, blink: project.captureScope === id };
+  });
+  CAPTURE_INTENSITIES.forEach((id) => {
+    const col = id === "clear" ? 0 : 2 + ["soft", "medium", "hard"].indexOf(id);
     const selected = project.captureIntensity === id;
     if (id === "clear") {
       out[col] = { family: "red", color: LED.red, blink: selected };
@@ -148,13 +195,25 @@ function capturePadLeds(project: Project): Led[] {
     }
     out[col] = { family: "yellow", color: shadeColor(LED.yellow, INTENSITY_SHADE[id]), blink: selected };
   });
-  CAPTURE_SCOPES.forEach((id, col) => {
-    out[8 + col] = { family: "yellow", color: 3, blink: project.captureScope === id };
-  });
-  CAPTURE_DEPTHS.forEach((id, col) => {
-    out[16 + col] = { family: "purple", color: LED.purple, blink: project.captureDepth === id };
-  });
   return out;
+}
+
+/** Pages Loop will rewrite. Aux leaves progression, space and global alone. */
+function captureTouchesPage(project: Project, context: ContextId, index: number, page: number): boolean {
+  const pages = pagesFor(context);
+  const item = pages[index];
+  if (!item) return false;
+  if (context === "aux") {
+    const current = pages[page];
+    if (!current || current.group !== "macro") return false;
+    if (project.captureScope === "page") return index === page;
+    return item.group === current.group;
+  }
+  if (project.captureScope === "lane") return true;
+  if (project.captureScope === "page") return index === page;
+  const group = pageGroup(context, page);
+  const scope = group === "sound" || group === "notes" || group === "fx" ? group : "pattern";
+  return item.group === scope;
 }
 
 /**
@@ -164,9 +223,15 @@ function capturePadLeds(project: Project): Led[] {
 export function shadeColor(color: number, amount: number): number {
   if (amount <= 0) return 0;
   if (color < 1 || color > 26) return amount >= 1 ? color : 0;
-  if (amount < 1 / 3) return 64 + 2 * color;
+  if (amount < 1 / 3) return offColor(color);
   if (amount < 2 / 3) return 63 + 2 * color;
   return color;
+}
+
+/** Dark partner of a palette colour: the off version of that hue. */
+export function offColor(color: number): number {
+  if (color < 1 || color > 26) return LED.off;
+  return 64 + 2 * color;
 }
 
 /** Pure green. Scene colors never use this index. */

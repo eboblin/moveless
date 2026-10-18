@@ -10,7 +10,7 @@ import {
   tickToSample,
 } from "./clock.ts";
 import { blendPhrases } from "./blend.ts";
-import { generateHits, phraseStepsOf } from "./events.ts";
+import { generateHits, keptVelocity, phraseStepsOf } from "./events.ts";
 import { getPath, mixFieldValues } from "./fields.ts";
 import { morphEndpoints } from "./morph.ts";
 import { applyFollowMidi, chordTonePitchClasses, degreeToMidi, generateHarmony, harmonyAt, pitchClassName, scaleOf } from "./harmony.ts";
@@ -375,17 +375,19 @@ function place(
 }
 
 function drumEvents(lane: DrumLane, id: LaneId, global: GlobalSettings, macros: Record<string, number>, steps: number): TimedEvent[] {
-  const hits = generateHits(lane.gen1, lane.gen2, steps, global.seed, id, macro(macros, "velocity"), macro(macros, "probability"));
+  const hits = generateHits(lane.gen1, lane.gen2, steps, macro(macros, "velocity"));
   const out: TimedEvent[] = [];
   hits.forEach((hit) => {
     const count = countFromUnit(evalModulated(withMacro(lane.ratchet.count, macro(macros, "count")), hit.step));
     const rate = rateFromUnit(evalModulated(withMacro(lane.ratchet.rate, macro(macros, "rate")), hit.step));
     for (let i = 0; i < count; i++) {
+      const velocity = keptVelocity(lane.gen1, lane.gen2, hit.generators, global.seed, id, hit.step, i, macro(macros, "velocity"), macro(macros, "probability"));
+      if (velocity === null) continue;
       const step = hit.step + (i * rate.ticks) / SIXTEENTH_TICKS;
       const sound = soundValues(lane.sound, step, macros);
       const filter = filterValues(lane.filter, step, macros);
       const send = sendValues(lane.send, step, macros);
-      out.push(place(hit.step, i * rate.ticks, global, id, DRUM_NOTE[id as keyof typeof DRUM_NOTE], hit.velocity, rate.ticks, sound, filter, send));
+      out.push(place(hit.step, i * rate.ticks, global, id, DRUM_NOTE[id as keyof typeof DRUM_NOTE], velocity, rate.ticks, sound, filter, send));
     }
   });
   return out;
@@ -399,7 +401,7 @@ function pitchedEvents(
   harmony: HarmonicEvent[],
   steps: number,
 ): TimedEvent[] {
-  const hits = generateHits(lane.gen1, lane.gen2, steps, global.seed, id, macro(macros, "velocity"), macro(macros, "probability"));
+  const hits = generateHits(lane.gen1, lane.gen2, steps, macro(macros, "velocity"));
   const scale = scaleOf(global.scale);
   const rootPc = mod(global.root + global.transpose, 12);
   const out: TimedEvent[] = [];
@@ -407,6 +409,8 @@ function pitchedEvents(
     const reps = countFromUnit(evalModulated(withMacro(lane.repeat, macro(macros, "repeat")), hit.step));
     const shift = Math.round(bipolarFromUnit(evalModulated(withMacro(lane.step, macro(macros, "step")), hit.step), 7));
     for (let r = 0; r < reps; r++) {
+      const velocity = keptVelocity(lane.gen1, lane.gen2, hit.generators, global.seed, id, hit.step, r, macro(macros, "velocity"), macro(macros, "probability"));
+      if (velocity === null) continue;
       const step = hit.step + r;
       const pitchU = evalModulated(withMacro(lane.pitch, macro(macros, "pitch")), step);
       const octaveU = evalModulated(withMacro(lane.octave, macro(macros, "octave")), step);
@@ -420,7 +424,7 @@ function pitchedEvents(
       const sound = soundValues(lane.sound, step, macros);
       const filter = filterValues(lane.filter, step, macros);
       const send = sendValues(lane.send, step, macros);
-      out.push(place(hit.step, r * SIXTEENTH_TICKS, global, id, note, hit.velocity, lengthTicks, sound, filter, send));
+      out.push(place(hit.step, r * SIXTEENTH_TICKS, global, id, note, velocity, lengthTicks, sound, filter, send));
     }
   });
   return out;
