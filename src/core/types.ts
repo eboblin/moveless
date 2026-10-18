@@ -204,6 +204,8 @@ export const TRANSITIONS: readonly TransitionId[] = ["now", "fast", "medium", "s
 export const WANDERS: readonly WanderId[] = ["fast", "medium", "slow", "glacial"];
 /** Menu button under the jog wheel. */
 export const MENU_CC = 50;
+/** Transport play. The button LED has one color: bright while running, dark when stopped. */
+export const PLAY_CC = 85;
 
 export const TRANSITION_BARS: Record<TransitionId, number> = {
   now: 0,

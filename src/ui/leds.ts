@@ -78,6 +78,14 @@ export function menuLed(mode: "journal" | "set"): Led {
   return led(mode === "set" ? "purple" : "yellow", false);
 }
 
+/** Bright step of a single-color button. Play cannot take a palette color. */
+export const PLAY_LED_ON = 0x7c;
+
+/** Lit while the transport runs, dark when it is stopped. */
+export function playLed(playing: boolean): number {
+  return playing ? PLAY_LED_ON : 0;
+}
+
 /** A stored bookmark lights its track button in that page's group colour. The one matching the screen blinks. */
 export function trackLeds(project: Project, context: ContextId, page: number): Led[] {
   return project.bookmarks.map((ref) => {

@@ -8,7 +8,7 @@ import { applyMorph } from "../src/core/morph.ts";
 import { createSet, launchScene, record } from "../src/core/performance.ts";
 import { generatePhrase } from "../src/core/phrase.ts";
 import { bindingFor, lanePages, pageCount, pageGroup, pageGroupColor, pagesFor } from "../src/core/pages.ts";
-import { LED, blinkHalfMs, ledColorAt, menuLed, padLeds, shadeColor, stepLed, stepLeds, trackLeds } from "../src/ui/leds.ts";
+import { LED, blinkHalfMs, ledColorAt, menuLed, padLeds, PLAY_LED_ON, playLed, shadeColor, stepLed, stepLeds, trackLeds } from "../src/ui/leds.ts";
 import { DIGIT_H, displayAmount, plotAmount } from "../src/ui/digits.ts";
 import { DIGIT_Y, FONT_H, HEADER_H, HEIGHT, NAME_Y, PAGER_Y, PARAM_COL_W, PARAM_H, SEP_Y, TITLE_Y, VALUE_Y, VIZ_H, pixel, renderScreen, type Screen } from "../src/ui/screen.ts";
 import { defaultUi, openSetMode } from "../src/ui/state.ts";
@@ -186,6 +186,8 @@ describe("pages and leds", () => {
   });
 
   it("blinks the current pads on the wall clock at a quarter of the tempo", () => {
+    assert.equal(playLed(true), PLAY_LED_ON);
+    assert.equal(playLed(false), 0);
     const tempo = 120;
     const half = blinkHalfMs(tempo);
     assert.equal(half, 250);

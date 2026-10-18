@@ -21,7 +21,7 @@ import {
   toggleLock,
   toggleMute,
 } from "../core/performance.ts";
-import { CAPTURE_DEPTHS, CAPTURE_INTENSITIES, CAPTURE_SCOPES, isLane, MENU_CC, STEPS, TRANSITIONS, WANDERS, type LaneId, type Project } from "../core/types.ts";
+import { CAPTURE_DEPTHS, CAPTURE_INTENSITIES, CAPTURE_SCOPES, isLane, MENU_CC, PLAY_CC, STEPS, TRANSITIONS, WANDERS, type LaneId, type Project } from "../core/types.ts";
 import { resetControl, writeControl } from "./controls.ts";
 import { bindingFor, bindingPaths, pageCount, pageGroup, pagesFor } from "../core/pages.ts";
 import { applyBookmark, FOCUS_HOLD_MS, focusHoldTicks, HOLD_MS, HOLD_TICKS, rememberPage, type Notice, type UiState } from "./state.ts";
@@ -71,7 +71,7 @@ function onCc(session: Session, cc: number, value: number, press: boolean): Sess
   if (cc === 119) return { ...session, ui: { ...session.ui, deleteHeld: press } };
   if (cc === 52) return onCapture(session, press);
   if (cc === 118 && press) return { ...session, project: record(session.project) };
-  if (cc === 85 && press) return { ...session, playing: !session.playing };
+  if (cc === PLAY_CC && press) return { ...session, playing: !session.playing };
   if (cc >= 71 && cc <= 78) return turnEncoder(session, cc - 71, value);
   if (cc === 14) return turnWheel(session, value);
   if (cc >= 40 && cc <= 43) return onTrack(session, cc - 40, press);

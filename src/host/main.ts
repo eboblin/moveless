@@ -7,8 +7,8 @@ import { phraseLoop, soundMotions } from "../dsp/schedule.ts";
 import { formatSpace } from "../dsp/space.ts";
 import { packPhraseBody } from "../dsp/voice.ts";
 import { reduce, type MidiMsg, type Session } from "../ui/input.ts";
-import { MENU_CC } from "../core/types.ts";
-import { blinkHalfMs, ledColorAt, menuLed, padLeds, stepLeds, trackLeds } from "../ui/leds.ts";
+import { MENU_CC, PLAY_CC } from "../core/types.ts";
+import { blinkHalfMs, ledColorAt, menuLed, padLeds, playLed, stepLeds, trackLeds } from "../ui/leds.ts";
 import { plotAmount, plotMinus } from "../ui/digits.ts";
 import {
   CHAR_W,
@@ -151,6 +151,7 @@ let sentSteps: number[] = [];
 let sentPads: number[] = [];
 let sentTracks: number[] = [];
 let sentMenu = -1;
+let sentPlay = -1;
 const TRACK_CC = 40;
 const frame = new Uint8Array(WIDTH * HEIGHT);
 let paintProject: Project | null = null;
@@ -162,6 +163,7 @@ let paintFocus = false;
 let ledPhase = -1;
 let ledProject: Project | null = null;
 let ledUi: UiState | null = null;
+let ledPlaying = false;
 
 function screenChanged(): boolean {
   const ui = session.ui;
@@ -190,10 +192,11 @@ function screenChanged(): boolean {
 
 function ledsChanged(): boolean {
   const phase = Math.floor(Date.now() / blinkHalfMs(session.project.global.tempo));
-  if (ledPhase === phase && ledProject === session.project && ledUi === session.ui) return false;
+  if (ledPhase === phase && ledProject === session.project && ledUi === session.ui && ledPlaying === session.playing) return false;
   ledPhase = phase;
   ledProject = session.project;
   ledUi = session.ui;
+  ledPlaying = session.playing;
   return true;
 }
 
@@ -272,6 +275,11 @@ function paintLeds(): void {
     sentPads[index] = color;
     host.move_midi_internal_send?.([0x09, 0x90, 68 + index, color]);
   });
+  const play = playLed(session.playing);
+  if (sentPlay !== play) {
+    sentPlay = play;
+    host.move_midi_internal_send([0x0B, 0xB0, PLAY_CC, play]);
+  }
 }
 
 function paint(): void {
@@ -316,6 +324,7 @@ export function init(): void {
   sentPads = [];
   sentTracks = [];
   sentMenu = -1;
+  sentPlay = -1;
   paintProject = null;
   paintUi = null;
   paintPlaying = false;
@@ -325,6 +334,7 @@ export function init(): void {
   ledPhase = -1;
   ledProject = null;
   ledUi = null;
+  ledPlaying = false;
   const host = globalThis as HostGlobals;
   host.set_font?.(MODULE_FONT);
   syncVoice(true);
