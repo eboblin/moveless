@@ -8,7 +8,7 @@ import { formatSpace } from "../dsp/space.ts";
 import { packPhraseBody } from "../dsp/voice.ts";
 import { reduce, type MidiMsg, type Session } from "../ui/input.ts";
 import { CAPTURE_CC, DOWN_CC, MENU_CC, MUTE_CC, PLAY_CC, UP_CC } from "../core/types.ts";
-import { advancePulseClock, blinkHalfMs, directionLit, dropLed, ledColorAt, menuLed, modeButtonLed, offerLed, padLeds, padPackets, playLed, PULSE_CLOCK_IDLE, stepLeds, takeLeds, trackLeds, type PulseClock } from "../ui/leds.ts";
+import { advancePulseClock, blinkHalfMs, directionLit, dropLed, ledColorAt, menuLed, modeButtonLed, offerLed, padBlinkSteps, padLeds, padPackets, playLed, PULSE_CLOCK_IDLE, stepLeds, takeLeds, trackLeds, type PulseClock } from "../ui/leds.ts";
 import { plotAmount, plotMinus } from "../ui/digits.ts";
 import {
   CHAR_W,
@@ -151,6 +151,10 @@ let sentSteps: number[] = [];
 let sentPads: string[] = [];
 /** Unsent LED MIDI. Drained a block at a time so a full repaint is not dropped. */
 const ledOut = new Map<number, number[]>();
+/** Pad packets still owed, one per drain, so a pulse arms after its colour has latched. */
+const padQueue = new Map<number, number[][]>();
+/** Last channel-0 colour handed to the device, per pad index. */
+const latchedPad: Array<number | null> = [];
 const pendingClocks: number[][] = [];
 const LED_BUDGET = 16;
 let sentTracks: number[] = [];
@@ -305,13 +309,15 @@ function paintLeds(): void {
   });
   padLeds(session.project, session.ui.mode, session.ui, tick).forEach((led, index) => {
     const note = 68 + index;
-    const packets = padPackets(note, led);
-    const key = packets.map((packet) => packet.join(",")).join(";");
-    if (sentPads[index] === key) return;
-    sentPads[index] = key;
-    offerLed(ledOut, packets[0]);
-    if (packets[1]) offerLed(ledOut, packets[1]);
-    else dropLed(ledOut, 0x99, note);
+    const key = padPackets(note, led).map((packet) => packet.join(",")).join(";");
+    if (sentPads[index] !== key) {
+      sentPads[index] = key;
+      padQueue.set(note, padBlinkSteps(note, led, latchedPad[index] ?? null));
+    }
+    const queued = padQueue.get(note);
+    if (!queued?.length) return;
+    offerLed(ledOut, queued[0]);
+    if (queued[0][1] === 0x90) dropLed(ledOut, 0x99, note);
   });
   const play = playLed(session.playing);
   if (sentPlay !== play) {
@@ -346,7 +352,21 @@ function drainLeds(): void {
     host.move_midi_internal_send(pendingClocks.shift() as number[]);
     budget--;
   }
-  for (const packet of takeLeds(ledOut, budget)) host.move_midi_internal_send(packet);
+  for (const packet of takeLeds(ledOut, budget)) {
+    host.move_midi_internal_send(packet);
+    const note = packet[2];
+    const queued = padQueue.get(note);
+    const head = queued?.[0];
+    if (!head || head[1] !== packet[1] || head[3] !== packet[3]) continue;
+    if (packet[1] === 0x90 && note >= 68 && note <= 99) latchedPad[note - 68] = packet[3];
+    queued.shift();
+    if (!queued.length) {
+      padQueue.delete(note);
+      continue;
+    }
+    offerLed(ledOut, queued[0]);
+    if (queued[0][1] === 0x90) dropLed(ledOut, 0x99, note);
+  }
 }
 
 function paint(): void {
@@ -395,6 +415,8 @@ export function init(): void {
   sentSteps = [];
   sentPads = [];
   ledOut.clear();
+  padQueue.clear();
+  latchedPad.length = 0;
   pendingClocks.length = 0;
   sentTracks = [];
   sentMenu = -1;

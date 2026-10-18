@@ -8,7 +8,7 @@ import { applyMorph } from "../src/core/morph.ts";
 import { createSet, journalPadIds, journalPageCount, launchScene, record } from "../src/core/performance.ts";
 import { generatePhrase } from "../src/core/phrase.ts";
 import { bindingFor, lanePages, pageCount, pageGroup, pageGroupColor, pagesFor } from "../src/core/pages.ts";
-import { LED, advancePulseClock, blinkHalfMs, directionLit, dropLed, ledColorAt, menuLed, modeButtonLed, offColor, offerLed, padLeds, padPackets, PLAY_LED_ON, playLed, PULSE_CLOCK_IDLE, shadeColor, stepLed, stepLeds, takeLeds, trackLeds } from "../src/ui/leds.ts";
+import { LED, advancePulseClock, blinkHalfMs, directionLit, dropLed, ledColorAt, menuLed, modeButtonLed, offColor, offerLed, padBlinkSteps, padLeds, padPackets, PLAY_LED_ON, playLed, PULSE_CLOCK_IDLE, shadeColor, stepLed, stepLeds, takeLeds, trackLeds } from "../src/ui/leds.ts";
 import { DIGIT_H, displayAmount, plotAmount } from "../src/ui/digits.ts";
 import { DIGIT_Y, FONT_H, HEADER_H, HEIGHT, NAME_Y, PAGER_Y, PARAM_COL_W, PARAM_H, SEP_Y, TITLE_Y, VALUE_Y, VIZ_H, pixel, renderScreen, type Screen } from "../src/ui/screen.ts";
 import { defaultUi, HOLD_MS, HOLD_TICKS, openSetMode } from "../src/ui/state.ts";
@@ -270,6 +270,31 @@ describe("pages and leds", () => {
     const retimed = advancePulseClock(ticked.state, 1000 + quarter / 2, 90);
     assert.equal(retimed.state.started, false);
     assert.deepEqual(retimed.packets, []);
+  });
+
+  it("pokes a pad before arming its blink, including one that was dim", () => {
+    const led = { family: "yellow" as const, color: 3, blink: true, blinkTo: offColor(3) };
+    const fresh = padBlinkSteps(92, led, null);
+    assert.deepEqual(fresh, [
+      [0x09, 0x90, 92, offColor(3)],
+      [0x09, 0x90, 92, 3],
+      [0x09, 0x99, 92, offColor(3)],
+    ]);
+    const bright = padBlinkSteps(92, led, 3);
+    assert.deepEqual(bright, [
+      [0x09, 0x90, 92, offColor(3)],
+      [0x09, 0x90, 92, 3],
+      [0x09, 0x99, 92, offColor(3)],
+    ]);
+    const dim = padBlinkSteps(92, led, offColor(3));
+    assert.deepEqual(dim, [
+      [0x09, 0x90, 92, LED.white],
+      [0x09, 0x90, 92, 3],
+      [0x09, 0x99, 92, offColor(3)],
+    ]);
+    const cleared = padBlinkSteps(92, { family: "yellow", color: LED.red, blink: true, blinkTo: 66 }, LED.red);
+    assert.deepEqual(cleared[0], [0x09, 0x90, 92, 66]);
+    assert.deepEqual(cleared[2], [0x09, 0x99, 92, 66]);
   });
 
   it("drains a full pad repaint without dropping colours or pulsing early", () => {
@@ -1204,7 +1229,7 @@ describe("surface", () => {
     assert.equal(clearedPads[0].blink, false);
     assert.equal(clearedPads[24].color, LED.red);
     assert.equal(clearedPads[24].blink, true);
-    assert.equal(clearedPads[24].blinkTo, LED.off);
+    assert.equal(clearedPads[24].blinkTo, 66);
     assert.equal(clearedPads[25].color, LED.red);
     assert.equal(clearedPads[25].blink, false);
 

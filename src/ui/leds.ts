@@ -182,11 +182,12 @@ function capturePadLeds(project: Project, surface: PadSurface): Led[] {
     const zone = captureTouchesPage(project, context, index, page);
     const current = index === page;
     const shown = zone ? (clear ? LED.red : color) : offColor(color);
+    const second = clear && zone ? DIM_RED : offColor(color);
     out[slot] = {
       family: "yellow",
       color: shown,
       blink: current && zone,
-      blinkTo: current && zone ? (clear ? LED.off : offColor(color)) : undefined,
+      blinkTo: current && zone ? second || (shown === 124 ? 123 : 124) : undefined,
     };
   }
   CAPTURE_DEPTHS.forEach((id, col) => {
@@ -319,6 +320,34 @@ export function padPackets(note: number, led: Led): number[][] {
   const rest: number[] = [0x09, PAD_NOTE_ON, note, led.color];
   if (!led.blink) return [rest];
   return [rest, [0x09, PAD_PULSE, note, led.blinkTo ?? LED.off]];
+}
+
+/**
+ * Packets that arm one pad, one per drain. Channel 0 latches a colour only when it
+ * differs from the one the pad is holding, and the pulse that follows uses that
+ * latch as its start. A dim pad is already holding the colour it would blink
+ * toward, so the bright colour has to arrive from some third colour or the pulse
+ * never leaves the dim.
+ */
+export function padBlinkSteps(note: number, led: Led, latched: number | null): number[][] {
+  const color = led.color;
+  if (!led.blink) return [[0x09, PAD_NOTE_ON, note, color]];
+  const second = led.blinkTo ?? LED.off;
+  const steps: number[][] = [];
+  if (second !== 0 && second !== color) {
+    const poke = latched === second ? thirdColor(color, second) : second;
+    steps.push([0x09, PAD_NOTE_ON, note, poke]);
+  }
+  steps.push([0x09, PAD_NOTE_ON, note, color]);
+  steps.push([0x09, PAD_PULSE, note, second]);
+  return steps;
+}
+
+/** A colour that is neither the pulse start nor the dim it is already showing. */
+function thirdColor(color: number, second: number): number {
+  if (LED.white !== color && LED.white !== second) return LED.white;
+  if (LED.off !== color && LED.off !== second) return LED.off;
+  return 3 !== color && 3 !== second ? 3 : 1;
 }
 
 /** Latest unsent LED packet per status+note. A newer offer replaces the old one in place. */
