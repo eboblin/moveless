@@ -2,7 +2,6 @@ import { morphProgress } from "../core/morph.ts";
 import { sceneColor, journalPadIds, laneHeard, setPadIds } from "../core/performance.ts";
 import {
   CAPTURE_DEPTHS,
-  CAPTURE_INTENSITIES,
   CAPTURE_SCOPES,
   isDrum,
   isLane,
@@ -29,8 +28,8 @@ export const LED = {
   working: 8,
 } as const;
 
-/** How bright the shared yellow intensity pads read: low, med, high. */
-const INTENSITY_SHADE = { soft: 0.2, medium: 0.5, hard: 1 } as const;
+/** Dark partner of the standard red. Pure red 127 has none of its own. */
+const DIM_RED = 66;
 
 export type LedFamily = "red" | "yellow" | "purple" | "lock" | "off";
 
@@ -168,8 +167,6 @@ function mutePeekLeds(project: Project, context: ContextId): Led[] {
   return out;
 }
 
-const DEPTH_COLOR = { all: 11, generators: 5, values: 25 } as const;
-
 /** Top two rows are the lane's pages. The next row is depth then scope. The bottom row is intensity. */
 function capturePadLeds(project: Project, surface: PadSurface): Led[] {
   const context = surface.heldContext ?? surface.context ?? "kick";
@@ -177,30 +174,38 @@ function capturePadLeds(project: Project, surface: PadSurface): Led[] {
   const page = Math.min(rawPage, Math.max(0, pageCount(context) - 1));
   const out = Array.from({ length: 32 }, () => led("off", false));
   const count = pageCount(context);
-  const blinkTo = project.captureIntensity === "clear" ? LED.red : DEPTH_COLOR[project.captureDepth];
+  const clear = project.captureIntensity === "clear";
   for (let index = 0; index < count; index++) {
     const slot = index < 8 ? 24 + index : 16 + (index - 8);
     if (index >= 16) break;
     const color = pageGroupColor(context, index);
-    const hit = captureTouchesPage(project, context, index, page);
-    out[slot] = { family: "yellow", color, blink: hit, blinkTo: hit ? blinkTo : undefined };
+    const zone = captureTouchesPage(project, context, index, page);
+    const current = index === page;
+    const shown = zone ? (clear ? LED.red : color) : offColor(color);
+    out[slot] = {
+      family: "yellow",
+      color: shown,
+      blink: current && zone,
+      blinkTo: current && zone ? (clear ? LED.off : offColor(color)) : undefined,
+    };
   }
   CAPTURE_DEPTHS.forEach((id, col) => {
-    out[8 + col] = { family: "yellow", color: DEPTH_COLOR[id], blink: project.captureDepth === id };
+    out[8 + col] = choiceLed("purple", LED.purple, project.captureDepth === id);
   });
   CAPTURE_SCOPES.forEach((id, col) => {
-    out[12 + col] = { family: "yellow", color: 3, blink: project.captureScope === id };
+    out[12 + col] = choiceLed("yellow", 3, project.captureScope === id);
   });
-  CAPTURE_INTENSITIES.forEach((id) => {
-    const col = id === "clear" ? 0 : 2 + ["soft", "medium", "hard"].indexOf(id);
-    const selected = project.captureIntensity === id;
-    if (id === "clear") {
-      out[col] = { family: "red", color: LED.red, blink: selected };
-      return;
-    }
-    out[col] = { family: "yellow", color: shadeColor(LED.yellow, INTENSITY_SHADE[id]), blink: selected };
+  out[0] = choiceLed("red", LED.red, project.captureIntensity === "clear");
+  (["soft", "medium", "hard"] as const).forEach((id, index) => {
+    out[1 + index] = choiceLed("yellow", LED.yellow, project.captureIntensity === id);
   });
   return out;
+}
+
+/** Selected choice at full colour. The others sit at the dark partner, and none of them blink. */
+function choiceLed(family: LedFamily, color: number, selected: boolean): Led {
+  const dim = color === LED.red ? DIM_RED : shadeColor(color, 0.2);
+  return { family, color: selected ? color : dim, blink: false };
 }
 
 /** Pages Loop will rewrite. Aux leaves progression, space and global alone. */
@@ -270,10 +275,10 @@ function scenePadLeds(project: Project, mode: "journal" | "set", tick: number, j
 function wheelPadLeds(project: Project, context: ContextId, page: number): Led[] {
   const out = pageOverlay(Array.from({ length: 32 }, () => led("off", false)), context, page);
   TRANSITIONS.forEach((id, col) => {
-    out[col] = { family: "yellow", color: LED.yellow, blink: project.transition === id };
+    out[col] = choiceLed("yellow", LED.yellow, project.transition === id);
   });
   WANDERS.forEach((id, col) => {
-    out[4 + col] = { family: "purple", color: LED.purple, blink: project.wander === id };
+    out[4 + col] = choiceLed("purple", LED.purple, project.wander === id);
   });
   return out;
 }
@@ -295,14 +300,17 @@ function currentSceneLed(color: number): Led {
 }
 
 function pageLed(context: ContextId, index: number, current: boolean): Led {
-  return { family: "yellow", color: pageGroupColor(context, index), blink: current };
+  const color = pageGroupColor(context, index);
+  return { family: "yellow", color, blink: current, blinkTo: current ? offColor(color) : undefined };
 }
 
 /**
  * Pad MIDI. Channel 0 sets the colour and stops a pulse. Channel 9 is Push's
- * pulsing quarter: the velocity is the other colour, and the device breathes
- * between them for one quarter note. A second channel-0 message cuts the pulse,
- * so the host must not repeat it while the pair is unchanged.
+ * pulsing quarter: the velocity is the other colour. The device latches the
+ * channel-0 colour only after that message has left, so a pulse queued beside
+ * its own colour waits for the next drain. Move's MIDI out holds 20 messages
+ * per audio block; a full pad repaint has to be drained across blocks or the
+ * dropped colour leaves the pulse on the previous page.
  */
 const PAD_NOTE_ON = 0x90;
 const PAD_PULSE = 0x99;
@@ -311,6 +319,41 @@ export function padPackets(note: number, led: Led): number[][] {
   const rest: number[] = [0x09, PAD_NOTE_ON, note, led.color];
   if (!led.blink) return [rest];
   return [rest, [0x09, PAD_PULSE, note, led.blinkTo ?? LED.off]];
+}
+
+/** Latest unsent LED packet per status+note. A newer offer replaces the old one in place. */
+export function offerLed(out: Map<number, number[]>, packet: number[]): void {
+  out.set((packet[1] << 8) | packet[2], packet);
+}
+
+export function dropLed(out: Map<number, number[]>, status: number, data1: number): void {
+  out.delete((status << 8) | data1);
+}
+
+/**
+ * Hand the device up to `budget` LED messages. A pulse stays queued while its
+ * colour is still queued or went out in this same drain.
+ */
+export function takeLeds(out: Map<number, number[]>, budget: number): number[][] {
+  const colourWaiting = new Set<number>();
+  for (const packet of out.values()) {
+    if (packet[1] === PAD_NOTE_ON) colourWaiting.add(packet[2]);
+  }
+  const colourSent = new Set<number>();
+  const send: number[][] = [];
+  const keep = new Map<number, number[]>();
+  for (const [key, packet] of out) {
+    const holdPulse = packet[1] === PAD_PULSE && (colourWaiting.has(packet[2]) || colourSent.has(packet[2]));
+    if (holdPulse || send.length >= budget) {
+      keep.set(key, packet);
+      continue;
+    }
+    send.push(packet);
+    if (packet[1] === PAD_NOTE_ON) colourSent.add(packet[2]);
+  }
+  out.clear();
+  for (const [key, packet] of keep) out.set(key, packet);
+  return send;
 }
 
 /** USB-MIDI realtime. Start resets the shared pulse phase; clock advances it one 24th. */

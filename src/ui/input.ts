@@ -190,8 +190,8 @@ function onCapturePad(session: Session, row: number, col: number): Session {
     return markCapture(session, setCaptureScope(session.project, CAPTURE_SCOPES[col - 4]));
   }
   if (row === 0 && col === 0) return markCapture(session, setCaptureIntensity(session.project, "clear"));
-  if (row === 0 && col >= 2 && col <= 4) {
-    const level = (["soft", "medium", "hard"] as const)[col - 2];
+  if (row === 0 && col >= 1 && col <= 3) {
+    const level = (["soft", "medium", "hard"] as const)[col - 1];
     return markCapture(session, setCaptureIntensity(session.project, level));
   }
   return session;

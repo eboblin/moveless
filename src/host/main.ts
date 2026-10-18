@@ -8,7 +8,7 @@ import { formatSpace } from "../dsp/space.ts";
 import { packPhraseBody } from "../dsp/voice.ts";
 import { reduce, type MidiMsg, type Session } from "../ui/input.ts";
 import { CAPTURE_CC, DOWN_CC, MENU_CC, MUTE_CC, PLAY_CC, UP_CC } from "../core/types.ts";
-import { advancePulseClock, blinkHalfMs, directionLit, ledColorAt, menuLed, modeButtonLed, padLeds, padPackets, playLed, PULSE_CLOCK_IDLE, stepLeds, trackLeds, type PulseClock } from "../ui/leds.ts";
+import { advancePulseClock, blinkHalfMs, directionLit, dropLed, ledColorAt, menuLed, modeButtonLed, offerLed, padLeds, padPackets, playLed, PULSE_CLOCK_IDLE, stepLeds, takeLeds, trackLeds, type PulseClock } from "../ui/leds.ts";
 import { plotAmount, plotMinus } from "../ui/digits.ts";
 import {
   CHAR_W,
@@ -149,6 +149,10 @@ function blit(pixels: Uint8Array): void {
 
 let sentSteps: number[] = [];
 let sentPads: string[] = [];
+/** Unsent LED MIDI. Drained a block at a time so a full repaint is not dropped. */
+const ledOut = new Map<number, number[]>();
+const pendingClocks: number[][] = [];
+const LED_BUDGET = 16;
 let sentTracks: number[] = [];
 let sentMenu = -1;
 let sentPlay = -1;
@@ -277,49 +281,52 @@ function paintLeds(): void {
     const color = ledColorAt(led, now, tempo);
     if (sentSteps[index] === color) return;
     sentSteps[index] = color;
-    host.move_midi_internal_send?.([0x09, 0x90, 16 + index, color]);
+    offerLed(ledOut, [0x09, 0x90, 16 + index, color]);
   });
   const menu = menuLed(session.ui.mode);
   if (sentMenu !== menu) {
     sentMenu = menu;
-    host.move_midi_internal_send([0x0B, 0xB0, MENU_CC, menu]);
+    offerLed(ledOut, [0x0b, 0xb0, MENU_CC, menu]);
   }
   const arrows = arrowBrightness();
   if (sentUp !== arrows.up) {
     sentUp = arrows.up;
-    host.move_midi_internal_send([0x0B, 0xB0, UP_CC, arrows.up]);
+    offerLed(ledOut, [0x0b, 0xb0, UP_CC, arrows.up]);
   }
   if (sentDown !== arrows.down) {
     sentDown = arrows.down;
-    host.move_midi_internal_send([0x0B, 0xB0, DOWN_CC, arrows.down]);
+    offerLed(ledOut, [0x0b, 0xb0, DOWN_CC, arrows.down]);
   }
   trackLeds(session.project, session.ui.context, session.ui.page).forEach((led, index) => {
     const color = ledColorAt(led, now, tempo);
     if (sentTracks[index] === color) return;
     sentTracks[index] = color;
-    host.move_midi_internal_send?.([0x0B, 0xB0, TRACK_CC + index, color]);
+    offerLed(ledOut, [0x0b, 0xb0, TRACK_CC + index, color]);
   });
   padLeds(session.project, session.ui.mode, session.ui, tick).forEach((led, index) => {
-    const packets = padPackets(68 + index, led);
+    const note = 68 + index;
+    const packets = padPackets(note, led);
     const key = packets.map((packet) => packet.join(",")).join(";");
     if (sentPads[index] === key) return;
     sentPads[index] = key;
-    for (const packet of packets) host.move_midi_internal_send?.(packet);
+    offerLed(ledOut, packets[0]);
+    if (packets[1]) offerLed(ledOut, packets[1]);
+    else dropLed(ledOut, 0x99, note);
   });
   const play = playLed(session.playing);
   if (sentPlay !== play) {
     sentPlay = play;
-    host.move_midi_internal_send([0x0B, 0xB0, PLAY_CC, play]);
+    offerLed(ledOut, [0x0b, 0xb0, PLAY_CC, play]);
   }
   const mute = modeButtonLed(session.ui.muteHeld || session.ui.muteLatched);
   if (sentMute !== mute) {
     sentMute = mute;
-    host.move_midi_internal_send([0x0B, 0xB0, MUTE_CC, mute]);
+    offerLed(ledOut, [0x0b, 0xb0, MUTE_CC, mute]);
   }
   const capture = modeButtonLed(session.ui.captureHeld || session.ui.captureLatched);
   if (sentCapture !== capture) {
     sentCapture = capture;
-    host.move_midi_internal_send([0x0B, 0xB0, CAPTURE_CC, capture]);
+    offerLed(ledOut, [0x0b, 0xb0, CAPTURE_CC, capture]);
   }
 }
 
@@ -328,7 +335,18 @@ function paintPulseClock(): void {
   if (!host.move_midi_internal_send) return;
   const next = advancePulseClock(pulseClock, Date.now(), session.project.global.tempo);
   pulseClock = next.state;
-  for (const packet of next.packets) host.move_midi_internal_send(packet);
+  pendingClocks.push(...next.packets);
+}
+
+function drainLeds(): void {
+  const host = globalThis as HostGlobals;
+  if (!host.move_midi_internal_send) return;
+  let budget = LED_BUDGET;
+  while (pendingClocks.length > 0 && budget > 0) {
+    host.move_midi_internal_send(pendingClocks.shift() as number[]);
+    budget--;
+  }
+  for (const packet of takeLeds(ledOut, budget)) host.move_midi_internal_send(packet);
 }
 
 function paint(): void {
@@ -376,6 +394,8 @@ export function init(): void {
   dirtySinceMs = 0;
   sentSteps = [];
   sentPads = [];
+  ledOut.clear();
+  pendingClocks.length = 0;
   sentTracks = [];
   sentMenu = -1;
   sentPlay = -1;
@@ -406,6 +426,7 @@ export function tick(): void {
   advanceClock();
   maybeAutosave();
   paint();
+  drainLeds();
 }
 
 export function onMidiMessageInternal(data: number[]): void {

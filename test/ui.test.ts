@@ -8,7 +8,7 @@ import { applyMorph } from "../src/core/morph.ts";
 import { createSet, journalPadIds, journalPageCount, launchScene, record } from "../src/core/performance.ts";
 import { generatePhrase } from "../src/core/phrase.ts";
 import { bindingFor, lanePages, pageCount, pageGroup, pageGroupColor, pagesFor } from "../src/core/pages.ts";
-import { LED, advancePulseClock, blinkHalfMs, directionLit, ledColorAt, menuLed, modeButtonLed, offColor, padLeds, padPackets, PLAY_LED_ON, playLed, PULSE_CLOCK_IDLE, shadeColor, stepLed, stepLeds, trackLeds } from "../src/ui/leds.ts";
+import { LED, advancePulseClock, blinkHalfMs, directionLit, dropLed, ledColorAt, menuLed, modeButtonLed, offColor, offerLed, padLeds, padPackets, PLAY_LED_ON, playLed, PULSE_CLOCK_IDLE, shadeColor, stepLed, stepLeds, takeLeds, trackLeds } from "../src/ui/leds.ts";
 import { DIGIT_H, displayAmount, plotAmount } from "../src/ui/digits.ts";
 import { DIGIT_Y, FONT_H, HEADER_H, HEIGHT, NAME_Y, PAGER_Y, PARAM_COL_W, PARAM_H, SEP_Y, TITLE_Y, VALUE_Y, VIZ_H, pixel, renderScreen, type Screen } from "../src/ui/screen.ts";
 import { defaultUi, HOLD_MS, HOLD_TICKS, openSetMode } from "../src/ui/state.ts";
@@ -179,9 +179,11 @@ describe("pages and leds", () => {
     assert.equal(wheel[24].color, 3);
     assert.equal(wheel[24].blink, true);
     assert.equal(wheel[16].color, 9);
-    assert.equal(wheel[0].color, 8);
-    assert.equal(wheel[1].blink, true);
-    assert.equal(wheel[4].color, 22);
+    assert.equal(wheel[0].color, offColor(LED.yellow));
+    assert.equal(wheel[0].blink, false);
+    assert.equal(wheel[1].color, LED.yellow);
+    assert.equal(wheel[1].blink, false);
+    assert.equal(wheel[4].color, offColor(LED.purple));
     assert.equal(wheel[4].blink, false);
     assert.equal(wheel[27].color, 20);
     assert.equal(wheel[28].color, 20);
@@ -217,11 +219,6 @@ describe("pages and leds", () => {
     const pads = [
       [68, padLeds(project, "journal")[0]],
       [92, wheel[24]],
-      [69, wheel[1]],
-      [72, wheel[4]],
-      [71, capture[3]],
-      [76, capture[8]],
-      [81, capture[13]],
       [92, capture[24]],
     ] as const;
     for (const [note, lit] of pads) {
@@ -231,6 +228,23 @@ describe("pages and leds", () => {
         [0x09, 0x99, note, lit.blinkTo ?? LED.off],
       ]);
     }
+    assert.equal(wheel[1].blink, false);
+    assert.equal(wheel[1].color, LED.yellow);
+    assert.equal(wheel[4].blink, false);
+    assert.equal(wheel[4].color, LED.purple);
+    assert.equal(wheel[5].color, offColor(LED.purple));
+    assert.equal(capture[0].blink, false);
+    assert.equal(capture[0].color, 66);
+    assert.equal(capture[2].blink, false);
+    assert.equal(capture[2].color, LED.yellow);
+    assert.equal(capture[1].color, shadeColor(LED.yellow, 0.2));
+    assert.equal(capture[3].color, shadeColor(LED.yellow, 0.2));
+    assert.equal(capture[8].blink, false);
+    assert.equal(capture[8].color, LED.purple);
+    assert.equal(capture[9].color, offColor(LED.purple));
+    assert.equal(capture[12].color, offColor(3));
+    assert.equal(capture[13].blink, false);
+    assert.equal(capture[13].color, 3);
     const steady = padLeds(project, "journal")[1];
     assert.equal(steady.blink, false);
     assert.deepEqual(padPackets(69, steady), [[0x09, 0x90, 69, steady.color]]);
@@ -256,6 +270,27 @@ describe("pages and leds", () => {
     const retimed = advancePulseClock(ticked.state, 1000 + quarter / 2, 90);
     assert.equal(retimed.state.started, false);
     assert.deepEqual(retimed.packets, []);
+  });
+
+  it("drains a full pad repaint without dropping colours or pulsing early", () => {
+    const out = new Map<number, number[]>();
+    for (let note = 68; note < 100; note++) offerLed(out, [0x09, 0x90, note, 0]);
+    offerLed(out, [0x09, 0x90, 68, 14]);
+    offerLed(out, [0x09, 0x99, 68, offColor(14)]);
+    const first = takeLeds(out, 16);
+    assert.equal(first.length, 16);
+    assert.ok(first.every((packet) => packet[1] === 0x90));
+    assert.equal(first[0][3], 14);
+    const second = takeLeds(out, 16);
+    assert.equal(second.length, 16);
+    assert.ok(second.every((packet) => packet[1] === 0x90));
+    assert.deepEqual(takeLeds(out, 16), [[0x09, 0x99, 68, offColor(14)]]);
+
+    const stopped = new Map<number, number[]>();
+    offerLed(stopped, [0x09, 0x90, 68, 3]);
+    offerLed(stopped, [0x09, 0x99, 68, offColor(3)]);
+    dropLed(stopped, 0x99, 68);
+    assert.deepEqual(takeLeds(stopped, 16), [[0x09, 0x90, 68, 3]]);
   });
 });
 
@@ -1012,7 +1047,7 @@ describe("surface", () => {
     count = reduce(count, { kind: "cc", data1: 14, data2: 1 });
     count = reduce(count, { kind: "cc", data1: 14, data2: 1 });
     count = reduce(count, { kind: "cc", data1: 52, data2: 127 });
-    count = reduce(count, { kind: "note", data1: 68 + 4, data2: 127 });
+    count = reduce(count, { kind: "note", data1: 68 + 3, data2: 127 });
     assert.equal(count.project.captureIntensity, "hard");
     count = reduce(count, { kind: "note", data1: 0, data2: 127 });
     assert.notDeepEqual(count.project.working.kick.ratchet.count, before.ratchet.count);
@@ -1091,27 +1126,34 @@ describe("surface", () => {
     const pads = padLeds(state.project, state.ui.mode, state.ui);
     assert.equal(pads[24].color, 3);
     assert.equal(pads[24].blink, true);
-    assert.equal(pads[24].blinkTo, 11);
+    assert.equal(pads[24].blinkTo, offColor(3));
+    assert.equal(pads[25].color, 3);
+    assert.equal(pads[25].blink, false);
+    assert.equal(pads[27].color, offColor(20));
     assert.equal(pads[27].blink, false);
     assert.equal(pads[17].color, 0);
-    assert.equal(pads[0].color, 127);
+    assert.equal(pads[0].color, 66);
     assert.equal(pads[0].blink, false);
-    assert.equal(pads[1].color, 0);
-    assert.equal(pads[2].color, shadeColor(LED.yellow, 0.2));
-    assert.equal(pads[3].color, shadeColor(LED.yellow, 0.5));
-    assert.equal(pads[3].blink, true);
-    assert.equal(pads[4].color, shadeColor(LED.yellow, 1));
+    assert.equal(pads[1].color, shadeColor(LED.yellow, 0.2));
+    assert.equal(pads[1].blink, false);
+    assert.equal(pads[2].color, LED.yellow);
+    assert.equal(pads[2].blink, false);
+    assert.equal(pads[3].color, shadeColor(LED.yellow, 0.2));
+    assert.equal(pads[3].blink, false);
+    assert.equal(pads[4].color, 0);
     assert.equal(pads[5].color, 0);
     assert.equal(pads[7].color, 0);
-    assert.equal(pads[8].color, 11);
-    assert.equal(pads[8].blink, true);
-    assert.equal(pads[9].color, 5);
+    assert.equal(pads[8].color, LED.purple);
+    assert.equal(pads[8].blink, false);
+    assert.equal(pads[9].color, offColor(LED.purple));
     assert.equal(pads[9].blink, false);
-    assert.equal(pads[10].color, 25);
+    assert.equal(pads[10].color, offColor(LED.purple));
     assert.equal(pads[11].color, 0);
-    assert.equal(pads[12].color, 3);
+    assert.equal(pads[12].color, offColor(3));
     assert.equal(pads[12].blink, false);
-    assert.equal(pads[13].blink, true);
+    assert.equal(pads[13].color, 3);
+    assert.equal(pads[13].blink, false);
+    assert.equal(pads[14].color, offColor(3));
     assert.equal(pads[14].blink, false);
 
     const screen = renderScreen(state.project, state.ui, 0);
@@ -1157,7 +1199,14 @@ describe("surface", () => {
     assert.equal(state.project.captureDepth, "all");
     assert.equal(state.project.captureIntensity, "clear");
     assert.equal(state.ui.notice, null);
-    assert.equal(padLeds(state.project, state.ui.mode, state.ui)[24].blinkTo, 127);
+    const clearedPads = padLeds(state.project, state.ui.mode, state.ui);
+    assert.equal(clearedPads[0].color, LED.red);
+    assert.equal(clearedPads[0].blink, false);
+    assert.equal(clearedPads[24].color, LED.red);
+    assert.equal(clearedPads[24].blink, true);
+    assert.equal(clearedPads[24].blinkTo, LED.off);
+    assert.equal(clearedPads[25].color, LED.red);
+    assert.equal(clearedPads[25].blink, false);
 
     state.project.working.kick.sound.pitch = modulated(0.55, 9, 6, 0.4);
     const soundBefore = clone(state.project.working.kick.sound);
