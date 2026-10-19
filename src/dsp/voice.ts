@@ -34,7 +34,7 @@ const P_METAL = 13;
 const P_COLOR = 14;
 const P_ATK = 15;
 const P_RING = 16;
-const P_WIDTH = 17;
+const P_POS = 17;
 const P_MAT = 18;
 const P_FM = 19;
 const P_RATIO = 20;
@@ -104,7 +104,8 @@ interface DrumVoice {
   /** Musical modulator ratio. */
   ratio: number;
   ring: number;
-  width: number;
+  /** Hat pan. 0 left, 0.5 center, 1 right. */
+  pos: number;
   damp: number;
   cutoff: number;
   resonance: number;
@@ -372,7 +373,7 @@ function armDrum(drum: DrumVoice, event: BlockEvent | LoopEvent, pitch: number, 
   drum.fm = 0;
   drum.ratio = 1;
   drum.ring = 0;
-  drum.width = 0;
+  drum.pos = 0.5;
   drum.damp = 0;
   drum.drive = 0;
   if (lane === 0) {
@@ -407,7 +408,7 @@ function armDrum(drum: DrumVoice, event: BlockEvent | LoopEvent, pitch: number, 
     drum.noiseDecay = drum.decay;
     drum.click = knob(event, "atk", 0.3);
     drum.ring = knob(event, "ring", 0.3);
-    drum.width = knob(event, "width", 0);
+    drum.pos = knob(event, "pos", 0.5);
     drum.bend = 0;
     drum.bendTime = 0.05;
   } else {
@@ -483,7 +484,19 @@ function drumSample(engine: Engine, drum: DrumVoice): [number, number] {
   drum.pitchEnv *= drum.pitchK;
   drum.age += 1;
   if (drum.env < 0.0008 && drum.noiseEnv < 0.0008 && drum.clickEnv < 0.0008 && drum.age > 64) drum.on = false;
+  if (drum.lane === 2) {
+    const [left, right] = hatPan(drum.pos);
+    return [filtered * left, filtered * right];
+  }
   return [filtered + side, filtered - side];
+}
+
+/** 0 hard left, 0.5 center, 1 hard right. Center keeps both channels at full level. */
+function hatPan(pos: number): [number, number] {
+  const x = Math.max(0, Math.min(1, pos));
+  const left = x <= 0.5 ? 1 : (1 - x) * 2;
+  const right = x >= 0.5 ? 1 : x * 2;
+  return [left, right];
 }
 
 function noteSample(_engine: Engine, note: NoteVoice): [number, number] {
@@ -735,7 +748,7 @@ function applyDrum(drum: DrumVoice, param: number, unit: number): void {
   else if (param === P_RING) {
     drum.ring = u;
     refreshDrumEnv(drum);
-  } else if (param === P_WIDTH) drum.width = u;
+  } else if (param === P_POS) drum.pos = u;
   else if (param === P_FM) drum.fm = u;
   else if (param === P_RATIO) drum.ratio = fmRatioOf(u);
   else if (param === P_DAMP) drum.damp = u;
@@ -898,7 +911,7 @@ function paramOf(id: string): number {
   if (ends(id, "color")) return P_COLOR;
   if (ends(id, "atk")) return P_ATK;
   if (ends(id, "ring")) return P_RING;
-  if (ends(id, "width")) return P_WIDTH;
+  if (ends(id, "pos")) return P_POS;
   if (ends(id, "ratio")) return P_RATIO;
   if (ends(id, "damp")) return P_DAMP;
   if (ends(id, "mat")) return P_MAT;
@@ -1161,12 +1174,12 @@ function hatBody(drum: DrumVoice, freq: number): { mid: number; side: number } {
   drum.phase0 = wrapPhase(drum.phase0 + inc * ratio(0));
   drum.phase1 = wrapPhase(drum.phase1 + inc * ratio(1));
   drum.phase2 = wrapPhase(drum.phase2 + inc * ratio(2));
-  drum.phase3 = wrapPhase(drum.phase3 + inc * ratio(3) * (1 + drum.width * 0.012));
+  drum.phase3 = wrapPhase(drum.phase3 + inc * ratio(3));
   const s0 = Math.sin(drum.phase0) * 0.9 * gain;
   const s1 = Math.sin(drum.phase1) * 0.72 * gain * (1 - ring * 0.35);
   const s2 = Math.sin(drum.phase2) * 0.5 * gain * (1 - ring * 0.6);
   const s3 = Math.sin(drum.phase3) * 0.36 * gain * (1 - ring * 0.8);
-  return { mid: (s0 + s1 + s2 + s3) * 0.42, side: drum.width * (s1 - s3) * 0.9 };
+  return { mid: (s0 + s1 + s2 + s3) * 0.42, side: 0 };
 }
 
 function poleCoef(hz: number): number {
@@ -1242,7 +1255,7 @@ function emptyDrum(): DrumVoice {
     on: false, lane: 0, phase0: 0, phase1: 0, phase2: 0, phase3: 0, clickPhase: 0,
     env: 0, noiseEnv: 0, pitchEnv: 1, clickEnv: 0, age: 0, freq: 0,
     decay: 0.2, noiseDecay: 0.05, bendTime: 0.08, bend: 0, body: 0, noise: 0, tone: 0.3,
-    click: 0, drive: 0, fm: 0, ratio: 1, ring: 0, width: 0, damp: 0,
+    click: 0, drive: 0, fm: 0, ratio: 1, ring: 0, pos: 0.5, damp: 0,
     cutoff: 0.5, resonance: 0, reverb: 0, delay: 0, nlp: 0, nhp: 0, flt: 0, band: 0, loop: 0,
     envK: 1, noiseK: 1, pitchK: 1, clickK: 1, gain: 0,
   };

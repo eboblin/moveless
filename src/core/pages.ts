@@ -177,7 +177,7 @@ function powersOfTwo(min: number, max: number): number[] {
 
 function detentsOf(path: string, min: number, max: number): readonly number[] | undefined {
   if (path.endsWith(".cycle") || path === "gen1.length" || path === "gen2.length") return powersOfTwo(min, max);
-  if (path === "filter.cutoff.value" || path === "pitch.value") return [0.5];
+  if (path === "filter.cutoff.value" || path === "pitch.value" || path === "sound.pos.value") return [0.5];
   if (min < 0 && max > 0) return [0];
   return undefined;
 }
@@ -273,6 +273,7 @@ const SOUND_LABEL: Record<string, string> = {
   color: "COLOR",
   attack: "ATTACK",
   ring: "RESO",
+  pos: "POS",
   width: "WIDTH",
   material: "MATERIAL",
   fm: "FM",

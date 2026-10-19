@@ -9,7 +9,7 @@ export interface EngineParam {
 /**
  * Drum chain keys (GM pad ids kept for map stability).
  * Kick pad 1, snare pad 3, closed hat pad 7, perc pad 12 (low-mid tom).
- * Our voice reads every suffix below. Hat width is the only drum stereo.
+ * Our voice reads every suffix below. Hat pos is the only drum pan.
  */
 const VOICE: Record<DrumId, string> = {
   kick: "v01",
@@ -47,7 +47,7 @@ const DRUM_SUFFIX: Record<DrumId, Record<string, string>> = {
     decay: "decay",
     attack: "atk",
     ring: "ring",
-    width: "width",
+    pos: "pos",
   },
   perc: {
     pitch: "freq",

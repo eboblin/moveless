@@ -39,18 +39,18 @@ const SNARE: Record<string, Sound> = {
 };
 
 const HAT: Record<string, Sound> = {
-  "808 closed": { pitch: 0.55, metal: 0.42, noise: 0.72, color: 0.5, decay: 0.18, attack: 0.35, ring: 0.22, width: 0.06 },
-  "808 open": { pitch: 0.55, metal: 0.42, noise: 0.72, color: 0.5, decay: 0.58, attack: 0.3, ring: 0.22, width: 0.06 },
-  "909 closed": { pitch: 0.62, metal: 0.48, noise: 0.6, color: 0.72, decay: 0.16, attack: 0.58, ring: 0.32, width: 0.08 },
-  "909 open": { pitch: 0.62, metal: 0.48, noise: 0.6, color: 0.75, decay: 0.64, attack: 0.45, ring: 0.32, width: 0.08 },
-  "cr78": { pitch: 0.4, metal: 0.36, noise: 0.8, color: 0.4, decay: 0.22, attack: 0.3, ring: 0.15, width: 0 },
-  shaker: { pitch: 0.35, metal: 0.04, noise: 0.88, color: 0.45, decay: 0.28, attack: 0.2, ring: 0.08, width: 0.15 },
-  classic: { pitch: 0.58, metal: 0.48, noise: 0.55, color: 0.6, decay: 0.25, attack: 0.4, ring: 0.4, width: 0.15 },
-  "thin ring": { pitch: 0.7, metal: 0.78, noise: 0.22, color: 0.82, decay: 0.4, attack: 0.3, ring: 0.88, width: 0.1 },
-  triangle: { pitch: 0.48, metal: 0.84, noise: 0.08, color: 0.65, decay: 0.72, attack: 0.25, ring: 0.9, width: 0.05 },
-  cymbal: { pitch: 0.32, metal: 0.9, noise: 0.35, color: 0.55, decay: 0.78, attack: 0.4, ring: 0.7, width: 0.36 },
-  bell: { pitch: 0.42, metal: 0.96, noise: 0.12, color: 0.7, decay: 0.62, attack: 0.35, ring: 0.82, width: 0.2 },
-  wide: { pitch: 0.6, metal: 0.72, noise: 0.4, color: 0.6, decay: 0.4, attack: 0.4, ring: 0.5, width: 0.96 },
+  "808 closed": { pitch: 0.55, metal: 0.42, noise: 0.72, color: 0.5, decay: 0.18, attack: 0.35, ring: 0.22, pos: 0.5 },
+  "808 open": { pitch: 0.55, metal: 0.42, noise: 0.72, color: 0.5, decay: 0.58, attack: 0.3, ring: 0.22, pos: 0.5 },
+  "909 closed": { pitch: 0.62, metal: 0.48, noise: 0.6, color: 0.72, decay: 0.16, attack: 0.58, ring: 0.32, pos: 0.5 },
+  "909 open": { pitch: 0.62, metal: 0.48, noise: 0.6, color: 0.75, decay: 0.64, attack: 0.45, ring: 0.32, pos: 0.5 },
+  "cr78": { pitch: 0.4, metal: 0.36, noise: 0.8, color: 0.4, decay: 0.22, attack: 0.3, ring: 0.15, pos: 0.5 },
+  shaker: { pitch: 0.35, metal: 0.04, noise: 0.88, color: 0.45, decay: 0.28, attack: 0.2, ring: 0.08, pos: 0.5 },
+  classic: { pitch: 0.58, metal: 0.48, noise: 0.55, color: 0.6, decay: 0.25, attack: 0.4, ring: 0.4, pos: 0.5 },
+  "thin ring": { pitch: 0.7, metal: 0.78, noise: 0.22, color: 0.82, decay: 0.4, attack: 0.3, ring: 0.88, pos: 0.5 },
+  triangle: { pitch: 0.48, metal: 0.84, noise: 0.08, color: 0.65, decay: 0.72, attack: 0.25, ring: 0.9, pos: 0.5 },
+  cymbal: { pitch: 0.32, metal: 0.9, noise: 0.35, color: 0.55, decay: 0.78, attack: 0.4, ring: 0.7, pos: 0.5 },
+  bell: { pitch: 0.42, metal: 0.96, noise: 0.12, color: 0.7, decay: 0.62, attack: 0.35, ring: 0.82, pos: 0.5 },
+  left: { pitch: 0.6, metal: 0.72, noise: 0.4, color: 0.6, decay: 0.4, attack: 0.4, ring: 0.5, pos: 0 },
 };
 
 const PERC: Record<string, Sound> = {
@@ -171,21 +171,6 @@ function centroid(buf: Float32Array, start: number, len: number): number {
     den += energy;
   }
   return den > 0 ? num / den : 0;
-}
-
-function stereoCorr(buf: Float32Array): number {
-  let ll = 0;
-  let rr = 0;
-  let lr = 0;
-  const n = buf.length / 2;
-  for (let i = 0; i < n; i++) {
-    const l = buf[i * 2];
-    const r = buf[i * 2 + 1];
-    ll += l * l;
-    rr += r * r;
-    lr += l * r;
-  }
-  return lr / Math.sqrt(Math.max(1e-12, ll * rr));
 }
 
 function audible(lane: DrumId, book: Record<string, Sound>): void {
@@ -353,14 +338,22 @@ describe("drum landmarks", () => {
       return full / Math.max(1e-6, dry);
     };
     assert.ok(metalShare(HAT.bell) > metalShare(HAT.shaker));
-    assert.ok(stereoCorr(hit("hat", HAT.wide, 4000)) < stereoCorr(hit("hat", HAT["808 closed"], 4000)) - 0.08);
+    const sideEnergy = (buf: Float32Array, channel: 0 | 1) => {
+      let energy = 0;
+      for (let i = channel; i < buf.length; i += 2) energy += buf[i] * buf[i];
+      return energy;
+    };
+    const panned = hit("hat", HAT.left, 4000);
+    const centered = hit("hat", HAT["808 closed"], 4000);
+    assert.ok(sideEnergy(panned, 0) > sideEnergy(panned, 1) * 20);
+    assert.ok(Math.abs(sideEnergy(centered, 0) - sideEnergy(centered, 1)) < sideEnergy(centered, 0) * 0.02);
     const color = (value: number) => centroid(mono(hit("hat", {
-      pitch: 0.55, metal: 0.2, noise: 0.8, color: value, decay: 0.3, attack: 0.2, ring: 0.2, width: 0,
+      pitch: 0.55, metal: 0.2, noise: 0.8, color: value, decay: 0.3, attack: 0.2, ring: 0.2, pos: 0.5,
     }, 3000)), 80, 600);
     assert.ok(color(0.85) > color(0.2));
     const toneShare = (value: number) => {
       const audio = mono(hit("hat", {
-        pitch: 0.55, metal: value, noise: 0.35, color: 0.55, decay: 0.35, attack: 0.15, ring: 0.4, width: 0,
+        pitch: 0.55, metal: value, noise: 0.35, color: 0.55, decay: 0.35, attack: 0.15, ring: 0.4, pos: 0.5,
       }, 3000));
       const period = f0(audio, 120, 600, 200, 5000);
       const lag = Math.max(1, Math.round(SR / period));
@@ -386,7 +379,7 @@ describe("drum landmarks", () => {
       velocity,
       lengthTicks: 48,
       params: [...mapSound("hat", {
-        pitch: 0.6, metal: 0, noise: 0, color: 0.5, decay: 0.05, attack: 0.85, ring: 0, width: 0,
+        pitch: 0.6, metal: 0, noise: 0, color: 0.5, decay: 0.05, attack: 0.85, ring: 0, pos: 0.5,
       }), ...mapFilter({ cutoff: 0.5, resonance: 0 })],
     }], 120, 1500));
     assert.ok(rms(chick(28), 0, 160) < rms(chick(112), 0, 160) * 0.5);

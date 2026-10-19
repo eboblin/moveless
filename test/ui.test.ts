@@ -1635,6 +1635,8 @@ describe("virtual detents", () => {
     assert.ok(Math.abs(past.value - 0.51) < 1e-9);
 
     assert.deepEqual(knob("pitch.value").detents, [0.5]);
+    assert.deepEqual(knob("sound.pos.value").detents, [0.5]);
+    assert.equal(knob("sound.pos.value").label, "POS V");
     assert.deepEqual(knob("macro.probability").detents, [0]);
     assert.deepEqual(knob("transpose").detents, [0]);
     assert.deepEqual(knob("start").detents, [0]);

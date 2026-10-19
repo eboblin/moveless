@@ -143,7 +143,16 @@ describe("euclid generator", () => {
     assert.equal(hat.decay.value, 0.19);
     assert.equal(hat.attack.value, 0.35);
     assert.equal(hat.ring.value, 0.32);
-    assert.equal(hat.width.value, 0);
+    assert.equal(hat.pos.value, 0.5);
+    const perc = lanes.perc.sound;
+    assert.equal(perc.pitch.value, 0.23);
+    assert.equal(perc.material.value, 0.6);
+    assert.equal(perc.decay.value, 0.14);
+    assert.equal(perc.bend.value, 0.36);
+    assert.equal(perc.fm.value, 0);
+    assert.equal(perc.fmRatio.value, 0.29);
+    assert.equal(perc.attack.value, 0.16);
+    assert.equal(perc.damp.value, 0.11);
   });
 
   it("parks repeat count and rate at zero on every lane", () => {

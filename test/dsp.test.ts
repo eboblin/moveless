@@ -147,7 +147,7 @@ describe("dsp adapter", () => {
     assert.ok(kick[0].params.some((param) => param.id === "v01_freq"));
   });
 
-  it("sounds the kick, widens the hat, and widens chords", () => {
+  it("sounds the kick, pans the hat, and widens chords", () => {
     const project = defaultProject();
     const engine = createEngine();
     const first = renderBlock(engine, eventsInBlock(project, 0), project.global.tempo);
@@ -159,11 +159,11 @@ describe("dsp adapter", () => {
 
     const wideHat = renderBlock(createEngine(), [{
       sampleOffset: 0, lane: "hat", note: 42, velocity: 100, lengthTicks: 48,
-      params: mapSound("hat", { pitch: 0.6, metal: 0.85, noise: 0.2, color: 0.6, decay: 0.4, attack: 0.3, ring: 0.4, width: 1 }),
+      params: mapSound("hat", { pitch: 0.6, metal: 0.85, noise: 0.2, color: 0.6, decay: 0.4, attack: 0.3, ring: 0.4, pos: 0 }),
     }], 120);
     const narrowHat = renderBlock(createEngine(), [{
       sampleOffset: 0, lane: "hat", note: 42, velocity: 100, lengthTicks: 48,
-      params: mapSound("hat", { pitch: 0.6, metal: 0.85, noise: 0.2, color: 0.6, decay: 0.4, attack: 0.3, ring: 0.4, width: 0 }),
+      params: mapSound("hat", { pitch: 0.6, metal: 0.85, noise: 0.2, color: 0.6, decay: 0.4, attack: 0.3, ring: 0.4, pos: 0.5 }),
     }], 120);
     const side = (buf: Float32Array) => {
       let diff = 0;

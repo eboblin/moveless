@@ -38,7 +38,7 @@ enum {
     P_COLOR,
     P_ATK,
     P_RING,
-    P_WIDTH,
+    P_POS,
     P_MAT,
     P_FM,
     P_RATIO,
@@ -64,7 +64,7 @@ typedef struct {
     float env, noise_env, pitch_env, click_env;
     int age;
     float freq, decay, noise_decay, bend_time, bend;
-    float body, noise, tone, click, drive, fm, ratio, ring, width, damp;
+    float body, noise, tone, click, drive, fm, ratio, ring, pos, damp;
     float cutoff, resonance, reverb, delay, nlp, nhp, flt, band;
     float env_k, noise_k, pitch_k, click_k, gain;
     int loop;
@@ -506,7 +506,7 @@ static int param_of(const char *id) {
     if (suffix_is(id, "color")) return P_COLOR;
     if (suffix_is(id, "atk")) return P_ATK;
     if (suffix_is(id, "ring")) return P_RING;
-    if (suffix_is(id, "width")) return P_WIDTH;
+    if (suffix_is(id, "pos")) return P_POS;
     if (suffix_is(id, "ratio")) return P_RATIO;
     if (suffix_is(id, "damp")) return P_DAMP;
     if (suffix_is(id, "mat")) return P_MAT;
@@ -610,7 +610,7 @@ static void apply_drum(Drum *drum, int param, float unit) {
         drum->ring = u;
         refresh_drum_env(drum);
         break;
-    case P_WIDTH: drum->width = u; break;
+    case P_POS: drum->pos = u; break;
     case P_FM: drum->fm = u; break;
     case P_RATIO: drum->ratio = fm_ratio_of(u); break;
     case P_DAMP: drum->damp = u; break;
@@ -722,7 +722,7 @@ static void arm_drum(Engine *engine, int lane, int note, int velocity, const cha
     drum->fm = 0;
     drum->ratio = 1;
     drum->ring = 0;
-    drum->width = 0;
+    drum->pos = 0.5f;
     drum->damp = 0;
     drum->drive = 0;
     if (idx == 0) {
@@ -755,7 +755,7 @@ static void arm_drum(Engine *engine, int lane, int note, int velocity, const cha
         drum->noise_decay = drum->decay;
         drum->click = clampf01(read_param(params, "atk", 0.3f));
         drum->ring = clampf01(read_param(params, "ring", 0.3f));
-        drum->width = clampf01(read_param(params, "width", 0.0f));
+        drum->pos = clampf01(read_param(params, "pos", 0.5f));
         drum->bend = 0;
         drum->bend_time = 0.05f;
     } else {
@@ -1007,13 +1007,13 @@ static void hat_body(Drum *drum, float freq, float *mid, float *side) {
     drum->phase0 = wrap_phase(drum->phase0 + inc * (lo[0] * (1.0f - m) + hi[0] * m));
     drum->phase1 = wrap_phase(drum->phase1 + inc * (lo[1] * (1.0f - m) + hi[1] * m));
     drum->phase2 = wrap_phase(drum->phase2 + inc * (lo[2] * (1.0f - m) + hi[2] * m));
-    drum->phase3 = wrap_phase(drum->phase3 + inc * (lo[3] * (1.0f - m) + hi[3] * m) * (1.0f + drum->width * 0.012f));
+    drum->phase3 = wrap_phase(drum->phase3 + inc * (lo[3] * (1.0f - m) + hi[3] * m));
     s0 = sinf(drum->phase0) * 0.9f * gain;
     s1 = sinf(drum->phase1) * 0.72f * gain * (1.0f - ring * 0.35f);
     s2 = sinf(drum->phase2) * 0.5f * gain * (1.0f - ring * 0.6f);
     s3 = sinf(drum->phase3) * 0.36f * gain * (1.0f - ring * 0.8f);
     *mid = (s0 + s1 + s2 + s3) * 0.42f;
-    *side = drum->width * (s1 - s3) * 0.9f;
+    *side = 0;
 }
 
 static float noise_sample(Engine *engine, Drum *drum) {
@@ -1103,6 +1103,17 @@ static void drum_sample(Engine *engine, Drum *drum, float *left, float *right) {
     drum->pitch_env *= drum->pitch_k;
     drum->age += 1;
     if (drum->env < 0.0008f && drum->noise_env < 0.0008f && drum->click_env < 0.0008f && drum->age > 64) drum->on = 0;
+    if (drum->lane == 2) {
+        float x = drum->pos;
+        float gl, gr;
+        if (x < 0.0f) x = 0.0f;
+        if (x > 1.0f) x = 1.0f;
+        gl = x <= 0.5f ? 1.0f : (1.0f - x) * 2.0f;
+        gr = x >= 0.5f ? 1.0f : x * 2.0f;
+        *left = filtered * gl;
+        *right = filtered * gr;
+        return;
+    }
     *left = filtered + side;
     *right = filtered - side;
 }
@@ -1790,21 +1801,25 @@ static int fail(const char *message) {
 int main(void) {
     Engine *engine = create_instance(NULL, NULL);
     int16_t out[256];
-    long hat_narrow = 0, hat_wide = 0;
-    set_param(engine, "block", "120|0:2:42:100:48:v07_width=0.0000,v07_decay=0.5000,v07_metal=0.9000,v07_noise=0.2000");
+    long hat_center = 0, hat_left = 0, left_e = 0, right_e = 0;
+    set_param(engine, "block", "120|0:2:42:100:48:v07_pos=0.5000,v07_decay=0.5000,v07_metal=0.9000,v07_noise=0.2000");
     render(engine, out, 128);
     for (int i = 0; i < 128; i++) {
         int d = out[i * 2] - out[i * 2 + 1];
-        hat_narrow += d < 0 ? -d : d;
+        hat_center += d < 0 ? -d : d;
     }
     engine = create_instance(NULL, NULL);
-    set_param(engine, "block", "120|0:2:42:100:48:v07_width=1.0000,v07_decay=0.5000,v07_metal=0.9000,v07_noise=0.2000");
+    set_param(engine, "block", "120|0:2:42:100:48:v07_pos=0.0000,v07_decay=0.5000,v07_metal=0.9000,v07_noise=0.2000");
     render(engine, out, 128);
     for (int i = 0; i < 128; i++) {
         int d = out[i * 2] - out[i * 2 + 1];
-        hat_wide += d < 0 ? -d : d;
+        int l = out[i * 2] < 0 ? -out[i * 2] : out[i * 2];
+        int r = out[i * 2 + 1] < 0 ? -out[i * 2 + 1] : out[i * 2 + 1];
+        hat_left += d < 0 ? -d : d;
+        left_e += l;
+        right_e += r;
     }
-    if (hat_wide < hat_narrow * 2 || hat_wide < 30) return fail("hat width did not open the stereo image");
+    if (hat_left < hat_center * 2 || hat_left < 30 || left_e <= right_e) return fail("hat pos did not sit on the left");
 
     engine = create_instance(NULL, NULL);
     set_param(engine, "block", "120|0:4:40:100:192:wave=0.4200,wide=0.0000,cutoff=0.8000,attack=0.0000,release=0.8000");
@@ -1858,7 +1873,7 @@ int main(void) {
     for (int n = 0; n < 86; n++) render(engine, out, 128);
     if (engine->drums[0].freq != held_freq) return fail("pitch followed the generator");
 
-    printf("ok peak=%d hat=%ld width=%ld\n", peak, hat_wide, diff_wide);
+    printf("ok peak=%d hat=%ld width=%ld\n", peak, hat_left, diff_wide);
     return 0;
 }
 #endif
