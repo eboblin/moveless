@@ -100,14 +100,14 @@ const SOUND_VALUE: Record<LaneId, Record<string, number>> = {
     release: 0.09,
   },
   lead: {
-    wave: 0.48,
-    bend: 0.1,
-    sync: 0.06,
-    fold: 0.04,
-    drive: 0.1,
-    wide: 0.22,
-    attack: 0.01,
-    release: 0.3,
+    wave: 0.84,
+    bend: 0,
+    sync: 0,
+    fold: 0,
+    drive: 0,
+    wide: 0,
+    attack: 0.23,
+    release: 0.01,
   },
   chords: {
     wave: 0.24,
@@ -162,18 +162,18 @@ function drum(id: DrumId): DrumLane {
   };
 }
 
-function pitched(lane: "bass" | "lead", follow: number): PitchedLane {
+function pitched(lane: "bass" | "lead"): PitchedLane {
   const [first, second] = ROTATE[lane];
   const bass = lane === "bass";
   return {
-    gen1: euclid(first, 0.8),
+    gen1: euclid(first, bass ? 0.8 : 0.4),
     gen2: euclid(second, bass ? 0.3 : 0.55),
-    follow,
+    follow: 1,
     pitch: home(0.5),
     octave: home(unitForOctave(homeOctave(lane))),
-    length: home(bass ? 0.04 : 0.35),
+    length: home(bass ? 0.04 : 0.1),
     repeat: home(0),
-    step: home(bass ? 0 : 0.5),
+    step: home(0),
     sound: sound(lane),
     filter: laneFilter(),
     send: laneSend(),
@@ -247,8 +247,8 @@ export function defaultGlobal(): GlobalSettings {
 }
 
 export function defaultLanes(): Lanes {
-  const bass = pitched("bass", 1);
-  const lead = pitched("lead", 0.65);
+  const bass = pitched("bass");
+  const lead = pitched("lead");
   return {
     kick: drum("kick"),
     snare: drum("snare"),

@@ -169,6 +169,22 @@ describe("euclid generator", () => {
     assert.equal(bass.sound.wide.value, 0);
     assert.equal(bass.sound.attack.value, 0.15);
     assert.equal(bass.sound.release.value, 0.09);
+    const lead = lanes.lead;
+    assert.equal(lead.gen1.velocity.value, 0.4);
+    assert.equal(lead.gen2.velocity.value, 0.55);
+    assert.equal(lead.pitch.value, 0.5);
+    assert.equal(lead.octave.value, unitForOctave(4));
+    assert.equal(lead.length.value, 0.1);
+    assert.equal(lead.follow, 1);
+    assert.equal(lead.step.value, 0);
+    assert.equal(lead.sound.wave.value, 0.84);
+    assert.equal(lead.sound.bend.value, 0);
+    assert.equal(lead.sound.sync.value, 0);
+    assert.equal(lead.sound.fold.value, 0);
+    assert.equal(lead.sound.drive.value, 0);
+    assert.equal(lead.sound.wide.value, 0);
+    assert.equal(lead.sound.attack.value, 0.23);
+    assert.equal(lead.sound.release.value, 0.01);
   });
 
   it("parks repeat count and rate at zero on every lane", () => {
