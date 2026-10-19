@@ -1184,6 +1184,26 @@ describe("capture, wander, sets", () => {
     assert.equal(partial.working.kick.filter.cutoff.amount, 0);
   });
 
+  it("keeps rerolling values after they have fallen next to home", () => {
+    let project = setCaptureDepth(setCaptureIntensity(defaultProject(), "medium"), "values");
+    const pictures: string[] = [];
+    for (let i = 0; i < 40; i++) {
+      project = captureLane(project, "hat", "sound");
+      pictures.push(SOUND.hat.map((id) => Math.round(project.working.hat.sound[id].value * 100)).join(","));
+    }
+    assert.ok(new Set(pictures.slice(15)).size > 1);
+
+    let parked = setCaptureIntensity(defaultProject(), "medium");
+    parked.working.hat.sound.decay = modulated(0.194, 0, 1, 0);
+    let leftGap = false;
+    for (let i = 0; i < 12; i++) {
+      parked = capturePaths(parked, "hat", ["sound.decay.value"]);
+      const value = parked.working.hat.sound.decay.value;
+      if (Math.abs(value - 0.19) < 1e-9 || Math.abs(value - 0.194) >= 0.01 - 1e-9) leftGap = true;
+    }
+    assert.equal(leftGap, true);
+  });
+
   it("moves an ordinary value farther than an expensive repeat count", () => {
     const soft = setCaptureIntensity(defaultProject(), "soft");
     let countTravel = 0;
@@ -1300,6 +1320,38 @@ describe("capture, wander, sets", () => {
     const cleared = captureSurface(setCaptureIntensity(project, "clear"), "perf", ["macro.cutoff"]);
     assert.equal(cleared.macros.cutoff, 0);
     assert.equal(cleared.macros.probability, 0.8);
+  });
+
+  it("spends a separate budget on generators and on values", () => {
+    const soft = setCaptureIntensity(defaultProject(), "soft");
+    let valueMoves = 0;
+    let shapeMoves = 0;
+    for (let seed = 1; seed <= 40; seed++) {
+      const project = {
+        ...soft,
+        global: { ...soft.global, seed },
+        captureNonce: seed,
+      };
+      project.working.kick.sound.noise = modulated(0.6, 63, 32, 1);
+      project.working.kick.sound.pitch = modulated(0.12, 63, 32, 1);
+      project.working.kick.sound.decay = modulated(0.1, 63, 32, 1);
+      const next = capturePaths(project, "kick", [
+        "sound.noise.value",
+        "sound.noise.pattern",
+        "sound.noise.cycle",
+        "sound.noise.amount",
+        "sound.pitch.pattern",
+        "sound.pitch.cycle",
+        "sound.pitch.amount",
+        "sound.decay.pattern",
+        "sound.decay.cycle",
+        "sound.decay.amount",
+      ]).working.kick.sound.noise;
+      if (Math.abs(next.value - 0.6) > 1e-9) valueMoves += 1;
+      if (next.pattern !== 63 || next.cycle !== 32 || Math.abs(next.amount - 1) > 1e-9) shapeMoves += 1;
+    }
+    assert.ok(valueMoves >= 30);
+    assert.ok(shapeMoves >= 30);
   });
 
   it("spends a fresh budget on every page of a lane", () => {

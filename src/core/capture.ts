@@ -47,8 +47,12 @@ const BUDGET_CAP: Record<Exclude<CaptureIntensity, "clear">, number> = {
 const AWAY_COST = 3;
 const TOWARD_CHANCE = 0.75;
 
+function isGeneratorPath(path: string): boolean {
+  return path.endsWith(".pattern") || path.endsWith(".cycle") || path.endsWith(".amount");
+}
+
 function depthAllows(path: string, depth: CaptureDepth): boolean {
-  const shape = path.endsWith(".pattern") || path.endsWith(".cycle") || path.endsWith(".amount");
+  const shape = isGeneratorPath(path);
   if (depth === "generators") return shape;
   if (depth === "values") return !shape;
   return true;
@@ -92,8 +96,24 @@ function spendPage(project: Project, lane: LaneId, paths: string[], tag: string)
   const working = clone(project.working);
   const roll = (...parts: (string | number)[]) =>
     hash01(project.global.seed, "capture", nonce, lane, tag, intensity, depth, ...parts);
-  applyBudget(working[lane], factoryLane(lane), eligible, roll, PAGE_BUDGET[intensity], BUDGET_CAP[intensity]);
+  applySplitBudget(working[lane], factoryLane(lane), eligible, roll, intensity);
   return { ...project, working, captureNonce: nonce };
+}
+
+/** Generators and values each receive the full page budget. They do not compete. */
+function applySplitBudget(
+  root: unknown,
+  homes: unknown,
+  paths: string[],
+  roll: (...parts: (string | number)[]) => number,
+  intensity: Exclude<CaptureIntensity, "clear">,
+): void {
+  const budget = PAGE_BUDGET[intensity];
+  const cap = BUDGET_CAP[intensity];
+  const generators = paths.filter(isGeneratorPath);
+  const values = paths.filter((path) => !isGeneratorPath(path));
+  if (generators.length) applyBudget(root, homes, generators, roll, budget, cap);
+  if (values.length) applyBudget(root, homes, values, roll, budget, cap);
 }
 
 function applyBudget(
@@ -139,15 +159,29 @@ function applyBudget(
     if (room <= 1e-9) continue;
     const costPerUnit = spec.weight * (wantToward ? 1 : AWAY_COST);
     const affordable = Math.min(room, left / costPerUnit, cap / costPerUnit);
-    const stepUnits = affordable * roll("frac", path);
-    if (stepUnits * span + 1e-12 < spec.step) continue;
+    const quantum = spec.step / span;
+    let stepUnits = affordable * roll("frac", path);
+    // One click or less must be taken whole. A random fraction of that click is
+    // always shorter than a step, so the knob would sit there forever.
+    if (room <= quantum + 1e-12) {
+      if (affordable + 1e-12 < room) continue;
+      stepUnits = room;
+    } else if (stepUnits + 1e-12 < quantum) continue;
     const sign = targetUnit >= unit ? 1 : -1;
+    const target = spec.min + targetUnit * span;
     let next = current + sign * stepUnits * span;
     if (spec.integer) next = Math.round(next);
+    else next = spec.min + Math.round((next - spec.min) / spec.step) * spec.step;
+    if (sign > 0 && next > target) next = target;
+    if (sign < 0 && next < target) next = target;
     if (next < spec.min) next = spec.min;
     if (next > spec.max) next = spec.max;
+    if (Math.abs(next - current) + 1e-12 < spec.step) {
+      if (room + 1e-12 < quantum) next = Math.min(spec.max, Math.max(spec.min, target));
+      else continue;
+    }
     const traveled = Math.abs(next - current) / span;
-    if (traveled * span + 1e-12 < spec.step) continue;
+    if (traveled <= 1e-12) continue;
     setPath(root, path, next);
     left -= traveled * costPerUnit;
   }
@@ -210,13 +244,11 @@ export function captureSurface(project: Project, kind: "mix" | "perf", paths: st
   }
   const roll = (...parts: (string | number)[]) =>
     hash01(project.global.seed, "capture", nonce, kind, intensity, depth, ...parts);
-  const budget = PAGE_BUDGET[intensity];
-  const cap = BUDGET_CAP[intensity];
   if (kind === "mix") {
     const mixer = { ...project.mixer };
     const homes: Record<string, number> = {};
     for (const id of [...LANES, "master"] as const) homes[id] = 1;
-    applyBudget(mixer, homes, eligible, roll, budget, cap);
+    applySplitBudget(mixer, homes, eligible, roll, intensity);
     return { ...project, mixer, captureNonce: nonce };
   }
   const macros = { ...project.macros };
@@ -226,7 +258,7 @@ export function captureSurface(project: Project, kind: "mix" | "perf", paths: st
     if (!(key in macros)) macros[key] = 0;
     homes.macro[key] = 0;
   }
-  applyBudget({ macro: macros }, homes, eligible, roll, budget, cap);
+  applySplitBudget({ macro: macros }, homes, eligible, roll, intensity);
   return { ...project, macros, captureNonce: nonce };
 }
 
@@ -242,7 +274,7 @@ export function captureGenerator(project: Project, lane: LaneId, target: string)
   return { ...project, working, captureNonce: project.captureNonce + 1 };
 }
 
-/** Reroll only the parameters listed on one page. Non-clear spends one page budget. Clear restores those targets. */
+/** Reroll only the parameters listed on one page. Non-clear spends a generators budget and a values budget. Clear restores those targets. */
 export function capturePaths(project: Project, lane: LaneId, paths: string[]): Project {
   if (project.lock[lane]) return project;
   if (!paths.length) return project;
