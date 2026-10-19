@@ -52,7 +52,7 @@ function bar(project: Project, bars = 1): Project {
   return next;
 }
 
-function modulatedCycles(value: unknown, out: number[] = []): number[] {
+function modulatedFields(value: unknown, out: Array<{ pattern: number; cycle: number; amount: number }> = []) {
   if (!value || typeof value !== "object") return out;
   const record = value as Record<string, unknown>;
   if (
@@ -61,10 +61,10 @@ function modulatedCycles(value: unknown, out: number[] = []): number[] {
     typeof record.pattern === "number" &&
     typeof record.amount === "number"
   ) {
-    out.push(record.cycle);
+    out.push({ pattern: record.pattern, cycle: record.cycle, amount: record.amount });
     return out;
   }
-  for (const child of Object.values(record)) modulatedCycles(child, out);
+  for (const child of Object.values(record)) modulatedFields(child, out);
   return out;
 }
 
@@ -85,19 +85,38 @@ describe("motif and clock", () => {
 });
 
 describe("euclid generator", () => {
-  it("scatters generator homes across hits 2..4 and rotate 0..15", () => {
+  it("parks one hit of length 16 on a different sixteenth of each generator", () => {
     const lanes = defaultProject().working;
-    const gens = (["kick", "snare", "hat", "perc", "bass", "lead"] as const).flatMap((id) => [
-      lanes[id].gen1,
-      lanes[id].gen2,
-    ]);
-    for (const gen of gens) {
-      assert.equal(gen.length, 16);
-      assert.equal(gen.probability, 1);
-      assert.ok(gen.hits >= 2 && gen.hits <= 4);
-      assert.ok(gen.rotate >= 0 && gen.rotate <= 15);
+    const expected = {
+      kick: [0, 8],
+      snare: [4, 12],
+      hat: [2, 10],
+      perc: [6, 14],
+      bass: [1, 9],
+      lead: [5, 13],
+    } as const;
+    const rotates = new Set<number>();
+    for (const id of ["kick", "snare", "hat", "perc", "bass", "lead"] as const) {
+      for (const [gen, rotate] of [
+        ["gen1", expected[id][0]],
+        ["gen2", expected[id][1]],
+      ] as const) {
+        const item = lanes[id][gen];
+        assert.equal(item.length, 16);
+        assert.equal(item.hits, 1);
+        assert.equal(item.rotate, rotate);
+        assert.equal(item.probability, 1);
+        rotates.add(rotate);
+      }
     }
-    assert.ok(new Set(gens.map((gen) => `${gen.hits}:${gen.rotate}`)).size > 1);
+    assert.equal(rotates.size, 12);
+    assert.equal(lanes.chords.rate.value, 0.01);
+    assert.equal(lanes.chords.gate.value, 0.06);
+    assert.equal(lanes.chords.tone.value, 0);
+    for (const id of ["kick", "snare", "hat", "perc", "bass", "lead", "chords"] as const) {
+      assert.equal(lanes[id].filter.cutoff.value, 0.5);
+      assert.equal(lanes[id].filter.resonance.value, 0);
+    }
   });
 
   it("parks repeat count and rate at zero on every lane", () => {
@@ -108,14 +127,17 @@ describe("euclid generator", () => {
     }
     assert.equal(lanes.bass.repeat.value, 0);
     assert.equal(lanes.lead.repeat.value, 0);
-    assert.equal(lanes.chords.rate.value, 0);
+    assert.equal(lanes.chords.rate.value, 0.01);
   });
 
-  it("scatters every VPCA cycle across 4, 8 and 16", () => {
-    const cycles = modulatedCycles(defaultProject().working);
-    assert.ok(cycles.length > 10);
-    for (const cycle of cycles) assert.ok(cycle === 4 || cycle === 8 || cycle === 16);
-    assert.ok(new Set(cycles).size === 3);
+  it("rests every VPCA generator", () => {
+    const fields = modulatedFields(defaultProject().working);
+    assert.ok(fields.length > 10);
+    for (const field of fields) {
+      assert.equal(field.pattern, 0);
+      assert.equal(field.cycle, 1);
+      assert.equal(field.amount, 0);
+    }
   });
 
   it("places a four-on-the-floor kick on every fourth sixteenth", () => {
@@ -795,6 +817,7 @@ describe("harmony", () => {
     project.working.bass.pitch = modulated(0.5 + 1 / 7);
     project.working.bass.gen1 = { ...project.working.bass.gen1, length: 16, hits: 4, rotate: 0 };
     project.working.bass.gen2.hits = 0;
+    project.working.chords.rate = modulated(0);
     const phrase = generatePhrase(project);
     const chordPcs = new Set(phrase.lanes.chords.map((event) => ((event.note % 12) + 12) % 12));
     assert.ok(chordPcs.has(4), "maj chord in minor still sounds E");
@@ -1006,10 +1029,10 @@ describe("capture, wander, sets", () => {
     assert.equal(notes.working.bass.pitch.value, before.pitch.value);
     assert.equal(notes.working.bass.follow, before.follow);
     assert.notDeepEqual(notes.working.bass.pitch, before.pitch);
-    const cleared = captureLane(setCaptureIntensity(bass, "clear"), "bass", "notes");
+    const cleared = captureLane(setCaptureIntensity(notes, "clear"), "bass", "notes");
     assert.equal(cleared.working.bass.pitch.value, before.pitch.value);
     assert.equal(cleared.working.bass.pitch.pattern, 0);
-    assert.equal(cleared.working.bass.pitch.cycle, 0);
+    assert.equal(cleared.working.bass.pitch.cycle, 1);
     assert.equal(cleared.working.bass.pitch.amount, 0);
     assert.equal(cleared.working.bass.follow, before.follow);
 
@@ -1045,17 +1068,20 @@ describe("capture, wander, sets", () => {
     assert.equal(pattern.working.bass.gen1.velocity.amount, before.gen1.velocity.amount);
     assert.notEqual(pattern.working.bass.gen1.velocity.value, before.gen1.velocity.value);
 
+    const factory = defaultProject().working.bass;
     const cleared = captureLane(setCaptureIntensity(bass, "clear"), "bass", "all");
-    assert.equal(cleared.working.bass.pitch.value, 0);
+    assert.equal(cleared.working.bass.pitch.value, factory.pitch.value);
     assert.equal(cleared.working.bass.pitch.pattern, 9);
     assert.equal(cleared.working.bass.pitch.cycle, 6);
     assert.equal(cleared.working.bass.pitch.amount, 0.3);
-    assert.equal(cleared.working.bass.follow, 0);
-    assert.equal(cleared.working.bass.gen1.length, 0);
-    assert.equal(cleared.working.bass.gen1.velocity.value, 0);
+    assert.equal(cleared.working.bass.follow, factory.follow);
+    assert.equal(cleared.working.bass.gen1.length, factory.gen1.length);
+    assert.equal(cleared.working.bass.gen1.hits, factory.gen1.hits);
+    assert.equal(cleared.working.bass.gen1.velocity.value, factory.gen1.velocity.value);
     assert.equal(cleared.working.bass.gen1.velocity.pattern, 4);
     assert.equal(cleared.working.bass.gen1.velocity.cycle, 5);
     assert.equal(cleared.working.bass.gen1.velocity.amount, 0.2);
+    assert.equal(cleared.working.bass.filter.cutoff.value, 0.5);
   });
 
   it("rerolls one generator and leaves the rest of the lane", () => {
@@ -1078,35 +1104,48 @@ describe("capture, wander, sets", () => {
     assert.deepEqual(locked.working.kick.gen1, pitch.working.kick.gen1);
   });
 
-  it("zeros every field on delete when depth is all, and only cycle pattern amount for generators", () => {
+  it("restores every field on delete when depth is all, and only pattern cycle amount for generators", () => {
     let project = defaultProject();
     project.working.kick.sound.pitch = modulated(0.6, 12, 7, 0.4);
     project.working.kick.gen1.velocity = modulated(0.7, 4, 5, 0.3);
+    project.working.kick.gen1.length = 4;
+    project.working.kick.gen1.hits = 9;
+    project.working.kick.filter.cutoff = modulated(0.1, 3, 8, 0.2);
     project = setCaptureIntensity(project, "clear");
+    const factory = defaultProject().working.kick;
     const cleared = captureLane(project, "kick", "all");
-    assert.equal(cleared.working.kick.sound.pitch.value, 0);
+    assert.equal(cleared.working.kick.sound.pitch.value, factory.sound.pitch.value);
     assert.equal(cleared.working.kick.sound.pitch.pattern, 0);
-    assert.equal(cleared.working.kick.sound.pitch.cycle, 0);
+    assert.equal(cleared.working.kick.sound.pitch.cycle, 1);
     assert.equal(cleared.working.kick.sound.pitch.amount, 0);
-    assert.equal(cleared.working.kick.gen1.length, 0);
-    assert.equal(cleared.working.kick.gen1.hits, 0);
-    assert.equal(cleared.working.kick.gen1.rotate, 0);
-    assert.equal(cleared.working.kick.gen1.probability, 0);
-    assert.equal(cleared.working.kick.gen1.velocity.value, 0);
-    assert.equal(cleared.working.kick.gen1.velocity.cycle, 0);
+    assert.equal(cleared.working.kick.gen1.length, 16);
+    assert.equal(cleared.working.kick.gen1.hits, 1);
+    assert.equal(cleared.working.kick.gen1.rotate, factory.gen1.rotate);
+    assert.equal(cleared.working.kick.gen1.probability, 1);
+    assert.equal(cleared.working.kick.gen1.velocity.value, factory.gen1.velocity.value);
+    assert.equal(cleared.working.kick.gen1.velocity.pattern, 0);
+    assert.equal(cleared.working.kick.gen1.velocity.cycle, 1);
+    assert.equal(cleared.working.kick.gen1.velocity.amount, 0);
+    assert.equal(cleared.working.kick.filter.cutoff.value, 0.5);
+    assert.equal(cleared.working.kick.filter.cutoff.amount, 0);
+    assert.equal(cleared.working.kick.filter.resonance.value, 0);
 
     const generators = setCaptureDepth(project, "generators");
-    const shape = generators.working.kick.gen1.length;
     const partial = captureLane(generators, "kick", "all");
-    assert.equal(partial.working.kick.gen1.length, shape);
+    assert.equal(partial.working.kick.gen1.length, 4);
+    assert.equal(partial.working.kick.gen1.hits, 9);
     assert.equal(partial.working.kick.gen1.velocity.value, 0.7);
     assert.equal(partial.working.kick.gen1.velocity.pattern, 0);
-    assert.equal(partial.working.kick.gen1.velocity.cycle, 0);
+    assert.equal(partial.working.kick.gen1.velocity.cycle, 1);
     assert.equal(partial.working.kick.gen1.velocity.amount, 0);
     assert.equal(partial.working.kick.sound.pitch.value, 0.6);
     assert.equal(partial.working.kick.sound.pitch.pattern, 0);
-    assert.equal(partial.working.kick.sound.pitch.cycle, 0);
+    assert.equal(partial.working.kick.sound.pitch.cycle, 1);
     assert.equal(partial.working.kick.sound.pitch.amount, 0);
+    assert.equal(partial.working.kick.filter.cutoff.value, 0.1);
+    assert.equal(partial.working.kick.filter.cutoff.pattern, 0);
+    assert.equal(partial.working.kick.filter.cutoff.cycle, 1);
+    assert.equal(partial.working.kick.filter.cutoff.amount, 0);
   });
 
   it("moves an ordinary value farther than an expensive repeat count", () => {
@@ -1170,6 +1209,20 @@ describe("capture, wander, sets", () => {
     }
     assert.ok(towardN > 0 && awayN > 0);
     assert.ok(toward / towardN > away / awayN);
+
+    let escaped = false;
+    for (let seed = 1; seed <= 40; seed++) {
+      const project = {
+        ...soft,
+        global: { ...soft.global, seed },
+        captureNonce: seed,
+      };
+      project.working.kick.sound.noise = modulated(0.4, 0, 1, 0);
+      const next = capturePaths(project, "kick", ["sound.noise.value"]).working.kick.sound.noise.value;
+      assert.ok(next <= 0.72 + 1e-9);
+      if (next > 0.4 + 1e-9) escaped = true;
+    }
+    assert.equal(escaped, true);
   });
 
   it("captures only the paths of one page", () => {
@@ -1182,7 +1235,7 @@ describe("capture, wander, sets", () => {
     assert.deepEqual(project.working.kick.sound, before.sound);
   });
 
-  it("parks mixer channels at 100 and captures or zeros them", () => {
+  it("parks mixer channels at 100 and captures or restores them", () => {
     const fresh = defaultProject();
     for (const id of ["kick", "snare", "hat", "perc", "bass", "lead", "chords", "master"] as const) {
       assert.equal(fresh.mixer[id], 1);
@@ -1195,8 +1248,8 @@ describe("capture, wander, sets", () => {
     const held = captureSurface(setCaptureDepth(project, "generators"), "mix", ["kick"]);
     assert.equal(held.mixer.kick, 0.2);
     const cleared = captureSurface(setCaptureIntensity(project, "clear"), "mix", ["kick", "master"]);
-    assert.equal(cleared.mixer.kick, 0);
-    assert.equal(cleared.mixer.master, 0);
+    assert.equal(cleared.mixer.kick, 1);
+    assert.equal(cleared.mixer.master, 1);
     assert.equal(cleared.mixer.snare, 1);
   });
 

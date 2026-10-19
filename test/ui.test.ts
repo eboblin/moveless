@@ -113,6 +113,10 @@ describe("pages and leds", () => {
     project.mute.bass = true;
     assert.equal(stepLed(project, "bass", "bass").family, "yellow");
     assert.equal(stepLed(project, "bass", "bass").blink, true);
+    assert.equal(stepLed(project, "bass", "bass").blinkTo, undefined);
+    project.mute.kick = true;
+    assert.equal(stepLed(project, "kick", "kick").blink, true);
+    assert.equal(stepLed(project, "kick", "kick").blinkTo, undefined);
     project.lock.bass = true;
     assert.equal(stepLed(project, "bass", "bass").family, "lock");
     assert.equal(stepLed(project, "bass", "bass").blink, true);
@@ -120,10 +124,15 @@ describe("pages and leds", () => {
     project.mute.bass = false;
     assert.equal(stepLed(project, "bass", "bass").family, "lock");
     assert.equal(stepLed(project, "bass", "bass").blink, true);
+    project.mute.kick = false;
     project.solo.hat = true;
-    assert.equal(stepLed(project, "kick", "kick").family, "off");
+    assert.equal(stepLed(project, "kick", "kick").family, "red");
+    assert.equal(stepLed(project, "kick", "kick").blink, true);
     assert.equal(stepLed(project, "kick", "hat").family, "red");
-    assert.equal(stepLed(project, "bass", "bass").family, "off");
+    assert.equal(stepLed(project, "kick", "hat").blink, false);
+    assert.equal(stepLed(project, "bass", "bass").family, "lock");
+    assert.equal(stepLed(project, "bass", "bass").blink, true);
+    assert.equal(stepLed(project, "kick", "bass").family, "off");
   });
 
   it("lights saved scene pads; active and morph target share beat blink, target shades", () => {
@@ -843,8 +852,7 @@ describe("surface", () => {
       false,
     );
     assert.ok(pitchSpread(roll) > 1);
-    assert.ok(columnSpan(roll, 0) > 1);
-    assert.ok(columnSpan(roll, 0) < VIZ_H / 2);
+    assert.equal(columnSpan(roll, 0), 1);
     const sound = renderScreen(project, { ...defaultUi(), context: "chords", page: 3 }, 0);
     assert.equal(
       sound.labels.some((label) => label.y >= HEADER_H && label.y < HEADER_H + VIZ_H && /^[A-G]/.test(label.text)),
@@ -1250,10 +1258,10 @@ describe("surface", () => {
     const soundBefore = clone(state.project.working.kick.sound);
     for (let n = 0; n < 4; n++) state = reduce(state, { kind: "cc", data1: 14, data2: 1 });
     state = loop(state);
-    assert.equal(state.project.working.kick.sound.pitch.value, 0);
+    assert.equal(state.project.working.kick.sound.pitch.value, 0.35);
     assert.equal(state.project.working.kick.sound.pitch.pattern, 0);
     assert.equal(state.project.working.kick.sound.pitch.amount, 0);
-    assert.equal(state.project.working.kick.sound.pitch.cycle, 0);
+    assert.equal(state.project.working.kick.sound.pitch.cycle, 1);
     assert.notDeepEqual(state.project.working.kick.sound, soundBefore);
   });
 
@@ -1294,7 +1302,7 @@ describe("surface", () => {
     assert.equal(renderScreen(mute.project, mute.ui, 0).viz, "mixer");
   });
 
-  it("zeros on the next bare Capture after Delete was chosen", () => {
+  it("restores the factory on the next bare Capture after Delete was chosen", () => {
     let state = session();
     state.project.working.kick.gen1.velocity = modulated(0.7, 4, 5, 0.3);
     state.project.working.kick.sound.pitch = modulated(0.55, 9, 6, 0.4);
@@ -1305,10 +1313,10 @@ describe("surface", () => {
     state = reduce(state, { kind: "cc", data1: 52, data2: 0 });
     assert.deepEqual(state.project.working.kick, during);
     state = loop(state);
-    assert.equal(state.project.working.kick.gen1.length, 0);
-    assert.equal(state.project.working.kick.gen1.velocity.value, 0);
-    assert.equal(state.project.working.kick.sound.pitch.value, 0);
-    assert.equal(state.project.working.kick.sound.pitch.cycle, 0);
+    assert.equal(state.project.working.kick.gen1.length, 16);
+    assert.equal(state.project.working.kick.gen1.velocity.value, 1);
+    assert.equal(state.project.working.kick.sound.pitch.value, 0.35);
+    assert.equal(state.project.working.kick.sound.pitch.cycle, 1);
 
     let mods = session();
     mods.project.working.kick.gen1.velocity = modulated(0.7, 4, 5, 0.3);
@@ -1323,11 +1331,11 @@ describe("surface", () => {
     assert.equal(mods.project.working.kick.gen1.length, shape);
     assert.equal(mods.project.working.kick.gen1.velocity.value, 0.7);
     assert.equal(mods.project.working.kick.gen1.velocity.pattern, 0);
-    assert.equal(mods.project.working.kick.gen1.velocity.cycle, 0);
+    assert.equal(mods.project.working.kick.gen1.velocity.cycle, 1);
     assert.equal(mods.project.working.kick.gen1.velocity.amount, 0);
     assert.equal(mods.project.working.kick.sound.pitch.value, 0.55);
     assert.equal(mods.project.working.kick.sound.pitch.pattern, 0);
-    assert.equal(mods.project.working.kick.sound.pitch.cycle, 0);
+    assert.equal(mods.project.working.kick.sound.pitch.cycle, 1);
     assert.equal(mods.project.working.kick.sound.pitch.amount, 0);
   });
 

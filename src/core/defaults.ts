@@ -1,4 +1,3 @@
-import { hash01 } from "./hash.ts";
 import { homeOctave, unitForOctave } from "./phrase.ts";
 import { modulated } from "./modulate.ts";
 import { MOTIF_BANK_VERSION } from "./motif.ts";
@@ -20,32 +19,30 @@ import {
   type Space,
 } from "./types.ts";
 
-const CYCLE_CHOICES = [4, 8, 16] as const;
-
-function homeCycle(key: string): number {
-  return CYCLE_CHOICES[Math.floor(hash01("default-cycle", key) * CYCLE_CHOICES.length)] ?? 4;
+/** Pattern, cycle and amount sit at rest. Cycle 1 is the bottom of the knob; amount 0 keeps it silent. */
+function home(value: number) {
+  return modulated(value);
 }
 
-function home(key: string, value: number) {
-  return modulated(value, 0, homeCycle(key), 0);
-}
-
-function euclid(length: number, hits: number, rotate: number, velocity: number, cycleKey: string): EuclidGen {
+function euclid(rotate: number, velocity: number): EuclidGen {
   return {
-    length,
-    hits,
+    length: 16,
+    hits: 1,
     rotate,
     probability: 1,
-    velocity: home(cycleKey, velocity),
+    velocity: home(velocity),
   };
 }
 
-/** Stable scatter: hits 2..4, rotate 0..15. Same lane and generator always land on the same pair. */
-function scatteredGen(lane: string, which: 1 | 2, velocity: number): EuclidGen {
-  const hits = 2 + Math.floor(hash01("default-gen", lane, which, "hits") * 3);
-  const rotate = Math.floor(hash01("default-gen", lane, which, "rotate") * 16);
-  return euclid(16, hits, rotate, velocity, `${lane}.gen${which}.velocity`);
-}
+/** One hit per generator, each on its own sixteenth, so the lanes do not stack. */
+const ROTATE = {
+  kick: [0, 8],
+  snare: [4, 12],
+  hat: [2, 10],
+  perc: [6, 14],
+  bass: [1, 9],
+  lead: [5, 13],
+} as const;
 
 /**
  * Musical resting points per lane. Chords stay near mid — that set already
@@ -124,17 +121,17 @@ const SOUND_VALUE: Record<LaneId, Record<string, number>> = {
   },
 };
 
-function laneFilter(lane: string): LaneFilter {
+function laneFilter(): LaneFilter {
   return {
-    cutoff: home(`${lane}.filter.cutoff`, 0.5),
-    resonance: home(`${lane}.filter.resonance`, 0),
+    cutoff: home(0.5),
+    resonance: home(0),
   };
 }
 
-function laneSend(lane: string): LaneSend {
+function laneSend(): LaneSend {
   return {
-    reverb: home(`${lane}.send.reverb`, 0),
-    delay: home(`${lane}.send.delay`, 0),
+    reverb: home(0),
+    delay: home(0),
   };
 }
 
@@ -142,7 +139,7 @@ function sound(lane: LaneId): Record<string, ReturnType<typeof modulated>> {
   const ids = SOUND[lane];
   const values = SOUND_VALUE[lane];
   const out: Record<string, ReturnType<typeof modulated>> = {};
-  for (const id of ids) out[id] = home(`${lane}.${id}`, values[id] ?? 0.5);
+  for (const id of ids) out[id] = home(values[id] ?? 0.5);
   return out;
 }
 
@@ -154,29 +151,31 @@ const DRUM_VELOCITY: Record<DrumId, number> = {
 };
 
 function drum(id: DrumId): DrumLane {
+  const [first, second] = ROTATE[id];
   return {
-    gen1: scatteredGen(id, 1, DRUM_VELOCITY[id]),
-    gen2: scatteredGen(id, 2, 0.55),
-    ratchet: { count: home(`${id}.ratchet.count`, 0), rate: home(`${id}.ratchet.rate`, 0) },
+    gen1: euclid(first, DRUM_VELOCITY[id]),
+    gen2: euclid(second, 0.55),
+    ratchet: { count: home(0), rate: home(0) },
     sound: sound(id),
-    filter: laneFilter(id),
-    send: laneSend(id),
+    filter: laneFilter(),
+    send: laneSend(),
   };
 }
 
 function pitched(lane: "bass" | "lead", follow: number): PitchedLane {
+  const [first, second] = ROTATE[lane];
   return {
-    gen1: scatteredGen(lane, 1, 0.8),
-    gen2: scatteredGen(lane, 2, 0.55),
+    gen1: euclid(first, 0.8),
+    gen2: euclid(second, 0.55),
     follow,
-    pitch: home(`${lane}.pitch`, 0.5),
-    octave: home(`${lane}.octave`, unitForOctave(homeOctave(lane))),
-    length: home(`${lane}.length`, lane === "bass" ? 0.55 : 0.35),
-    repeat: home(`${lane}.repeat`, 0),
-    step: home(`${lane}.step`, 0.5),
+    pitch: home(0.5),
+    octave: home(unitForOctave(homeOctave(lane))),
+    length: home(lane === "bass" ? 0.55 : 0.35),
+    repeat: home(0),
+    step: home(0.5),
     sound: sound(lane),
-    filter: laneFilter(lane),
-    send: laneSend(lane),
+    filter: laneFilter(),
+    send: laneSend(),
   };
 }
 
@@ -195,14 +194,15 @@ export function defaultProgression(): Progression {
 
 function chords(): ChordLane {
   return {
-    tone: home("chords.tone", 0),
-    octave: home("chords.octave", unitForOctave(4)),
-    rate: home("chords.rate", 0),
-    gate: home("chords.gate", 0.7),
-    velocity: home("chords.velocity", 0.85),
+    tone: home(0),
+    octave: home(unitForOctave(4)),
+    // First step above a block: one root note per bar, about a sixteenth long.
+    rate: home(0.01),
+    gate: home(0.06),
+    velocity: home(0.85),
     sound: sound("chords"),
-    filter: laneFilter("chords"),
-    send: laneSend("chords"),
+    filter: laneFilter(),
+    send: laneSend(),
   };
 }
 

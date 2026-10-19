@@ -147,7 +147,7 @@ function blit(pixels: Uint8Array): void {
   }
 }
 
-let sentSteps: number[] = [];
+let sentSteps: string[] = [];
 let sentPads: string[] = [];
 /** Unsent LED MIDI. Drained a block at a time so a full repaint is not dropped. */
 const ledOut = new Map<number, number[]>();
@@ -155,6 +155,8 @@ const ledOut = new Map<number, number[]>();
 const padQueue = new Map<number, number[][]>();
 /** Last channel-0 colour handed to the device, per pad index. */
 const latchedPad: Array<number | null> = [];
+/** Last channel-0 colour handed to a step button. */
+const latchedStep: Array<number | null> = [];
 const pendingClocks: number[][] = [];
 const LED_BUDGET = 16;
 let sentTracks: number[] = [];
@@ -282,10 +284,16 @@ function paintLeds(): void {
   const tempo = session.project.global.tempo;
   const tick = session.tick;
   stepLeds(session.project, session.ui.context).forEach((led, index) => {
-    const color = ledColorAt(led, now, tempo);
-    if (sentSteps[index] === color) return;
-    sentSteps[index] = color;
-    offerLed(ledOut, [0x09, 0x90, 16 + index, color]);
+    const note = 16 + index;
+    const key = padPackets(note, led).map((packet) => packet.join(",")).join(";");
+    if (sentSteps[index] !== key) {
+      sentSteps[index] = key;
+      padQueue.set(note, padBlinkSteps(note, led, latchedStep[index] ?? null));
+    }
+    const queued = padQueue.get(note);
+    if (!queued?.length) return;
+    offerLed(ledOut, queued[0]);
+    if (queued[0][1] === 0x90) dropLed(ledOut, 0x99, note);
   });
   const menu = menuLed(session.ui.mode);
   if (sentMenu !== menu) {
@@ -358,6 +366,7 @@ function drainLeds(): void {
     const queued = padQueue.get(note);
     const head = queued?.[0];
     if (!head || head[1] !== packet[1] || head[3] !== packet[3]) continue;
+    if (packet[1] === 0x90 && note >= 16 && note <= 31) latchedStep[note - 16] = packet[3];
     if (packet[1] === 0x90 && note >= 68 && note <= 99) latchedPad[note - 68] = packet[3];
     queued.shift();
     if (!queued.length) {
@@ -417,6 +426,7 @@ export function init(): void {
   ledOut.clear();
   padQueue.clear();
   latchedPad.length = 0;
+  latchedStep.length = 0;
   pendingClocks.length = 0;
   sentTracks = [];
   sentMenu = -1;

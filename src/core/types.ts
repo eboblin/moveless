@@ -190,7 +190,7 @@ export interface GlobalSettings {
 
 export type TransitionId = "now" | "fast" | "medium" | "slow";
 export type WanderId = "fast" | "medium" | "slow" | "glacial";
-/** Clear kills modulation; soft/medium/hard scale how often pattern/cycle/amount move. */
+/** Clear restores the factory values in scope. Soft/medium/hard step off the current value toward that factory. */
 export type CaptureIntensity = "clear" | "soft" | "medium" | "hard";
 export const CAPTURE_INTENSITIES: readonly CaptureIntensity[] = ["clear", "soft", "medium", "hard"];
 /** Capture overlay: whole lane, the page's group, or only the page's knobs. */

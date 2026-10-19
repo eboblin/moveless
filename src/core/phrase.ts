@@ -465,7 +465,7 @@ function chordAudio(
       const toneU = evalModulated(withMacro(lane.tone, macro(macros, "tone")), step);
       const octaveU = evalModulated(withMacro(lane.octave, macro(macros, "octave")), step);
       const voices = chordVoices(harm, scale, rootPc, octaveU);
-      const note = voices[chordToneIndex(toneU, voices.length)] ?? voices[0] ?? 0;
+      const note = chordToneMidi(harm, scale, rootPc, toneU, octaveU);
       return { ...chordFigure(rateU), gate: gateU, note, voices };
     });
     hits.forEach(({ note, delay, lengthTicks }) => {
