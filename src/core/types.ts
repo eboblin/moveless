@@ -318,16 +318,6 @@ export interface Phrase {
 
 export const SET_CAPACITY = 32;
 
-export const SOUND: Record<LaneId, readonly string[]> = {
-  kick: ["pitch", "decay", "bend", "bendTime", "body", "click", "noise", "drive"],
-  snare: ["pitch", "body", "bodyDecay", "noise", "noiseDecay", "snap", "tone", "drive"],
-  hat: ["pitch", "metal", "noise", "color", "decay", "attack", "ring", "pos"],
-  perc: ["pitch", "material", "decay", "bend", "fm", "fmRatio", "attack", "damp"],
-  bass: ["wave", "bend", "sync", "fold", "drive", "wide", "attack", "release"],
-  lead: ["wave", "bend", "sync", "fold", "drive", "wide", "attack", "release"],
-  chords: ["wave", "bend", "sync", "fold", "drive", "wide", "attack", "release"],
-};
-
 export const QUALITY_NAMES = ["maj", "min", "sus2", "sus4", "7", "m7", "dim", "aug"] as const;
 
 /** Semitone stacks from the chord root pitch class. */

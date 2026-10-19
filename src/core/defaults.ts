@@ -1,9 +1,9 @@
 import { homeOctave, unitForOctave } from "./phrase.ts";
 import { modulated } from "./modulate.ts";
 import { MOTIF_BANK_VERSION } from "./motif.ts";
+import { SOUND } from "./pages.ts";
 import {
   LANES,
-  SOUND,
   type ChordLane,
   type DrumId,
   type DrumLane,

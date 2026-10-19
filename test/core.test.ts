@@ -36,8 +36,8 @@ import { generatePhrase, unitForOctave } from "../src/core/phrase.ts";
 import { pitchClassOfDegree, scaleOf } from "../src/core/harmony.ts";
 import { chordLabels, textPreview } from "../src/core/text-preview.ts";
 import { fieldsOf, getPath } from "../src/core/fields.ts";
-import { bindingFor, macroOffset, pagesFor } from "../src/core/pages.ts";
-import { LANES, SOUND, type Project, type ScaleId } from "../src/core/types.ts";
+import { SOUND, bindingFor, macroOffset, pagesFor } from "../src/core/pages.ts";
+import { LANES, type Project, type ScaleId } from "../src/core/types.ts";
 import { hasSoundMap } from "../src/dsp/map.ts";
 import { punch } from "../src/core/morph.ts";
 
@@ -1204,6 +1204,21 @@ describe("capture, wander, sets", () => {
     assert.equal(leftGap, true);
   });
 
+  it("carries a generator value past 10 on a hard roll", () => {
+    const hard = setCaptureIntensity(defaultProject(), "hard");
+    let metalHigh = 0;
+    let noiseHigh = 0;
+    for (let seed = 1; seed <= 40; seed++) {
+      const project = { ...hard, global: { ...hard.global, seed }, captureNonce: seed };
+      const metal = capturePaths(project, "hat", ["sound.metal.value"]).working.hat.sound.metal.value;
+      const noise = capturePaths(project, "kick", ["sound.noise.value"]).working.kick.sound.noise.value;
+      if (metal > 0.2) metalHigh += 1;
+      if (noise > 0.2) noiseHigh += 1;
+    }
+    assert.ok(metalHigh >= 8);
+    assert.ok(noiseHigh >= 12);
+  });
+
   it("moves an ordinary value farther than an expensive repeat count", () => {
     const soft = setCaptureIntensity(defaultProject(), "soft");
     let countTravel = 0;
@@ -1538,9 +1553,9 @@ describe("surface catalog", () => {
     assert.equal(bindingFor("repeat.value")?.weight, 8);
     assert.equal(bindingFor("macro.probability")?.weight, 3);
     assert.equal(bindingFor("follow")?.weight, 6);
-    assert.equal(bindingFor("sound.snap.value")?.weight, 8);
-    assert.equal(bindingFor("sound.wave.value")?.weight, 4);
-    assert.equal(bindingFor("length.value")?.weight, 4);
+    assert.equal(bindingFor("sound.snap.value")?.weight, 2);
+    assert.equal(bindingFor("sound.wave.value")?.weight, 1);
+    assert.equal(bindingFor("length.value")?.weight, 1);
     assert.equal(bindingFor("gen1.length")?.title, "GEN 1 LENGTH");
     assert.equal(bindingFor("follow")?.short, "FOL");
   });
