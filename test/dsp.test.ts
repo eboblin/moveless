@@ -14,17 +14,22 @@ describe("dsp adapter", () => {
   it("maps kick semantics onto v01 chain keys", () => {
     const params = mapKick({
       pitch: 0.2,
-      bend: 0.3,
-      snap: 0.4,
-      click: 0.5,
       decay: 0.6,
+      bend: 0.3,
+      bendTime: 0.4,
+      body: 0.15,
+      click: 0.5,
       noise: 0.7,
       drive: 0.8,
-      tone: 0.9,
     });
     const byId = Object.fromEntries(params.map((param) => [param.id, param.value]));
     assert.equal(byId.v01_freq, 0.2);
-    assert.equal(byId.v01_dcy, 0.6);
+    assert.equal(byId.v01_decay, 0.6);
+    assert.equal(byId.v01_pbend, 0.3);
+    assert.equal(byId.v01_btime, 0.4);
+    assert.equal(byId.v01_body, 0.15);
+    assert.equal(byId.v01_click, 0.5);
+    assert.equal(byId.v01_noise, 0.7);
     assert.equal(byId.v01_dist, 0.8);
     assert.equal(params.length, 8);
   });
@@ -142,7 +147,7 @@ describe("dsp adapter", () => {
     assert.ok(kick[0].params.some((param) => param.id === "v01_freq"));
   });
 
-  it("sounds the kick, pans the hat, and widens chords", () => {
+  it("sounds the kick, widens the hat, and widens chords", () => {
     const project = defaultProject();
     const engine = createEngine();
     const first = renderBlock(engine, eventsInBlock(project, 0), project.global.tempo);
@@ -152,17 +157,20 @@ describe("dsp adapter", () => {
     for (const sample of first) energy += Math.abs(sample);
     assert.ok(energy > 0.05);
 
-    const leftHat = renderBlock(createEngine(), [{
+    const wideHat = renderBlock(createEngine(), [{
       sampleOffset: 0, lane: "hat", note: 42, velocity: 100, lengthTicks: 48,
-      params: mapSound("hat", { pitch: 0.5, click: 0.8, snap: 0.2, decay: 0.5, tone: 0.7, drive: 0.1, pan: 0, spread: 0 }),
+      params: mapSound("hat", { pitch: 0.6, metal: 0.85, noise: 0.2, color: 0.6, decay: 0.4, attack: 0.3, ring: 0.4, width: 1 }),
     }], 120);
-    let left = 0;
-    let right = 0;
-    for (let i = 0; i < 128; i++) {
-      left += Math.abs(leftHat[i * 2]);
-      right += Math.abs(leftHat[i * 2 + 1]);
-    }
-    assert.ok(left > right * 2);
+    const narrowHat = renderBlock(createEngine(), [{
+      sampleOffset: 0, lane: "hat", note: 42, velocity: 100, lengthTicks: 48,
+      params: mapSound("hat", { pitch: 0.6, metal: 0.85, noise: 0.2, color: 0.6, decay: 0.4, attack: 0.3, ring: 0.4, width: 0 }),
+    }], 120);
+    const side = (buf: Float32Array) => {
+      let diff = 0;
+      for (let i = 0; i < 128; i++) diff += Math.abs(buf[i * 2] - buf[i * 2 + 1]);
+      return diff;
+    };
+    assert.ok(side(wideHat) > side(narrowHat) * 2);
 
     const narrow = sideDifference(0);
     const wide = sideDifference(1);
@@ -186,7 +194,7 @@ describe("dsp adapter", () => {
     const engine = createEngine();
     loadPhrase(engine, [{
       sample: 0, loop: 300, lane: "kick", note: 36, velocity: 120, lengthTicks: 48,
-      params: mapSound("kick", { pitch: 0.5, bend: 0, snap: 0, click: 0, decay: 0.05, noise: 0, drive: 0, tone: 0.5 }),
+      params: mapSound("kick", { pitch: 0.5, bend: 0, bendTime: 0.2, body: 0, click: 0, decay: 0.05, noise: 0, drive: 0 }),
     }], 120, true);
     renderClock(engine);
     const ageFirst = engine.drums[0].age;
@@ -405,7 +413,7 @@ describe("dsp adapter", () => {
       note: 36,
       velocity: 120,
       lengthTicks: 48,
-      params: mapSound("kick", { pitch: 0.2, bend: 0, snap: 0, click: 0, decay: 0.7, noise: 0, drive: 0, tone: 0.5 }),
+      params: mapSound("kick", { pitch: 0.2, bend: 0, bendTime: 0.2, body: 0, click: 0, decay: 0.7, noise: 0, drive: 0 }),
     }], tempo, true, [{
       lane: "kick", id: "v01_freq", value: 0.2, pattern: 0, cycle: 8, amount: 1, loop,
     }]);
@@ -419,37 +427,35 @@ describe("dsp adapter", () => {
     assert.equal(engine.drums[0].freq, freq);
   });
 
-  it("folds hat decay so the top of the knob is the old midpoint", () => {
-    const decay = (pitchLane: "snare" | "hat", unit: number) => {
+  it("gives each drum its own pitch range and keeps bend time off the amp decay", () => {
+    const freq = (lane: "kick" | "snare" | "hat" | "perc", pitch: number) => {
       const engine = createEngine();
       loadPhrase(engine, [{
-        sample: 0, loop: 100000, lane: pitchLane, note: pitchLane === "hat" ? 42 : 38, velocity: 100, lengthTicks: 48,
-        params: mapSound(pitchLane, { decay: unit }),
-      }], 120, true);
-      renderClock(engine);
-      return engine.drums[pitchLane === "hat" ? 2 : 1].decay;
-    };
-    const seconds = (unit: number) => 0.005 + unit * unit * 0.95;
-    assert.ok(Math.abs(decay("hat", 1) - seconds(0.5)) < 1e-6);
-    assert.ok(Math.abs(decay("hat", 0.5) - seconds(0.25)) < 1e-6);
-    assert.ok(Math.abs(decay("snare", 1) - seconds(1)) < 1e-6);
-  });
-
-  it("tunes hats above the snare and keeps the top of the knob metallic", () => {
-    const freq = (lane: "snare" | "hat", note: number, pitch: number) => {
-      const engine = createEngine();
-      loadPhrase(engine, [{
-        sample: 0, loop: 100000, lane, note, velocity: 100, lengthTicks: 48,
+        sample: 0, loop: 100000, lane, note: 36, velocity: 100, lengthTicks: 48,
         params: mapSound(lane, { pitch }),
       }], 120, true);
       renderClock(engine);
-      return engine.drums[lane === "snare" ? 1 : 2].freq;
+      return engine.drums[lane === "kick" ? 0 : lane === "snare" ? 1 : lane === "hat" ? 2 : 3].freq;
     };
-    const snareTop = freq("snare", 38, 1);
-    const hatLow = freq("hat", 42, 0);
-    const hatHigh = freq("hat", 42, 1);
-    assert.ok(hatLow > snareTop);
-    assert.ok(hatHigh > hatLow * 16);
+    assert.ok(Math.abs(freq("kick", 0) - 32) < 0.01);
+    assert.ok(Math.abs(freq("kick", 1) - 180) < 0.05);
+    assert.ok(Math.abs(freq("snare", 0) - 140) < 0.05);
+    assert.ok(Math.abs(freq("snare", 1) - 900) < 0.2);
+    assert.ok(Math.abs(freq("hat", 0) - 250) < 0.05);
+    assert.ok(Math.abs(freq("hat", 1) - 4000) < 1);
+    assert.ok(Math.abs(freq("perc", 0) - 70) < 0.05);
+    assert.ok(Math.abs(freq("perc", 1) - 2500) < 1);
+
+    const engine = createEngine();
+    loadPhrase(engine, [{
+      sample: 0, loop: 100000, lane: "kick", note: 36, velocity: 100, lengthTicks: 48,
+      params: mapSound("kick", { decay: 0.9, bendTime: 0.15 }),
+    }], 120, true);
+    renderClock(engine);
+    const kick = engine.drums[0];
+    assert.ok(kick.decay > 1);
+    assert.ok(kick.bendTime < 0.05);
+    assert.ok(kick.decay > kick.bendTime * 10);
   });
 
   it("maps every snare suffix onto a distinct live field", () => {
@@ -457,55 +463,65 @@ describe("dsp adapter", () => {
     loadPhrase(engine, [{
       sample: 0, loop: 100000, lane: "snare", note: 38, velocity: 100, lengthTicks: 48,
       params: mapSound("snare", {
-        pitch: 0.2, body: 0.31, noise: 0.42, snap: 0.53, decay: 0.64, tail: 0.75, click: 0.86, drive: 0.97,
+        pitch: 0.2, body: 0.31, noise: 0.42, snap: 0.53, bodyDecay: 0.64, noiseDecay: 0.75, tone: 0.86, drive: 0.97,
       }),
     }], 120, true);
     renderClock(engine);
     const drum = engine.drums[1];
-    assert.ok(Math.abs(drum.freq - drum.base * 0.7) < 1e-6);
+    const hz = 140 * (900 / 140) ** 0.2;
+    assert.ok(Math.abs(drum.freq - hz) < 0.05);
     assert.equal(drum.body, 0.31);
     assert.equal(drum.noise, 0.42);
-    assert.equal(drum.snap, 0.53);
-    assert.ok(Math.abs(drum.decay - (0.005 + 0.64 * 0.64 * 0.95)) < 1e-6);
-    assert.ok(Math.abs(drum.noiseDecay - (0.004 + 0.75 * 0.75 * 0.86)) < 1e-6);
-    assert.equal(drum.bright, 0.86);
+    assert.equal(drum.click, 0.53);
+    assert.ok(Math.abs(drum.decay - (0.04 + 0.64 * 0.64 * 0.76)) < 1e-6);
+    assert.ok(Math.abs(drum.noiseDecay - (0.02 + 0.75 * 0.75 * 0.58)) < 1e-6);
+    assert.equal(drum.tone, 0.86);
     assert.equal(drum.drive, 0.97);
   });
 
-  it("keeps kick snap and click as separate controls", () => {
+  it("keeps kick bend and click as separate controls", () => {
     const engine = createEngine();
     loadPhrase(engine, [{
       sample: 0, loop: 100000, lane: "kick", note: 36, velocity: 120, lengthTicks: 48,
       params: mapSound("kick", {
-        pitch: 0.5, bend: 0.2, snap: 0.9, click: 0.1, decay: 0.5, noise: 0.2, drive: 0.1, tone: 0.5,
+        pitch: 0.5, bend: 0.2, bendTime: 0.4, body: 0.1, click: 0.7, decay: 0.5, noise: 0.2, drive: 0.1,
       }),
     }], 120, true);
     renderClock(engine);
-    assert.equal(engine.drums[0].snap, 0.9);
-    assert.equal(engine.drums[0].bright, 0.1);
-    assert.equal(engine.drums[0].bend, 0.2);
+    assert.equal(engine.drums[0].bend, 0.2 * 3);
+    assert.ok(Math.abs(engine.drums[0].bendTime - (0.008 + 0.4 * 0.4 * 0.392)) < 1e-6);
+    assert.equal(engine.drums[0].click, 0.7);
   });
 
-  it("changes early energy when snap or body moves", () => {
+  it("changes early energy when snap moves and the body spectrum when body moves", () => {
     const quietSnap = peak(renderBlock(createEngine(), [{
       sampleOffset: 0, lane: "snare", note: 38, velocity: 120, lengthTicks: 48,
-      params: mapSound("snare", { pitch: 0.5, body: 0.8, noise: 0.2, snap: 0, decay: 0.5, tail: 0.4, click: 0.5, drive: 0 }),
-    }], 120));
+      params: mapSound("snare", { pitch: 0.5, body: 0.5, noise: 0.2, snap: 0, bodyDecay: 0.5, noiseDecay: 0.4, tone: 0.5, drive: 0 }),
+    }], 120, 512));
     const loudSnap = peak(renderBlock(createEngine(), [{
       sampleOffset: 0, lane: "snare", note: 38, velocity: 120, lengthTicks: 48,
-      params: mapSound("snare", { pitch: 0.5, body: 0.8, noise: 0.2, snap: 1, decay: 0.5, tail: 0.4, click: 0.5, drive: 0 }),
-    }], 120));
+      params: mapSound("snare", { pitch: 0.5, body: 0.5, noise: 0.2, snap: 1, bodyDecay: 0.5, noiseDecay: 0.4, tone: 0.5, drive: 0 }),
+    }], 120, 512));
     assert.ok(loudSnap > quietSnap);
 
-    const thin = peak(renderBlock(createEngine(), [{
-      sampleOffset: 0, lane: "snare", note: 38, velocity: 120, lengthTicks: 48,
-      params: mapSound("snare", { pitch: 0.5, body: 0, noise: 0.1, snap: 0, decay: 0.6, tail: 0.3, click: 0.2, drive: 0 }),
-    }], 120));
-    const fat = peak(renderBlock(createEngine(), [{
-      sampleOffset: 0, lane: "snare", note: 38, velocity: 120, lengthTicks: 48,
-      params: mapSound("snare", { pitch: 0.5, body: 1, noise: 0.1, snap: 0, decay: 0.6, tail: 0.3, click: 0.2, drive: 0 }),
-    }], 120));
-    assert.ok(fat > thin);
+    const toneOf = (body: number) => {
+      const audio = renderBlock(createEngine(), [{
+        sampleOffset: 0, lane: "snare", note: 38, velocity: 120, lengthTicks: 48,
+        params: mapSound("snare", { pitch: 0.45, body, noise: 0, snap: 0, bodyDecay: 0.6, noiseDecay: 0, tone: 0.5, drive: 0 }),
+      }], 120, 2048);
+      let low = 0;
+      let high = 0;
+      let prev = 0;
+      for (let i = 64; i < 512; i++) {
+        const s = audio[i * 2];
+        low += s * s;
+        const d = s - prev;
+        high += d * d;
+        prev = s;
+      }
+      return high / Math.max(1e-9, low);
+    };
+    assert.ok(toneOf(1) > toneOf(0) * 1.4);
   });
 
   it("keeps a sounding note's length and gives the next note the new one", () => {

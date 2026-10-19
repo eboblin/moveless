@@ -111,10 +111,11 @@ describe("pages and leds", () => {
     project.mute.snare = true;
     assert.equal(stepLed(project, "kick", "snare").family, "off");
     project.mute.bass = true;
-    assert.equal(stepLed(project, "bass", "bass").family, "off");
-    assert.equal(stepLed(project, "bass", "bass").blink, false);
+    assert.equal(stepLed(project, "bass", "bass").family, "yellow");
+    assert.equal(stepLed(project, "bass", "bass").blink, true);
     project.lock.bass = true;
-    assert.equal(stepLed(project, "bass", "bass").family, "off");
+    assert.equal(stepLed(project, "bass", "bass").family, "lock");
+    assert.equal(stepLed(project, "bass", "bass").blink, true);
     assert.equal(stepLed(project, "kick", "bass").family, "off");
     project.mute.bass = false;
     assert.equal(stepLed(project, "bass", "bass").family, "lock");
@@ -949,7 +950,7 @@ describe("surface", () => {
     assert.equal(turned.ui.page, 3);
     const next = renderScreen(turned.project, turned.ui, 0);
     assert.equal(next.viz, "phrase");
-    assert.equal(next.header, "KCK PITCH BEND");
+    assert.equal(next.header, "KCK PITCH DECAY");
     assert.ok(next.labels.some((label) => label.text === "PITCH"));
 
     let held = session();
@@ -961,7 +962,7 @@ describe("surface", () => {
     const left = renderScreen(held.project, held.ui, 0);
     assert.equal(held.ui.focus, null);
     assert.equal(left.viz, "phrase");
-    assert.equal(left.header, "KCK PITCH BEND");
+    assert.equal(left.header, "KCK PITCH DECAY");
   });
 
   it("draws a generator cycle on the phrase scale", () => {

@@ -23,17 +23,26 @@
 enum {
     P_NONE = 0,
     P_FREQ,
-    P_DCY,
-    P_NEDCY,
-    P_MIX,
+    P_DECAY,
+    P_PBEND,
+    P_BTIME,
+    P_BODY,
+    P_CLICK,
+    P_NOISE,
     P_DIST,
-    P_NFQ,
-    P_PAN,
-    P_MRATE,
-    P_NFFRQ,
+    P_BDCY,
+    P_NDCY,
+    P_SNAP,
+    P_TONE,
+    P_METAL,
+    P_COLOR,
     P_ATK,
-    P_MAMT,
-    P_LVL,
+    P_RING,
+    P_WIDTH,
+    P_MAT,
+    P_FM,
+    P_RATIO,
+    P_DAMP,
     P_WAVE,
     P_BEND,
     P_SYNC,
@@ -51,11 +60,14 @@ enum {
 typedef struct {
     int on;
     int lane;
-    float phase, phase2, env, noise_env, freq, decay, noise_decay;
-    float noise, drive, tone, pan, spread, snap, bright, bend, body, low, base;
-    float cutoff, resonance, reverb, delay, flt, band;
-    float env_k, noise_k, click_k, click_env, click_tau;
-    int age, loop;
+    float phase0, phase1, phase2, phase3, click_phase;
+    float env, noise_env, pitch_env, click_env;
+    int age;
+    float freq, decay, noise_decay, bend_time, bend;
+    float body, noise, tone, click, drive, fm, ratio, ring, width, damp;
+    float cutoff, resonance, reverb, delay, nlp, nhp, flt, band;
+    float env_k, noise_k, pitch_k, click_k;
+    int loop;
 } Drum;
 
 typedef struct {
@@ -324,20 +336,80 @@ static float clampf01(float value) {
     return value;
 }
 
-/* Squared unit → seconds: low end stays clicky, top still reaches ~1 s.
-   Hats stop at the old midpoint: past ~50 the tail was unused. */
-static float drum_decay_seconds(float unit) {
+/* Kick 32–180 Hz, snare 140–900, hat 250–4000, perc 70–2500. The knob is the pitch. */
+static float drum_pitch_hz(int lane, float unit) {
     float u = clampf01(unit);
-    return 0.005f + u * u * 0.95f;
+    if (lane == 1) return 140.0f * powf(900.0f / 140.0f, u);
+    if (lane == 2) return 250.0f * powf(4000.0f / 250.0f, u);
+    if (lane == 3) return 70.0f * powf(2500.0f / 70.0f, u);
+    return 32.0f * powf(180.0f / 32.0f, u);
 }
 
-static float hat_decay_unit(float unit) {
-    return clampf01(unit) * 0.5f;
+static float squared_seconds(float unit, float lo, float span) {
+    float u = clampf01(unit);
+    return lo + u * u * span;
 }
 
-static float drum_noise_decay_seconds(float unit) {
+static float kick_decay_seconds(float unit) { return squared_seconds(unit, 0.03f, 1.37f); }
+static float bend_time_seconds(float unit) { return squared_seconds(unit, 0.008f, 0.392f); }
+static float snare_body_decay_seconds(float unit) { return squared_seconds(unit, 0.04f, 0.76f); }
+static float snare_noise_decay_seconds(float unit) { return squared_seconds(unit, 0.02f, 0.58f); }
+static float hat_decay_seconds(float unit) { return squared_seconds(unit, 0.02f, 1.0f); }
+static float perc_decay_seconds(float unit) { return squared_seconds(unit, 0.03f, 1.2f); }
+
+static const float FM_STOPS[7] = {1.0f, 1.5f, 2.0f, 3.0f, 4.0f, 5.0f, 7.0f};
+static const float FM_CENTER[7] = {0.06f, 0.21f, 0.36f, 0.51f, 0.66f, 0.81f, 0.96f};
+
+static float fm_ratio_of(float unit) {
     float u = clampf01(unit);
-    return 0.004f + u * u * 0.86f;
+    int i;
+    for (i = 0; i < 7; i++) {
+        float d = u - FM_CENTER[i];
+        if (d < 0) d = -d;
+        if (d <= 0.055f) return FM_STOPS[i];
+    }
+    if (u <= FM_CENTER[0]) return FM_STOPS[0];
+    for (i = 0; i < 6; i++) {
+        float left = FM_CENTER[i] + 0.055f;
+        float right = FM_CENTER[i + 1] - 0.055f;
+        if (u <= FM_CENTER[i + 1]) {
+            float f, s;
+            if (u <= left) return FM_STOPS[i];
+            if (u >= right) return FM_STOPS[i + 1];
+            f = (u - left) / (right - left);
+            s = f * f * (3.0f - 2.0f * f);
+            return FM_STOPS[i] * (1.0f - s) + FM_STOPS[i + 1] * s;
+        }
+    }
+    return FM_STOPS[6];
+}
+
+static float fade01(float u, float a, float b) {
+    float x;
+    if (u <= a) return 0;
+    if (u >= b) return 1;
+    x = (u - a) / (b - a);
+    return x * x * (3.0f - 2.0f * x);
+}
+
+static float lerp_stops(const float *stops, int n, float t) {
+    float u = clampf01(t) * (float)(n - 1);
+    int i = (int)floorf(u);
+    float f;
+    if (i > n - 2) i = n - 2;
+    if (i < 0) i = 0;
+    f = u - (float)i;
+    return stops[i] * (1.0f - f) + stops[i + 1] * f;
+}
+
+static float perc_noise_amt(float material) {
+    static const float stops[6] = {0.14f, 0.2f, 0.1f, 0.03f, 0.07f, 0.04f};
+    return lerp_stops(stops, 6, material);
+}
+
+static float perc_tone(float material) {
+    static const float stops[6] = {0.22f, 0.35f, 0.4f, 0.62f, 0.75f, 0.7f};
+    return lerp_stops(stops, 6, material);
 }
 
 static float euclid_gate(int steps, int pulses, float phase) {
@@ -404,17 +476,26 @@ static int param_of(const char *id) {
     if (strcmp(id, "release") == 0 || strcmp(id, "decay") == 0) return P_RELEASE;
     if (strcmp(id, "wide") == 0) return P_WIDE;
     if (suffix_is(id, "freq")) return P_FREQ;
-    if (suffix_is(id, "nedcy")) return P_NEDCY;
-    if (suffix_is(id, "nffrq")) return P_NFFRQ;
-    if (suffix_is(id, "mrate")) return P_MRATE;
-    if (suffix_is(id, "mamt")) return P_MAMT;
-    if (suffix_is(id, "dcy")) return P_DCY;
-    if (suffix_is(id, "mix")) return P_MIX;
+    if (suffix_is(id, "btime")) return P_BTIME;
+    if (suffix_is(id, "pbend")) return P_PBEND;
+    if (suffix_is(id, "bdcy")) return P_BDCY;
+    if (suffix_is(id, "ndcy")) return P_NDCY;
+    if (suffix_is(id, "decay")) return P_DECAY;
+    if (suffix_is(id, "click")) return P_CLICK;
+    if (suffix_is(id, "noise")) return P_NOISE;
     if (suffix_is(id, "dist")) return P_DIST;
-    if (suffix_is(id, "nfq")) return P_NFQ;
-    if (suffix_is(id, "pan")) return P_PAN;
+    if (suffix_is(id, "body")) return P_BODY;
+    if (suffix_is(id, "snap")) return P_SNAP;
+    if (suffix_is(id, "tone")) return P_TONE;
+    if (suffix_is(id, "metal")) return P_METAL;
+    if (suffix_is(id, "color")) return P_COLOR;
     if (suffix_is(id, "atk")) return P_ATK;
-    if (suffix_is(id, "lvl")) return P_LVL;
+    if (suffix_is(id, "ring")) return P_RING;
+    if (suffix_is(id, "width")) return P_WIDTH;
+    if (suffix_is(id, "ratio")) return P_RATIO;
+    if (suffix_is(id, "damp")) return P_DAMP;
+    if (suffix_is(id, "mat")) return P_MAT;
+    if (suffix_is(id, "fm")) return P_FM;
     return P_NONE;
 }
 
@@ -438,16 +519,15 @@ static float eval_lane(const LaneMotion *motion, float step) {
 }
 
 static void refresh_drum_env(Drum *drum) {
-    float dcy = drum->decay < 0.004f ? 0.004f : drum->decay;
+    float body = drum->lane == 2 ? drum->decay * (1.0f + drum->ring * 2.8f) : drum->decay;
     float ndcy = drum->noise_decay < 0.003f ? 0.003f : drum->noise_decay;
-    drum->env_k = expf(-1.0f / (dcy * SR));
-    drum->noise_k = expf(-1.0f / (ndcy * SR));
-}
-
-static void refresh_click(Drum *drum) {
-    float tau = 10.0f + drum->snap * 160.0f + (1.0f - drum->bright) * 260.0f;
+    float bend = drum->bend_time < 0.004f ? 0.004f : drum->bend_time;
+    float tau = 12.0f + drum->click * 520.0f;
+    if (body < 0.004f) body = 0.004f;
     if (tau < 1.0f) tau = 1.0f;
-    drum->click_tau = tau;
+    drum->env_k = expf(-1.0f / (body * SR));
+    drum->noise_k = expf(-1.0f / (ndcy * SR));
+    drum->pitch_k = expf(-1.0f / (bend * SR));
     drum->click_k = expf(-1.0f / tau);
 }
 
@@ -456,36 +536,69 @@ static void refresh_release(Note *note) {
 }
 
 static void apply_drum(Drum *drum, int param, float unit) {
+    float u = clampf01(unit);
     switch (param) {
-    case P_DCY:
-        if (drum->lane == 2) unit = hat_decay_unit(unit);
-        drum->decay = drum_decay_seconds(unit);
-        if (drum->lane == 2) drum->noise_decay = drum_noise_decay_seconds(unit);
+    case P_DECAY:
+        if (drum->lane == 2) {
+            drum->decay = hat_decay_seconds(u);
+            drum->noise_decay = drum->decay;
+        } else if (drum->lane == 3) {
+            drum->decay = perc_decay_seconds(u);
+            drum->noise_decay = drum->decay * 0.4f;
+            if (drum->noise_decay > 0.09f) drum->noise_decay = 0.09f;
+            drum->bend_time = drum->decay * 0.7f;
+            if (drum->bend_time < 0.03f) drum->bend_time = 0.03f;
+        } else drum->decay = kick_decay_seconds(u);
         refresh_drum_env(drum);
         break;
-    case P_NEDCY:
-        drum->noise_decay = drum_noise_decay_seconds(unit);
+    case P_BDCY:
+        drum->decay = snare_body_decay_seconds(u);
         refresh_drum_env(drum);
         break;
-    case P_MIX: drum->noise = unit; break;
-    case P_DIST: drum->drive = unit; break;
-    case P_NFQ: drum->tone = unit; break;
-    case P_PAN: drum->pan = unit; break;
-    case P_MRATE: drum->spread = unit; break;
-    case P_NFFRQ:
-        drum->bright = unit;
-        refresh_click(drum);
+    case P_NDCY:
+        drum->noise_decay = snare_noise_decay_seconds(u);
+        refresh_drum_env(drum);
         break;
+    case P_PBEND:
+        drum->bend = u * (drum->lane == 3 ? 3.5f : 3.0f);
+        break;
+    case P_BTIME:
+        drum->bend_time = bend_time_seconds(u);
+        refresh_drum_env(drum);
+        break;
+    case P_BODY:
+    case P_MAT:
+    case P_METAL:
+        drum->body = u;
+        if (drum->lane == 0) drum->tone = 0.12f + u * 0.35f;
+        if (drum->lane == 1) drum->ratio = 1.4f + u * 0.8f;
+        if (drum->lane == 3) {
+            drum->noise = perc_noise_amt(u);
+            drum->tone = perc_tone(u);
+        }
+        break;
+    case P_CLICK:
+    case P_SNAP:
     case P_ATK:
-        drum->snap = unit;
-        refresh_click(drum);
+        drum->click = u;
+        refresh_drum_env(drum);
         break;
-    case P_MAMT: drum->bend = unit; break;
-    case P_LVL: drum->body = unit; break;
-    case P_CUTOFF: drum->cutoff = unit; break;
-    case P_RESONANCE: drum->resonance = unit; break;
-    case P_REVERB: drum->reverb = unit; break;
-    case P_DELAY: drum->delay = unit; break;
+    case P_NOISE: drum->noise = u; break;
+    case P_DIST: drum->drive = u; break;
+    case P_TONE:
+    case P_COLOR: drum->tone = u; break;
+    case P_RING:
+        drum->ring = u;
+        refresh_drum_env(drum);
+        break;
+    case P_WIDTH: drum->width = u; break;
+    case P_FM: drum->fm = u; break;
+    case P_RATIO: drum->ratio = fm_ratio_of(u); break;
+    case P_DAMP: drum->damp = u; break;
+    case P_CUTOFF: drum->cutoff = u; break;
+    case P_RESONANCE: drum->resonance = u; break;
+    case P_REVERB: drum->reverb = u; break;
+    case P_DELAY: drum->delay = u; break;
     default: break;
     }
 }
@@ -565,48 +678,88 @@ static void follow_sound(Engine *engine) {
 static void arm_drum(Engine *engine, int lane, int note, int velocity, const char *params, int loop) {
     int idx = lane < DRUMS ? lane : 0;
     Drum *drum = &engine->drums[idx];
-    int hat = idx == 2;
-    float pitch = read_param(params, "freq", 0.5f);
-    float base = 440.0f * powf(2.0f, ((float)note - 69.0f) / 12.0f);
-    float dropped = idx == 0 ? 0.5f : 1.0f;
+    float pitch = clampf01(read_param(params, "freq", 0.5f));
     float vel = velocity / 127.0f;
+    (void)engine;
+    (void)note;
     drum->on = 1;
     drum->lane = idx;
-    drum->phase = 0;
+    drum->phase0 = 0;
+    drum->phase1 = 0;
     drum->phase2 = 0;
+    drum->phase3 = 0;
+    drum->click_phase = 0;
     drum->env = vel;
     drum->noise_env = vel;
+    drum->pitch_env = 1;
     drum->age = 0;
-    drum->base = base * dropped;
-    /* Snare tops out near 110 Hz. Hats start clear of that and run into thin metal. */
-    drum->freq = hat ? 280.0f * powf(2.0f, pitch * 4.75f) : drum->base * (0.5f + pitch);
+    drum->freq = drum_pitch_hz(idx, pitch);
     drum->loop = loop;
-    float dcy_unit = read_param(params, "dcy", 0.5f);
-    if (hat) dcy_unit = hat_decay_unit(dcy_unit);
-    drum->decay = drum_decay_seconds(dcy_unit);
-    /* Hat has no tail knob — keep noise decay on the same throw as body decay. */
-    drum->noise_decay = drum_noise_decay_seconds(read_param(params, "nedcy", hat ? dcy_unit : 0.45f));
-    drum->noise = read_param(params, "mix", hat ? 0.35f : (idx == 1 ? 0.55f : 0.15f));
-    drum->drive = read_param(params, "dist", 0.15f);
-    drum->tone = read_param(params, "nfq", hat ? 0.75f : 0.45f);
-    drum->pan = read_param(params, "pan", 0.5f);
-    drum->spread = read_param(params, "mrate", hat ? 0.4f : 0.1f);
-    drum->snap = read_param(params, "atk", idx == 0 ? 0.35f : (hat ? 0.25f : 0.45f));
-    drum->bright = read_param(params, "nffrq", hat ? 0.7f : 0.4f);
-    drum->bend = read_param(params, "mamt", idx == 0 ? 0.55f : (idx == 3 ? 0.35f : 0.1f));
-    drum->body = read_param(params, "lvl", hat ? 0.12f : 1.0f);
+    drum->nlp = 0;
+    drum->nhp = 0;
+    drum->flt = 0;
+    drum->band = 0;
+    drum->fm = 0;
+    drum->ratio = 1;
+    drum->ring = 0;
+    drum->width = 0;
+    drum->damp = 0;
+    drum->drive = 0;
+    if (idx == 0) {
+        drum->decay = kick_decay_seconds(read_param(params, "decay", 0.4f));
+        drum->noise_decay = 0.045f;
+        drum->bend = clampf01(read_param(params, "pbend", 0.4f)) * 3.0f;
+        drum->bend_time = bend_time_seconds(read_param(params, "btime", 0.4f));
+        drum->body = clampf01(read_param(params, "body", 0.1f));
+        drum->click = clampf01(read_param(params, "click", 0.1f));
+        drum->noise = clampf01(read_param(params, "noise", 0.1f));
+        drum->tone = 0.12f + drum->body * 0.35f;
+        drum->drive = clampf01(read_param(params, "dist", 0.05f));
+        drum->damp = 0.2f;
+    } else if (idx == 1) {
+        drum->body = clampf01(read_param(params, "body", 0.3f));
+        drum->decay = snare_body_decay_seconds(read_param(params, "bdcy", 0.3f));
+        drum->noise = clampf01(read_param(params, "noise", 0.5f));
+        drum->noise_decay = snare_noise_decay_seconds(read_param(params, "ndcy", 0.3f));
+        drum->click = clampf01(read_param(params, "snap", 0.4f));
+        drum->tone = clampf01(read_param(params, "tone", 0.5f));
+        drum->drive = clampf01(read_param(params, "dist", 0.1f));
+        drum->bend = 0;
+        drum->bend_time = 0.05f;
+        drum->ratio = 1.4f + drum->body * 0.8f;
+        drum->damp = 0.3f;
+    } else if (idx == 2) {
+        drum->body = clampf01(read_param(params, "metal", 0.5f));
+        drum->noise = clampf01(read_param(params, "noise", 0.5f));
+        drum->tone = clampf01(read_param(params, "color", 0.5f));
+        drum->decay = hat_decay_seconds(read_param(params, "decay", 0.3f));
+        drum->noise_decay = drum->decay;
+        drum->click = clampf01(read_param(params, "atk", 0.3f));
+        drum->ring = clampf01(read_param(params, "ring", 0.3f));
+        drum->width = clampf01(read_param(params, "width", 0.0f));
+        drum->bend = 0;
+        drum->bend_time = 0.05f;
+    } else {
+        drum->body = clampf01(read_param(params, "mat", 0.2f));
+        drum->decay = perc_decay_seconds(read_param(params, "decay", 0.4f));
+        drum->noise_decay = drum->decay * 0.4f;
+        if (drum->noise_decay > 0.09f) drum->noise_decay = 0.09f;
+        drum->bend = clampf01(read_param(params, "pbend", 0.1f)) * 3.5f;
+        drum->bend_time = drum->decay * 0.7f;
+        if (drum->bend_time < 0.03f) drum->bend_time = 0.03f;
+        drum->fm = clampf01(read_param(params, "fm", 0.0f));
+        drum->ratio = fm_ratio_of(read_param(params, "ratio", 0.06f));
+        drum->click = clampf01(read_param(params, "atk", 0.3f));
+        drum->damp = clampf01(read_param(params, "damp", 0.4f));
+        drum->noise = perc_noise_amt(drum->body);
+        drum->tone = perc_tone(drum->body);
+    }
+    drum->click_env = drum->click > 0.001f ? 1.0f : 0.0f;
     drum->cutoff = read_param(params, "cutoff", 0.5f);
     drum->resonance = read_param(params, "resonance", 0.0f);
     drum->reverb = read_param(params, "reverb", 0.0f);
     drum->delay = read_param(params, "delay", 0.0f);
-    drum->low = 0;
-    drum->flt = 0;
-    drum->band = 0;
-    drum->click_env = 1.0f;
     refresh_drum_env(drum);
-    refresh_click(drum);
-    (void)engine;
-    (void)lane;
 }
 
 static Note *steal(Engine *engine) {
@@ -698,34 +851,195 @@ static float filter_sample(float *low, float *band, float input, float cutoff, f
     return clip_peak(raw * trim);
 }
 
-static float drum_sample(Engine *engine, Drum *drum) {
-    int kick = drum->lane == 0;
-    int hat = drum->lane == 2;
-    float bend = 1.0f + drum->bend * drum->env * (kick ? 4.5f : 2.2f);
-    float inc = (TWO_PI * drum->freq * bend) / SR;
-    float spread_mul = hat ? 1.8f + drum->bright * 2.4f : 0.08f + drum->spread * 0.25f;
-    drum->phase += inc;
-    drum->phase2 += inc * (1.0f + drum->spread * (hat ? 2.5f : 0.12f) + (hat ? drum->bright * 0.55f : 0.0f));
-    float body = (sinf(drum->phase) + sinf(drum->phase2) * spread_mul) * drum->body;
-    float click = rng(engine) * drum->click_env * drum->snap * (0.35f + drum->bright * 1.4f);
-    float noisy = rng(engine) * drum->noise * (hat ? 0.45f + drum->bright * 0.7f : 1.0f);
-    float mixed = body * drum->env + noisy * drum->noise_env + click;
-    /* Hats high-pass: tone 0 sits just above the snare, tone 1 is thin metal. */
-    float coef = hat ? 0.08f + drum->tone * drum->tone * 0.57f : 0.025f + drum->tone * drum->tone * 0.95f;
-    drum->low += (mixed - drum->low) * coef;
-    float voiced = hat ? mixed - drum->low : drum->low;
-    /* Squared drive: useful throw stays audible; top of knob is the smash. */
-    float drive = drum->drive * drum->drive;
+typedef struct { float r2, a2, r3, a3, shape, fm; } Spectrum;
+
+static const float KICK_CENTER[5] = {0.08f, 0.28f, 0.5f, 0.78f, 0.96f};
+static const float SNARE_CENTER[5] = {0.08f, 0.28f, 0.5f, 0.75f, 0.92f};
+static const float PERC_CENTER[6] = {0.08f, 0.24f, 0.42f, 0.58f, 0.74f, 0.92f};
+static const float KICK_SPEC[30] = {
+    2, 0, 3, 0, 0, 0,
+    1.59f, 0.48f, 2.2f, 0.14f, 0.1f, 0,
+    3, 0.34f, 5, 0.16f, 0.22f, 0,
+    3.4f, 0.95f, 5.2f, 0.62f, 0.08f, 0,
+    2, 0.28f, 3.2f, 0.2f, 0.96f, 0,
+};
+static const float SNARE_SPEC[30] = {
+    2, 0.02f, 3, 0, 0, 0,
+    1.5f, 0.72f, 2.1f, 0.16f, 0.05f, 0,
+    2.29f, 0.58f, 3.71f, 0.36f, 0.1f, 0,
+    2.76f, 0.64f, 5.4f, 0.42f, 0.12f, 0.45f,
+    1.41f, 0.3f, 2, 0.18f, 0.2f, 1.7f,
+};
+static const float PERC_SPEC[36] = {
+    1.7f, 0.36f, 2.4f, 0.1f, 0.05f, 0,
+    2.3f, 0.52f, 3.6f, 0.3f, 0.08f, 0,
+    1.48f, 0.88f, 2.2f, 0.42f, 0.04f, 0,
+    2, 0.48f, 2.98f, 0.58f, 0.06f, 0.35f,
+    2.71f, 0.72f, 4.2f, 0.52f, 0.1f, 0.55f,
+    1, 0.12f, 1, 0, 0.12f, 2.5f,
+};
+
+static float wrap_phase(float phase) {
+    if (phase < TWO_PI) return phase;
+    return phase - TWO_PI * floorf(phase / TWO_PI);
+}
+
+static Spectrum spec_row(const float *table, int index) {
+    int o = index * 6;
+    Spectrum spec;
+    spec.r2 = table[o];
+    spec.a2 = table[o + 1];
+    spec.r3 = table[o + 2];
+    spec.a3 = table[o + 3];
+    spec.shape = table[o + 4];
+    spec.fm = table[o + 5];
+    return spec;
+}
+
+static Spectrum shelf_spec(const float *table, const float *centers, int n, float t) {
+    float u = clampf01(t);
+    int i;
+    if (u <= centers[0]) return spec_row(table, 0);
+    for (i = 0; i < n - 1; i++) {
+        float left, right, f, s;
+        Spectrum a, b, m;
+        if (u > centers[i + 1]) continue;
+        left = centers[i] + 0.06f;
+        right = centers[i + 1] - 0.06f;
+        if (right <= left || u <= left) return spec_row(table, i);
+        if (u >= right) return spec_row(table, i + 1);
+        f = (u - left) / (right - left);
+        s = f * f * (3.0f - 2.0f * f);
+        a = spec_row(table, i);
+        b = spec_row(table, i + 1);
+        m.r2 = a.r2 * (1.0f - s) + b.r2 * s;
+        m.a2 = a.a2 * (1.0f - s) + b.a2 * s;
+        m.r3 = a.r3 * (1.0f - s) + b.r3 * s;
+        m.a3 = a.a3 * (1.0f - s) + b.a3 * s;
+        m.shape = a.shape * (1.0f - s) + b.shape * s;
+        m.fm = a.fm * (1.0f - s) + b.fm * s;
+        return m;
+    }
+    return spec_row(table, n - 1);
+}
+
+static void tonal_body(Drum *drum, float freq, float *mid, float *side) {
+    Spectrum spec = drum->lane == 0
+        ? shelf_spec(KICK_SPEC, KICK_CENTER, 5, drum->body)
+        : drum->lane == 1
+            ? shelf_spec(SNARE_SPEC, SNARE_CENTER, 5, drum->body)
+            : shelf_spec(PERC_SPEC, PERC_CENTER, 6, drum->body);
+    float a2 = spec.a2;
+    float a3 = spec.a3;
+    float dull = 1.0f;
+    float inc, index, fm_mix, ratio, p1, p2, sine, bent, x, gain;
+    if (drum->lane == 1) {
+        float bright = 0.4f + drum->tone * 1.35f;
+        a2 *= bright;
+        a3 *= bright * (0.45f + drum->tone);
+    }
+    if (drum->damp > 0.001f) {
+        float e = drum->env > 1e-4f ? drum->env : 1e-4f;
+        dull = powf(e, 1.0f + drum->damp * 6.0f);
+        a2 *= dull;
+        a3 *= dull * dull;
+    }
+    inc = (TWO_PI * freq) / SR;
+    index = (drum->fm * 5.0f + spec.fm) * dull;
+    fm_mix = index <= 0 ? 0 : index / 0.8f;
+    if (fm_mix > 1.0f) fm_mix = 1.0f;
+    ratio = spec.r3 * (1.0f - fm_mix) + drum->ratio * fm_mix;
+    drum->phase0 = wrap_phase(drum->phase0 + inc);
+    drum->phase1 = wrap_phase(drum->phase1 + inc * spec.r2);
+    drum->phase2 = wrap_phase(drum->phase2 + inc * ratio);
+    p1 = sinf(drum->phase1);
+    p2 = sinf(drum->phase2);
+    sine = sinf(drum->phase0);
+    bent = sinf(drum->phase0 + p2 * index);
+    x = sine * (1.0f - fm_mix) + bent * fm_mix + p1 * a2 * (1.0f - fm_mix * 0.45f) + p2 * a3 * (1.0f - fm_mix);
+    if (spec.shape > 0.001f) {
+        float shaped = tanhf(x * (1.0f + spec.shape * 7.0f));
+        x += (shaped - x) * spec.shape;
+    }
+    gain = drum->lane == 0 ? 0.85f : drum->lane == 1 ? 0.55f : 0.6f;
+    *mid = x * gain;
+    *side = 0;
+}
+
+static void hat_body(Drum *drum, float freq, float *mid, float *side) {
+    float m = clampf01(drum->body);
+    float ring = drum->ring;
+    float lo[4] = {1.0f, 2.02f, 2.97f, 4.05f};
+    float hi[4] = {1.0f, 1.47f, 2.31f, 3.73f};
+    float gain = m <= 0.06f ? 0 : (m - 0.06f) / 0.94f;
+    float inc = (TWO_PI * freq) / SR;
+    float s0, s1, s2, s3;
+    drum->phase0 = wrap_phase(drum->phase0 + inc * (lo[0] * (1.0f - m) + hi[0] * m));
+    drum->phase1 = wrap_phase(drum->phase1 + inc * (lo[1] * (1.0f - m) + hi[1] * m));
+    drum->phase2 = wrap_phase(drum->phase2 + inc * (lo[2] * (1.0f - m) + hi[2] * m));
+    drum->phase3 = wrap_phase(drum->phase3 + inc * (lo[3] * (1.0f - m) + hi[3] * m) * (1.0f + drum->width * 0.012f));
+    s0 = sinf(drum->phase0) * 0.9f * gain;
+    s1 = sinf(drum->phase1) * 0.72f * gain * (1.0f - ring * 0.35f);
+    s2 = sinf(drum->phase2) * 0.5f * gain * (1.0f - ring * 0.6f);
+    s3 = sinf(drum->phase3) * 0.36f * gain * (1.0f - ring * 0.8f);
+    *mid = (s0 + s1 + s2 + s3) * 0.42f;
+    *side = drum->width * (s1 - s3) * 0.9f;
+}
+
+static float noise_sample(Engine *engine, Drum *drum) {
+    float white = rng(engine);
+    float tilt = clampf01(drum->tone);
+    float high;
+    drum->nlp += (white - drum->nlp) * (0.04f + tilt * 0.5f);
+    drum->nhp += (white - drum->nhp) * (0.03f + tilt * 0.45f);
+    high = white - drum->nhp;
+    return (drum->nlp * (1.0f - tilt) + high * tilt) * drum->noise;
+}
+
+static float transient_sample(Engine *engine, Drum *drum) {
+    float u = drum->click;
+    float env = drum->click_env;
+    float burst, tick_w, pulse_w, chirp_w, chirp, tick;
+    drum->click_env *= drum->click_k;
+    burst = rng(engine);
+    if (u < 0.001f || env < 1e-5f) return 0;
+    tick_w = 1.0f - fade01(u, 0.12f, 0.5f);
+    pulse_w = fade01(u, 0.15f, 0.45f) * (1.0f - fade01(u, 0.55f, 0.9f));
+    chirp_w = fade01(u, 0.4f, 0.8f);
+    drum->click_phase = wrap_phase(drum->click_phase + (TWO_PI * (900.0f + 5200.0f * env)) / SR);
+    chirp = sinf(drum->click_phase);
+    tick = sinf(drum->click_phase * 0.45f);
+    return (tick * tick_w + burst * env * env * pulse_w + chirp * chirp_w) * u * 1.15f * env;
+}
+
+static float shape_drive(float sample, float drive) {
     float gain = 1.0f + drive * 8.0f;
-    float driven = voiced * gain;
-    driven = driven / (1.0f + fabsf(driven));
-    float filtered = filter_sample(&drum->flt, &drum->band, driven, drum->cutoff, drum->resonance);
+    float driven = sample * gain;
+    return driven / (1.0f + fabsf(driven));
+}
+
+static void drum_sample(Engine *engine, Drum *drum, float *left, float *right) {
+    float freq = drum->freq * powf(2.0f, drum->bend * drum->pitch_env);
+    float mid = 0, side = 0, noisy, click, filtered;
+    if (drum->lane == 2) hat_body(drum, freq, &mid, &side);
+    else tonal_body(drum, freq, &mid, &side);
+    noisy = noise_sample(engine, drum) * drum->noise_env;
+    click = transient_sample(engine, drum);
+    mid = mid * drum->env + noisy + click;
+    side *= drum->env;
+    if (drum->drive > 1e-4f) {
+        float amount = drum->drive * drum->drive;
+        mid = shape_drive(mid, amount);
+        side = shape_drive(side, amount);
+    }
+    filtered = filter_sample(&drum->flt, &drum->band, mid, drum->cutoff, drum->resonance);
     drum->env *= drum->env_k;
     drum->noise_env *= drum->noise_k;
-    drum->click_env *= drum->click_k;
+    drum->pitch_env *= drum->pitch_k;
     drum->age += 1;
-    if (drum->env < 0.0008f && drum->noise_env < 0.0008f && (float)drum->age > drum->click_tau * 4.0f) drum->on = 0;
-    return filtered;
+    if (drum->env < 0.0008f && drum->noise_env < 0.0008f && drum->click_env < 0.0008f && drum->age > 64) drum->on = 0;
+    *left = filtered + side;
+    *right = filtered - side;
 }
 
 static void note_sample(Engine *engine, Note *note, float *left, float *right) {
@@ -1277,12 +1591,8 @@ static void render(Engine *engine, int16_t *out, int frames) {
         float left = 0, right = 0, revL = 0, revR = 0, dlyL = 0, dlyR = 0;
         for (int d = 0; d < DRUMS; d++) {
             if (!engine->drums[d].on) continue;
-            float sample = drum_sample(engine, &engine->drums[d]);
-            float pan = engine->drums[d].pan;
-            if (pan < 0) pan = 0;
-            if (pan > 1) pan = 1;
-            float l = sample * (1.0f - pan);
-            float r = sample * pan;
+            float l = 0, r = 0;
+            drum_sample(engine, &engine->drums[d], &l, &r);
             left += l;
             right += r;
             revL += l * engine->drums[d].reverb;
@@ -1415,14 +1725,21 @@ static int fail(const char *message) {
 int main(void) {
     Engine *engine = create_instance(NULL, NULL);
     int16_t out[256];
-    long left = 0, right = 0;
-    set_param(engine, "block", "120|0:2:42:100:48:v07_pan=0.0000,v07_dcy=0.4000,v07_mix=0.8000");
+    long hat_narrow = 0, hat_wide = 0;
+    set_param(engine, "block", "120|0:2:42:100:48:v07_width=0.0000,v07_decay=0.5000,v07_metal=0.9000,v07_noise=0.2000");
     render(engine, out, 128);
     for (int i = 0; i < 128; i++) {
-        left += out[i * 2] < 0 ? -out[i * 2] : out[i * 2];
-        right += out[i * 2 + 1] < 0 ? -out[i * 2 + 1] : out[i * 2 + 1];
+        int d = out[i * 2] - out[i * 2 + 1];
+        hat_narrow += d < 0 ? -d : d;
     }
-    if (left < right * 2) return fail("pan left did not reach the left channel");
+    engine = create_instance(NULL, NULL);
+    set_param(engine, "block", "120|0:2:42:100:48:v07_width=1.0000,v07_decay=0.5000,v07_metal=0.9000,v07_noise=0.2000");
+    render(engine, out, 128);
+    for (int i = 0; i < 128; i++) {
+        int d = out[i * 2] - out[i * 2 + 1];
+        hat_wide += d < 0 ? -d : d;
+    }
+    if (hat_wide < hat_narrow * 2 || hat_wide < 30) return fail("hat width did not open the stereo image");
 
     engine = create_instance(NULL, NULL);
     set_param(engine, "block", "120|0:4:40:100:192:wave=0.4200,wide=0.0000,cutoff=0.8000,attack=0.0000,release=0.8000");
@@ -1446,7 +1763,7 @@ int main(void) {
     if (diff_wide <= diff_narrow) return fail("wide did not open the stereo image");
 
     engine = create_instance(NULL, NULL);
-    set_param(engine, "block", "P|120|1|0:300:0:36:120:48:v01_dcy=0.0500");
+    set_param(engine, "block", "P|120|1|0:300:0:36:120:48:v01_decay=0.0500");
     render(engine, out, 128);
     int age_first = engine->drums[0].age;
     render(engine, out, 128);
@@ -1455,7 +1772,7 @@ int main(void) {
     if (!(age_mid > age_first && engine->drums[0].age < age_mid)) return fail("phrase did not loop on the audio clock");
 
     engine = create_instance(NULL, NULL);
-    set_param(engine, "block", "120|0:0:36:120:48:v01_freq=0.4000,v01_dcy=0.7000,v01_dist=0.5000");
+    set_param(engine, "block", "120|0:0:36:120:48:v01_freq=0.4000,v01_decay=0.7000,v01_dist=0.5000");
     render(engine, out, 128);
     int peak = 0;
     for (int i = 0; i < 256; i++) {
@@ -1470,13 +1787,13 @@ int main(void) {
     if (engine->notes[0].cutoff < 0.9f) return fail("cutoff did not follow the generator");
 
     engine = create_instance(NULL, NULL);
-    set_param(engine, "block", "P|120|1|0:44104:0:36:120:48:v01_freq=0.2000,v01_dcy=0.7000#0:v01_freq:0.2000:0:8:1.0000:44104");
+    set_param(engine, "block", "P|120|1|0:44104:0:36:120:48:v01_freq=0.2000,v01_decay=0.7000#0:v01_freq:0.2000:0:8:1.0000:44104");
     render(engine, out, 128);
     float held_freq = engine->drums[0].freq;
     for (int n = 0; n < 86; n++) render(engine, out, 128);
     if (engine->drums[0].freq != held_freq) return fail("pitch followed the generator");
 
-    printf("ok peak=%d panL=%ld width=%ld\n", peak, left, diff_wide);
+    printf("ok peak=%d hat=%ld width=%ld\n", peak, hat_wide, diff_wide);
     return 0;
 }
 #endif

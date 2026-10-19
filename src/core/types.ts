@@ -319,10 +319,10 @@ export interface Phrase {
 export const SET_CAPACITY = 32;
 
 export const SOUND: Record<LaneId, readonly string[]> = {
-  kick: ["pitch", "bend", "snap", "click", "decay", "noise", "drive", "tone"],
-  snare: ["pitch", "body", "noise", "snap", "decay", "tail", "click", "drive"],
-  hat: ["pitch", "click", "snap", "decay", "tone", "drive", "pan", "spread"],
-  perc: ["pitch", "tone", "bend", "noise", "decay", "tail", "pan", "spread"],
+  kick: ["pitch", "decay", "bend", "bendTime", "body", "click", "noise", "drive"],
+  snare: ["pitch", "body", "bodyDecay", "noise", "noiseDecay", "snap", "tone", "drive"],
+  hat: ["pitch", "metal", "noise", "color", "decay", "attack", "ring", "width"],
+  perc: ["pitch", "material", "decay", "bend", "fm", "fmRatio", "attack", "damp"],
   bass: ["wave", "bend", "sync", "fold", "drive", "wide", "attack", "release"],
   lead: ["wave", "bend", "sync", "fold", "drive", "wide", "attack", "release"],
   chords: ["wave", "bend", "sync", "fold", "drive", "wide", "attack", "release"],

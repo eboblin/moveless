@@ -9,7 +9,7 @@ export interface EngineParam {
 /**
  * Drum chain keys (GM pad ids kept for map stability).
  * Kick pad 1, snare pad 3, closed hat pad 7, perc pad 12 (low-mid tom).
- * Our voice reads every suffix below; pan/spread are stereo/spread only.
+ * Our voice reads every suffix below. Hat width is the only drum stereo.
  */
 const VOICE: Record<DrumId, string> = {
   kick: "v01",
@@ -21,43 +21,43 @@ const VOICE: Record<DrumId, string> = {
 const DRUM_SUFFIX: Record<DrumId, Record<string, string>> = {
   kick: {
     pitch: "freq",
-    bend: "mamt",
-    snap: "atk",
-    click: "nffrq",
-    decay: "dcy",
-    noise: "mix",
+    decay: "decay",
+    bend: "pbend",
+    bendTime: "btime",
+    body: "body",
+    click: "click",
+    noise: "noise",
     drive: "dist",
-    tone: "nfq",
   },
   snare: {
     pitch: "freq",
-    body: "lvl",
-    noise: "mix",
-    snap: "atk",
-    decay: "dcy",
-    tail: "nedcy",
-    click: "nffrq",
+    body: "body",
+    bodyDecay: "bdcy",
+    noise: "noise",
+    noiseDecay: "ndcy",
+    snap: "snap",
+    tone: "tone",
     drive: "dist",
   },
   hat: {
     pitch: "freq",
-    click: "nffrq",
-    snap: "atk",
-    decay: "dcy",
-    tone: "nfq",
-    drive: "dist",
-    pan: "pan",
-    spread: "mrate",
+    metal: "metal",
+    noise: "noise",
+    color: "color",
+    decay: "decay",
+    attack: "atk",
+    ring: "ring",
+    width: "width",
   },
   perc: {
     pitch: "freq",
-    tone: "nfq",
-    bend: "mamt",
-    noise: "mix",
-    decay: "dcy",
-    tail: "nedcy",
-    pan: "pan",
-    spread: "mrate",
+    material: "mat",
+    decay: "decay",
+    bend: "pbend",
+    fm: "fm",
+    fmRatio: "ratio",
+    attack: "atk",
+    damp: "damp",
   },
 };
 

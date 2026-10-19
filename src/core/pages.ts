@@ -73,6 +73,9 @@ export const PAGE_GROUP_COLOR: Record<PageGroup, number> = {
 const MACRO_ALSO: Record<string, readonly string[]> = {
   count: ["count", "repeat"],
   release: ["release", "decay"],
+  bodyDecay: ["bodyDecay", "decay"],
+  noiseDecay: ["noiseDecay", "decay"],
+  color: ["color", "tone"],
 };
 
 /** Sum of the macro keys that feed one phrase field. Does not walk the page list. */
@@ -104,7 +107,7 @@ const TITLE_WORD: Record<string, string> = {
   CHD: "CHORDS",
 };
 
-const HEAVY_VALUE = new Set(["pitch", "cutoff", "tone", "decay", "snap"]);
+const HEAVY_VALUE = new Set(["pitch", "cutoff", "tone", "decay", "snap", "body", "metal", "material"]);
 
 const EMPTY: (Binding | null)[] = [null, null, null, null, null, null, null, null];
 
@@ -253,12 +256,37 @@ function lengthPage(): Page {
   ]);
 }
 
+const SOUND_LABEL: Record<string, string> = {
+  pitch: "PITCH",
+  decay: "DECAY",
+  bend: "BEND",
+  bendTime: "B TIME",
+  body: "BODY",
+  click: "CLICK",
+  noise: "NOISE",
+  drive: "DRIVE",
+  bodyDecay: "B DECAY",
+  noiseDecay: "N DECAY",
+  snap: "SNAP",
+  tone: "TONE",
+  metal: "METAL",
+  color: "COLOR",
+  attack: "ATTACK",
+  ring: "RESO",
+  width: "WIDTH",
+  material: "MATERIAL",
+  fm: "FM",
+  fmRatio: "RATIO",
+  damp: "DAMP",
+};
+
 function soundPages(ids: readonly string[]): Page[] {
   const pages: Page[] = [];
+  const label = (id: string) => SOUND_LABEL[id] ?? id.toUpperCase();
   for (let i = 0; i < ids.length; i += 2) {
     const a = ids[i];
     const b = ids[i + 1];
-    pages.push(pair(`sound.${a}`, a.toUpperCase(), `sound.${b}`, b.toUpperCase(), "sound"));
+    pages.push(pair(`sound.${a}`, label(a), `sound.${b}`, label(b), "sound"));
   }
   return pages;
 }

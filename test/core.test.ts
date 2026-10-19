@@ -324,10 +324,10 @@ describe("morph, journal, macros", () => {
   it("retargets from the interpolated state and leaves locked lanes alone", () => {
     let project = defaultProject();
     project = punch(project, "snare.gen1.velocity.value", 0);
-    project = punch(project, "snare.sound.decay.value", 0);
+    project = punch(project, "snare.sound.bodyDecay.value", 0);
     project = record(project);
     project = punch(project, "snare.gen1.velocity.value", 1);
-    project = punch(project, "snare.sound.decay.value", 1);
+    project = punch(project, "snare.sound.bodyDecay.value", 1);
     project = punch(project, "kick.gen1.velocity.value", 0);
     project = record(project);
     project = punch(project, "kick.gen1.velocity.value", 1);
@@ -339,7 +339,7 @@ describe("morph, journal, macros", () => {
     project = launchScene(project, "002", 0);
     project = applyMorph(project, 2 * 4 * 192);
     assert.equal(project.working.snare.gen1.velocity.value, 0);
-    assert.ok(Math.abs(project.working.snare.sound.decay.value - 0.25) < 1e-9);
+    assert.ok(Math.abs(project.working.snare.sound.bodyDecay.value - 0.25) < 1e-9);
     project.lock.kick = true;
     project = launchScene(project, "003", 2 * 192);
     assert.equal(project.morph?.start.snare.gen1.velocity.value, project.working.snare.gen1.velocity.value);
@@ -1071,7 +1071,7 @@ describe("capture, wander, sets", () => {
     assert.deepEqual(count.working.kick.ratchet.rate, hard.working.kick.ratchet.rate);
     const pitch = captureGenerator(project, "kick", "sound.pitch");
     assert.notDeepEqual(pitch.working.kick.sound.pitch, project.working.kick.sound.pitch);
-    assert.deepEqual(pitch.working.kick.sound.tone, project.working.kick.sound.tone);
+    assert.deepEqual(pitch.working.kick.sound.decay, project.working.kick.sound.decay);
     pitch.lock.kick = true;
     const locked = captureGenerator(pitch, "kick", "gen1");
     assert.equal(locked.captureNonce, pitch.captureNonce);

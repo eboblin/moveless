@@ -54,8 +54,9 @@ export function laneFamily(lane: LaneId): "red" | "yellow" {
 }
 
 export function stepLed(project: Project, context: ContextId, lane: LaneId): Led {
-  if (!laneHeard(project, lane)) return led("off", false);
   const current = context === lane;
+  // Mute still darkens a lane, but the selected one keeps blinking so it stays findable.
+  if (!laneHeard(project, lane) && !(current && project.mute[lane])) return led("off", false);
   if (project.lock[lane]) return led("lock", current);
   return led(laneFamily(lane), current);
 }
