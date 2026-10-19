@@ -1123,8 +1123,15 @@ function tonalBody(drum: DrumVoice, freq: number): { mid: number; side: number }
     a3 *= dull * dull;
   }
   const inc = (TWO_PI * freq) / SAMPLE_RATE;
-  const index = (drum.fm * 5 + spec.fm) * dull;
-  const fmMix = index <= 0 ? 0 : Math.min(1, index / 0.8);
+  let index = (drum.fm * 5 + spec.fm) * dull;
+  let fmMix = index <= 0 ? 0 : Math.min(1, index / 0.8);
+  if (drum.lane === 3) {
+    const env = Math.max(drum.env, 1e-4);
+    const held = drum.damp > 0.001 ? env ** (drum.damp * 1.5) : 1;
+    const user = drum.fm ** 0.55 * 5.5;
+    index = user * (0.15 + 0.85 * held) + spec.fm * dull;
+    fmMix = index <= 0 ? 0 : Math.min(1, index / 0.65);
+  }
   const ratio = spec.r3 * (1 - fmMix) + drum.ratio * fmMix;
   drum.phase0 = wrapPhase(drum.phase0 + inc);
   drum.phase1 = wrapPhase(drum.phase1 + inc * spec.r2);
@@ -1134,6 +1141,7 @@ function tonalBody(drum: DrumVoice, freq: number): { mid: number; side: number }
   const sine = Math.sin(drum.phase0);
   const bent = Math.sin(drum.phase0 + p2 * index);
   let x = sine * (1 - fmMix) + bent * fmMix + p1 * a2 * (1 - fmMix * 0.45) + p2 * a3 * (1 - fmMix);
+  if (drum.lane === 3) x += p2 * fmMix * 0.2;
   if (spec.shape > 0.001) {
     const shaped = Math.tanh(x * (1 + spec.shape * 7));
     x += (shaped - x) * spec.shape;

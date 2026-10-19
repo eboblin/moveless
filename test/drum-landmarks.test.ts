@@ -428,11 +428,25 @@ describe("drum landmarks", () => {
       const audio = mono(hit("perc", {
         pitch: 0.55, material: 0.74, decay: 0.55, bend: 0, fm: 0, fmRatio: 0.06, attack: 0, damp,
       }, 8000));
-      return centroid(audio, 80, 400) - centroid(audio, Math.floor(SR * 0.08), 500);
+      const partial = drumPitchHz(3, 0.55) * 2.7;
+      const late = Math.floor(SR * 0.08);
+      return band(audio, partial, 40, 400) / band(audio, partial, late, 500);
     };
-    assert.ok(drop(0.9) > drop(0.05));
+    assert.ok(drop(0.9) > drop(0.05) * 1.4);
     const blip = centroid(mono(hit("perc", PERC["fm blip"], 2500)), 40, 400);
     const tom = centroid(mono(hit("perc", { ...PERC.tom, pitch: PERC["fm blip"].pitch }, 2500)), 40, 400);
     assert.ok(blip > tom);
+    const fmEdge = (fm: number) => zcHz(mono(hit("perc", {
+      pitch: 0.4, material: 0.08, decay: 0.48, bend: 0, fm, fmRatio: 0.51, attack: 0, damp: 0.5,
+    }, 2500)), 10, 600);
+    assert.ok(fmEdge(0.7) > fmEdge(0.25) && fmEdge(0.25) > fmEdge(0.08) && fmEdge(0.08) > fmEdge(0));
+    const ratioTone = (fmRatio: number) => zcHz(mono(hit("perc", {
+      pitch: 0.4, material: 0.08, decay: 0.48, bend: 0, fm: 0.25, fmRatio, attack: 0, damp: 0.45,
+    }, 2500)), 10, 600);
+    assert.ok(ratioTone(0.96) > ratioTone(0.51) && ratioTone(0.51) > ratioTone(0.06));
+    const quiet = (fmRatio: number) => zcHz(mono(hit("perc", {
+      pitch: 0.4, material: 0.08, decay: 0.48, bend: 0, fm: 0, fmRatio, attack: 0, damp: 0.5,
+    }, 2500)), 10, 600);
+    assert.ok(Math.abs(quiet(0.96) - quiet(0.06)) < 8);
   });
 });

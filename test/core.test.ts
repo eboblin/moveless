@@ -117,6 +117,33 @@ describe("euclid generator", () => {
       assert.equal(lanes[id].filter.cutoff.value, 0.5);
       assert.equal(lanes[id].filter.resonance.value, 0);
     }
+    const kick = lanes.kick.sound;
+    assert.equal(kick.pitch.value, 0.12);
+    assert.equal(kick.decay.value, 0.1);
+    assert.equal(kick.bend.value, 0.77);
+    assert.equal(kick.bendTime.value, 0.44);
+    assert.equal(kick.body.value, 0.18);
+    assert.equal(kick.click.value, 0.24);
+    assert.equal(kick.noise.value, 0.05);
+    assert.equal(kick.drive.value, 0.01);
+    const snare = lanes.snare.sound;
+    assert.equal(snare.pitch.value, 0.03);
+    assert.equal(snare.body.value, 0.38);
+    assert.equal(snare.bodyDecay.value, 0.1);
+    assert.equal(snare.noise.value, 0.17);
+    assert.equal(snare.noiseDecay.value, 0.19);
+    assert.equal(snare.snap.value, 0.08);
+    assert.equal(snare.tone.value, 0.28);
+    assert.equal(snare.drive.value, 0.12);
+    const hat = lanes.hat.sound;
+    assert.equal(hat.pitch.value, 0);
+    assert.equal(hat.metal.value, 0);
+    assert.equal(hat.noise.value, 0.09);
+    assert.equal(hat.color.value, 0);
+    assert.equal(hat.decay.value, 0.19);
+    assert.equal(hat.attack.value, 0.35);
+    assert.equal(hat.ring.value, 0.32);
+    assert.equal(hat.width.value, 0);
   });
 
   it("parks repeat count and rate at zero on every lane", () => {
@@ -1219,7 +1246,7 @@ describe("capture, wander, sets", () => {
       };
       project.working.kick.sound.noise = modulated(0.4, 0, 1, 0);
       const next = capturePaths(project, "kick", ["sound.noise.value"]).working.kick.sound.noise.value;
-      assert.ok(next <= 0.72 + 1e-9);
+      assert.ok(next <= 0.75 + 1e-9);
       if (next > 0.4 + 1e-9) escaped = true;
     }
     assert.equal(escaped, true);

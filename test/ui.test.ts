@@ -1258,7 +1258,7 @@ describe("surface", () => {
     const soundBefore = clone(state.project.working.kick.sound);
     for (let n = 0; n < 4; n++) state = reduce(state, { kind: "cc", data1: 14, data2: 1 });
     state = loop(state);
-    assert.equal(state.project.working.kick.sound.pitch.value, 0.35);
+    assert.equal(state.project.working.kick.sound.pitch.value, 0.12);
     assert.equal(state.project.working.kick.sound.pitch.pattern, 0);
     assert.equal(state.project.working.kick.sound.pitch.amount, 0);
     assert.equal(state.project.working.kick.sound.pitch.cycle, 1);
@@ -1315,7 +1315,7 @@ describe("surface", () => {
     state = loop(state);
     assert.equal(state.project.working.kick.gen1.length, 16);
     assert.equal(state.project.working.kick.gen1.velocity.value, 1);
-    assert.equal(state.project.working.kick.sound.pitch.value, 0.35);
+    assert.equal(state.project.working.kick.sound.pitch.value, 0.12);
     assert.equal(state.project.working.kick.sound.pitch.cycle, 1);
 
     let mods = session();

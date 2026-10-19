@@ -969,6 +969,14 @@ static void tonal_body(Drum *drum, float freq, float *mid, float *side) {
     index = (drum->fm * 5.0f + spec.fm) * dull;
     fm_mix = index <= 0 ? 0 : index / 0.8f;
     if (fm_mix > 1.0f) fm_mix = 1.0f;
+    if (drum->lane == 3) {
+        float env = drum->env > 1e-4f ? drum->env : 1e-4f;
+        float held = drum->damp > 0.001f ? powf(env, drum->damp * 1.5f) : 1.0f;
+        float user = powf(drum->fm, 0.55f) * 5.5f;
+        index = user * (0.15f + 0.85f * held) + spec.fm * dull;
+        fm_mix = index <= 0 ? 0 : index / 0.65f;
+        if (fm_mix > 1.0f) fm_mix = 1.0f;
+    }
     ratio = spec.r3 * (1.0f - fm_mix) + drum->ratio * fm_mix;
     drum->phase0 = wrap_phase(drum->phase0 + inc);
     drum->phase1 = wrap_phase(drum->phase1 + inc * spec.r2);
@@ -978,6 +986,7 @@ static void tonal_body(Drum *drum, float freq, float *mid, float *side) {
     sine = sinf(drum->phase0);
     bent = sinf(drum->phase0 + p2 * index);
     x = sine * (1.0f - fm_mix) + bent * fm_mix + p1 * a2 * (1.0f - fm_mix * 0.45f) + p2 * a3 * (1.0f - fm_mix);
+    if (drum->lane == 3) x += p2 * fm_mix * 0.2f;
     if (spec.shape > 0.001f) {
         float shaped = tanhf(x * (1.0f + spec.shape * 7.0f));
         x += (shaped - x) * spec.shape;
