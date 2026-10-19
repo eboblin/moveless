@@ -195,11 +195,14 @@ export function defaultProgression(): Progression {
 
 function chords(): ChordLane {
   return {
+    // One step per bar. Size 1 lets that step fill the bar, so the factory pulse stays one note.
+    gen1: euclid(0, 0.85),
     tone: home(0),
     octave: home(unitForOctave(4)),
     // First step above a block: one root note per bar, about a sixteenth long.
     rate: home(0.01),
     gate: home(0.06),
+    size: home(1),
     velocity: home(0.85),
     sound: sound("chords"),
     filter: laneFilter(),

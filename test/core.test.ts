@@ -110,6 +110,11 @@ describe("euclid generator", () => {
       }
     }
     assert.equal(rotates.size, 10);
+    assert.equal(lanes.chords.gen1.length, 16);
+    assert.equal(lanes.chords.gen1.hits, 1);
+    assert.equal(lanes.chords.gen1.rotate, 0);
+    assert.equal(lanes.chords.gen1.probability, 1);
+    assert.equal(lanes.chords.size.value, 1);
     assert.equal(lanes.chords.rate.value, 0.01);
     assert.equal(lanes.chords.gate.value, 0.06);
     assert.equal(lanes.chords.tone.value, 0);
@@ -919,6 +924,134 @@ describe("harmony", () => {
       assert.ok(event.lengthTicks <= step);
       assert.ok(event.tick + event.lengthTicks <= chordTicks);
     }
+  });
+
+  it("keeps the factory pulse to one short note per bar", () => {
+    const chords = generatePhrase(defaultProject()).lanes.chords;
+    assert.deepEqual(
+      chords.map((event) => event.tick),
+      [0, 16, 32, 48].map((step) => step * SIXTEENTH_TICKS),
+    );
+    assert.ok(chords.every((event) => event.lengthTicks < SIXTEENTH_TICKS));
+  });
+
+  it("slices a block on the euclid and leaves the rest of the hole quiet", () => {
+    const project = bar(defaultProject(), 1);
+    project.progression.count = 1;
+    project.progression.length = 4;
+    project.progression.variation = 0;
+    project.working.chords.rate = modulated(0);
+    project.working.chords.gen1 = { ...project.working.chords.gen1, length: 16, hits: 4, rotate: 0 };
+    project.working.chords.size = modulated(1);
+    const held = generatePhrase(project).lanes.chords;
+    const quarters = [0, 4, 8, 12].map((step) => step * SIXTEENTH_TICKS);
+    for (const tick of quarters) {
+      const chord = held.filter((event) => event.tick === tick);
+      assert.deepEqual(chord.map((event) => event.note), [48, 52, 55]);
+      assert.ok(chord.every((event) => event.lengthTicks === 4 * SIXTEENTH_TICKS));
+    }
+    assert.equal(held.length, 12);
+
+    project.working.chords.size = modulated(0.5);
+    const cut = generatePhrase(project).lanes.chords;
+    for (const tick of quarters) {
+      const chord = cut.filter((event) => event.tick === tick);
+      assert.equal(chord.length, 3);
+      assert.ok(chord.every((event) => event.lengthTicks === 3 * SIXTEENTH_TICKS));
+    }
+    assert.equal(cut.length, 12);
+
+    project.working.chords.gen1 = { ...project.working.chords.gen1, rotate: 2, probability: 1 };
+    project.working.chords.size = modulated(1);
+    const shifted = generatePhrase(project).lanes.chords;
+    for (const step of [2, 6, 10]) {
+      const chord = shifted.filter((event) => event.tick === step * SIXTEENTH_TICKS);
+      assert.equal(chord.length, 3);
+      assert.ok(chord.every((event) => event.lengthTicks === 4 * SIXTEENTH_TICKS));
+    }
+    const wrapped = shifted.filter((event) => event.tick === 14 * SIXTEENTH_TICKS);
+    const tail = shifted.filter((event) => event.tick === 0);
+    assert.equal(wrapped.length, 3);
+    assert.ok(wrapped.every((event) => event.lengthTicks === 2 * SIXTEENTH_TICKS));
+    assert.equal(tail.length, 3);
+    assert.ok(tail.every((event) => event.lengthTicks === 2 * SIXTEENTH_TICKS));
+  });
+
+  it("does not hand a dropped hit's hole to the previous slice", () => {
+    const project = bar(defaultProject(), 1);
+    project.progression.count = 1;
+    project.progression.length = 4;
+    project.progression.variation = 0;
+    project.working.chords.rate = modulated(0);
+    project.working.chords.size = modulated(1);
+    project.working.chords.gen1 = { ...project.working.chords.gen1, length: 16, hits: 4, rotate: 0, probability: 0.5 };
+    let found = false;
+    for (let seed = 0; seed < 40 && !found; seed++) {
+      project.global.seed = seed;
+      const notes = generatePhrase(project).lanes.chords;
+      const ticks = [...new Set(notes.map((event) => event.tick))];
+      if (ticks.length === 0 || ticks.length === 4) continue;
+      found = true;
+      for (const tick of ticks) {
+        const chord = notes.filter((event) => event.tick === tick);
+        assert.equal(chord.length, 3);
+        assert.ok(chord.every((event) => event.lengthTicks === 4 * SIXTEENTH_TICKS));
+      }
+    }
+    assert.equal(found, true);
+    project.working.chords.gen1 = { ...project.working.chords.gen1, probability: 0 };
+    assert.equal(generatePhrase(project).lanes.chords.length, 0);
+  });
+
+  it("draws the rest of a slice that crosses the loop back at the start", () => {
+    const project = bar(defaultProject(), 1);
+    project.progression.count = 1;
+    project.progression.length = 4;
+    project.progression.variation = 0;
+    project.working.chords.rate = modulated(0);
+    project.working.chords.size = modulated(1);
+    project.working.chords.gen1 = { ...project.working.chords.gen1, length: 16, hits: 1, rotate: 14 };
+    const notes = generatePhrase(project).lanes.chords;
+    const attack = notes.filter((event) => event.tick === 14 * SIXTEENTH_TICKS);
+    const tail = notes.filter((event) => event.tick === 0);
+    assert.equal(attack.length, 3);
+    assert.ok(attack.every((event) => event.lengthTicks === 2 * SIXTEENTH_TICKS));
+    assert.equal(tail.length, 3);
+    assert.ok(tail.every((event) => event.lengthTicks === 14 * SIXTEENTH_TICKS));
+  });
+
+  it("pulses only inside the slice and reattacks when the chord changes", () => {
+    const project = bar(defaultProject(), 1);
+    project.progression.count = 1;
+    project.progression.length = 4;
+    project.progression.variation = 0;
+    project.working.chords.rate = modulated(0.5);
+    project.working.chords.gate = modulated(0.5);
+    project.working.chords.tone = modulated(0);
+    project.working.chords.gen1 = { ...project.working.chords.gen1, length: 16, hits: 2, rotate: 0 };
+    project.working.chords.size = modulated(0.25);
+    const pulse = generatePhrase(project).lanes.chords;
+    const hole = 8 * SIXTEENTH_TICKS;
+    const slice = 3 * SIXTEENTH_TICKS;
+    assert.ok(pulse.length > 2);
+    assert.ok(pulse.every((event) => event.tick % hole < slice));
+    assert.ok(pulse.some((event) => event.tick % hole > 0));
+
+    const walking = bar(defaultProject(), 2);
+    walking.progression.count = 2;
+    walking.progression.length = 4;
+    walking.progression.variation = 0;
+    walking.progression.motion = 1;
+    walking.progression.way = 0;
+    walking.working.chords.rate = modulated(0);
+    walking.working.chords.size = modulated(1);
+    walking.working.chords.gen1 = { ...walking.working.chords.gen1, length: 32, hits: 1, rotate: 0 };
+    const notes = generatePhrase(walking).lanes.chords;
+    const first = notes.filter((event) => event.tick === 0).map((event) => event.note);
+    const second = notes.filter((event) => event.tick === 16 * SIXTEENTH_TICKS).map((event) => event.note);
+    assert.equal(first.length, 3);
+    assert.equal(second.length, 3);
+    assert.notDeepEqual(first, second);
   });
 
   it("keeps a descending walk inside the selected octave", () => {

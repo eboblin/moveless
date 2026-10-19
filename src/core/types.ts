@@ -132,12 +132,16 @@ export interface PitchedLane {
 }
 
 export interface ChordLane {
+  /** Coarse steps. The gap until the next hit is the hole a slice sits in. */
+  gen1: EuclidGen;
   /** 0 is the root of the current chord, 1 is its top tone. */
   tone: Modulated;
   /** Absolute octave 0..9, same scale as bass and lead. */
   octave: Modulated;
   rate: Modulated;
   gate: Modulated;
+  /** Fraction of the hole that sounds. 0 is one sixteenth, 1 is the whole hole. */
+  size: Modulated;
   /** Loudness of each chord note. */
   velocity: Modulated;
   sound: Record<string, Modulated>;

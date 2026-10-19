@@ -15,7 +15,7 @@ import {
 export type MorphKind = "lerp" | "switch";
 export type KnobStore = "lane" | "progression" | "space" | "global" | "mixer" | "macro";
 /** How the screen draws a knob. `number` is the plain 0..99 cell. */
-export type KnobDisplay = "number" | "pitch" | "octave" | "note" | "scale" | "division" | "chordTone";
+export type KnobDisplay = "number" | "pitch" | "octave" | "note" | "scale" | "division" | "chordTone" | "slice";
 
 export interface Binding {
   path: string;
@@ -161,6 +161,7 @@ const FIELD = {
   wide: spec("WIDE", 1),
   step: spec("STEP", 1),
   gate: spec("GATE", 1),
+  size: spec("SIZE", 4, { display: "slice", macro: [] }),
   velocity: spec("VEL", 1),
   length: spec("LENGTH", 1),
   resonance: spec("RESO", 1),
@@ -400,8 +401,19 @@ function pitchedPages(lane: PitchedId): Page[] {
   ];
 }
 
+function chordGenPage(): Page {
+  return page("gen1", "GEN 1", ["GEN 1", "SIZE"], "pattern", [
+    euclid(1, "length"),
+    euclid(1, "hits"),
+    euclid(1, "rotate"),
+    euclid(1, "probability"),
+    ...vpca("size", FIELD.size, "pattern"),
+  ]);
+}
+
 function chordPages(): Page[] {
   return [
+    chordGenPage(),
     page("play", "PLAY", ["RATE", "GATE"], "pattern", [
       ...vpca("rate", FIELD.rate, "pattern"),
       ...vpca("gate", FIELD.gate, "pattern"),

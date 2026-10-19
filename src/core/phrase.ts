@@ -10,7 +10,7 @@ import {
   tickToSample,
 } from "./clock.ts";
 import { blendPhrases } from "./blend.ts";
-import { generateHits, keptVelocity, phraseStepsOf } from "./events.ts";
+import { euclidPattern, generateHits, keptVelocity, phraseStepsOf, rotatePattern } from "./events.ts";
 import { getPath, mixFieldValues } from "./fields.ts";
 import { morphEndpoints } from "./morph.ts";
 import { applyFollowMidi, chordTonePitchClasses, degreeToMidi, generateHarmony, harmonyAt, pitchClassName, scaleOf } from "./harmony.ts";
@@ -26,6 +26,7 @@ import {
   QUALITY_SEMITONES,
   type ChordLane,
   type DrumLane,
+  type EuclidGen,
   type GlobalSettings,
   type HarmonicEvent,
   type LaneFilter,
@@ -314,7 +315,7 @@ function eventsFor(
 ): TimedEvent[] {
   if (isDrum(lane)) return drumEvents(lanes[lane], lane, global, macros, steps);
   if (isPitched(lane)) return pitchedEvents(lanes[lane], lane, global, macros, harmony, steps);
-  return chordAudio(lanes.chords, harmony, global, macros, lanes.chords.sound, lanes.chords.filter, lanes.chords.send);
+  return chordAudio(lanes.chords, harmony, global, macros, lanes.chords.sound, lanes.chords.filter, lanes.chords.send, steps);
 }
 
 function macro(macros: Record<string, number>, id: string): number {
@@ -437,6 +438,59 @@ export interface ChordFigure {
   label: string;
 }
 
+/** Sixteenths that sound inside a hole. 0 is one step, 1 is the whole hole. */
+export function sliceLength(gapSteps: number, sizeUnit: number): number {
+  const gap = Math.max(1, Math.round(gapSteps));
+  const unit = clamp01(sizeUnit);
+  return Math.max(1, Math.min(gap, Math.round(1 + unit * (gap - 1))));
+}
+
+/** Hole of the first step, from the size value alone. Header while that knob is held. */
+export function restingSliceLabel(lane: ChordLane, global: GlobalSettings): string {
+  const steps = sixteenthSteps(global.phrase, global.bar);
+  const { ring, onsets } = ringOnsets(lane.gen1);
+  if (!onsets.length) return "—";
+  let first = -1;
+  for (let base = 0; base < steps && first < 0; base += ring) {
+    for (const onset of onsets) {
+      if (base + onset < steps) {
+        first = base + onset;
+        break;
+      }
+    }
+  }
+  if (first < 0) return "—";
+  const gap = Math.max(1, nextOnset(first, onsets, ring) - first);
+  return `${sliceLength(gap, lane.size.value)}/${gap}`;
+}
+
+const SILENT_GEN: EuclidGen = {
+  length: 0,
+  hits: 0,
+  rotate: 0,
+  probability: 0,
+  velocity: { value: 0, pattern: 0, cycle: 1, amount: 0 },
+};
+
+function ringOnsets(gen: EuclidGen): { ring: number; onsets: number[] } {
+  const ring = Math.max(0, Math.round(gen.length));
+  const count = ring > 0 ? Math.max(0, Math.min(ring, Math.round(gen.hits))) : 0;
+  if (!ring || !count) return { ring: Math.max(1, ring), onsets: [] };
+  const pattern = rotatePattern(euclidPattern(count, ring), gen.rotate);
+  const onsets: number[] = [];
+  for (let step = 0; step < pattern.length; step++) if (pattern[step]) onsets.push(step);
+  return { ring, onsets };
+}
+
+/** Next placed step on the ring, even when that step falls past the phrase. */
+function nextOnset(step: number, onsets: readonly number[], ring: number): number {
+  const phase = ((step % ring) + ring) % ring;
+  for (const onset of onsets) {
+    if (onset > phase) return step - phase + onset;
+  }
+  return step - phase + ring + (onsets[0] ?? 0);
+}
+
 /** 0 is a block chord. Above that, the chord rate table runs from 1/1 to 1/64 as an arp. */
 export function chordFigure(unit: number): ChordFigure {
   if (unit <= 0) return { mode: "block", ticks: 0, label: "BLOCK" };
@@ -453,43 +507,100 @@ function chordAudio(
   sound: ChordLaneSound,
   filter: LaneFilter,
   send: LaneSend,
+  steps: number,
 ): TimedEvent[] {
   const scale = scaleOf(global.scale);
   const rootPc = mod(global.root + global.transpose, 12);
+  const phraseTicks = steps * SIXTEENTH_TICKS;
+  const placed = generateHits(lane.gen1, SILENT_GEN, steps);
+  const { ring, onsets } = ringOnsets(lane.gen1);
   const out: TimedEvent[] = [];
-  harmony.forEach((harm) => {
-    const hits = walkChord(harm, (tick) => {
-      const step = tick / SIXTEENTH_TICKS;
-      const rateU = evalModulated(withMacro(lane.rate, macro(macros, "rate")), step);
-      const gateU = evalModulated(withMacro(lane.gate, macro(macros, "gate")), step);
-      const toneU = evalModulated(withMacro(lane.tone, macro(macros, "tone")), step);
-      const octaveU = evalModulated(withMacro(lane.octave, macro(macros, "octave")), step);
-      const voices = chordVoices(harm, scale, rootPc, octaveU);
-      const note = chordToneMidi(harm, scale, rootPc, toneU, octaveU);
-      return { ...chordFigure(rateU), gate: gateU, note, voices };
-    });
-    hits.forEach(({ note, delay, lengthTicks }) => {
-      const start = harm.startTick + delay;
-      const rendered = soundValues(sound, start / SIXTEENTH_TICKS, macros);
-      const heard = filterValues(filter, start / SIXTEENTH_TICKS, macros);
-      const sent = sendValues(send, start / SIXTEENTH_TICKS, macros);
-      const sample = tickToSample(start, global.tempo);
-      out.push({
-        lane: "chords",
-        tick: start,
-        sample,
-        sampleOffset: sampleOffset(sample),
-        note,
-        velocity: evalModulated(withMacro(lane.velocity, macro(macros, "velocity")), start / SIXTEENTH_TICKS),
-        lengthTicks,
-        step: Math.floor(harm.startTick / SIXTEENTH_TICKS),
-        sound: rendered,
-        filter: heard,
-        send: sent,
-      });
-    });
-  });
+  for (const hit of placed) {
+    const kept = keptVelocity(
+      lane.gen1,
+      SILENT_GEN,
+      hit.generators,
+      global.seed,
+      "chords",
+      hit.step,
+      0,
+      macro(macros, "velocity"),
+      macro(macros, "probability"),
+    );
+    if (kept === null || !onsets.length) continue;
+    const gap = Math.max(1, nextOnset(hit.step, onsets, ring) - hit.step);
+    const sizeU = evalModulated(withMacro(lane.size, macro(macros, "size")), hit.step);
+    const start = swungStepTick(hit.step, global.swing);
+    const end = start + sliceLength(gap, sizeU) * SIXTEENTH_TICKS;
+    fillSlice(out, lane, harmony, global, macros, sound, filter, send, scale, rootPc, start, end, phraseTicks);
+  }
   return out;
+}
+
+/** A slice is the part of the hole that sounds. Rate fills it; the rest of the hole stays quiet. */
+function fillSlice(
+  out: TimedEvent[],
+  lane: ChordLane,
+  harmony: HarmonicEvent[],
+  global: GlobalSettings,
+  macros: Record<string, number>,
+  sound: ChordLaneSound,
+  filter: LaneFilter,
+  send: LaneSend,
+  scale: readonly number[],
+  rootPc: number,
+  start: number,
+  end: number,
+  phraseTicks: number,
+): void {
+  const ranges: Array<[number, number]> = [];
+  if (end <= phraseTicks) ranges.push([Math.max(0, start), end]);
+  else {
+    if (start < phraseTicks) ranges.push([Math.max(0, start), phraseTicks]);
+    const tail = end - phraseTicks;
+    if (tail > 0) ranges.push([0, Math.min(phraseTicks, tail)]);
+  }
+  for (const [from, to] of ranges) {
+    if (to - from < 1) continue;
+    for (const harm of harmony) {
+      const a = Math.max(from, harm.startTick);
+      const b = Math.min(to, harm.startTick + harm.lengthTicks);
+      if (b - a < 1) continue;
+      const notes = walkChord({ ...harm, startTick: a, lengthTicks: b - a }, (tick) => {
+        const step = tick / SIXTEENTH_TICKS;
+        const rateU = evalModulated(withMacro(lane.rate, macro(macros, "rate")), step);
+        const gateU = evalModulated(withMacro(lane.gate, macro(macros, "gate")), step);
+        const toneU = evalModulated(withMacro(lane.tone, macro(macros, "tone")), step);
+        const octaveU = evalModulated(withMacro(lane.octave, macro(macros, "octave")), step);
+        return {
+          ...chordFigure(rateU),
+          gate: gateU,
+          note: chordToneMidi(harm, scale, rootPc, toneU, octaveU),
+          voices: chordVoices(harm, scale, rootPc, octaveU),
+        };
+      });
+      for (const { note, delay, lengthTicks } of notes) {
+        const at = a + delay;
+        const rendered = soundValues(sound, at / SIXTEENTH_TICKS, macros);
+        const heard = filterValues(filter, at / SIXTEENTH_TICKS, macros);
+        const sent = sendValues(send, at / SIXTEENTH_TICKS, macros);
+        const sample = tickToSample(at, global.tempo);
+        out.push({
+          lane: "chords",
+          tick: at,
+          sample,
+          sampleOffset: sampleOffset(sample),
+          note,
+          velocity: evalModulated(withMacro(lane.velocity, macro(macros, "velocity")), at / SIXTEENTH_TICKS),
+          lengthTicks,
+          step: Math.floor(at / SIXTEENTH_TICKS),
+          sound: rendered,
+          filter: heard,
+          send: sent,
+        });
+      }
+    }
+  }
 }
 
 type FigureAt = ChordFigure & { gate: number; note: number; voices: readonly number[] };

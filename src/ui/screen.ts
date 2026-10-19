@@ -3,7 +3,7 @@ import { laneHeard } from "../core/journal.ts";
 import { SIXTEENTH_TICKS } from "../core/clock.ts";
 import { phraseStepsOf } from "../core/events.ts";
 import { chordSymbol, degreeNumeral, pitchClassName, scaleShort, scaleTitle } from "../core/harmony.ts";
-import { chordFigure, endpointLanes, endpointPhrases, generatePhrase, laneSteps, octaveNumber, restingChordToneLabel, restingPitchLabel } from "../core/phrase.ts";
+import { chordFigure, endpointLanes, endpointPhrases, generatePhrase, laneSteps, octaveNumber, restingChordToneLabel, restingPitchLabel, restingSliceLabel } from "../core/phrase.ts";
 import { evalModulated } from "../core/modulate.ts";
 import { CAPTURE_DEPTHS, CAPTURE_INTENSITIES, CAPTURE_SCOPES, isPitched, LANES, LANE_CODE, type AuxId, type CaptureDepth, type CaptureIntensity, type CaptureScope, type ContextId, type HarmonicEvent, type LaneId, type Phrase, type Project, type TimedEvent } from "../core/types.ts";
 import { DIGIT_H, displayAmount, type BigAmount, type DisplayAmount } from "./digits.ts";
@@ -405,12 +405,15 @@ function drawChordRoll(pixels: Uint8Array, phrase: Phrase, playhead: number): vo
     return yBottom - Math.round(high * (yBottom - yTop));
   };
   for (const event of events) {
-    const start = wrapStep(event.tick / SIXTEENTH_TICKS, steps);
-    const end = Math.min(steps, start + event.lengthTicks / SIXTEENTH_TICKS);
-    const x0 = Math.min(WIDTH - 1, Math.floor((start * WIDTH) / steps));
-    const x1 = Math.min(WIDTH, Math.max(x0 + 1, Math.floor((end * WIDTH) / steps)));
     const y = yOf(event.note);
-    for (let x = x0; x < x1; x++) set(pixels, x, y, 1);
+    paintNoteLength(
+      pixels,
+      wrapStep(event.tick / SIXTEENTH_TICKS, steps),
+      event.lengthTicks / SIXTEENTH_TICKS,
+      steps,
+      y,
+      y,
+    );
   }
   if (playhead >= 0) paintPlayhead(pixels, wrapStep(playhead, steps), steps, yTop, yBottom);
 }
@@ -609,6 +612,9 @@ function figureHeader(project: Project, context: ContextId, binding: Binding): s
     case "division":
       if (context !== "chords") return null;
       return chordFigure(readControl(project, "chords", "rate.value")).label.slice(0, LINE_LIMIT);
+    case "slice":
+      if (context !== "chords") return null;
+      return restingSliceLabel(project.working.chords, project.global);
     default:
       return null;
   }

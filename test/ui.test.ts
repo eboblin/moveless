@@ -41,17 +41,21 @@ describe("pages and leds", () => {
     assert.equal(pageCount("kick"), 9);
     assert.equal(pageCount("bass"), 11);
     assert.equal(pageCount("lead"), 11);
-    assert.equal(pageCount("chords"), 9);
+    assert.equal(pageCount("chords"), 10);
     assert.equal(pageGroup("chords", 0), "pattern");
+    assert.equal(pageGroup("chords", 1), "pattern");
     assert.equal(pageGroup("kick", 7), "fx");
     assert.equal(pageGroup("kick", 8), "fx");
     assert.equal(pageGroup("bass", 9), "fx");
     assert.equal(pageGroup("bass", 10), "fx");
     assert.equal(pageGroup("chords", 2), "notes");
     assert.equal(pageGroupColor("chords", 2), 14);
-    assert.equal(lanePages("chords")[2]?.groups[0], "VEL");
-    assert.equal(pageGroup("chords", 7), "fx");
+    assert.equal(lanePages("chords")[0]?.title, "GEN 1");
+    assert.deepEqual(lanePages("chords")[0]?.groups, ["GEN 1", "SIZE"]);
+    assert.equal(lanePages("chords")[0]?.bindings[4]?.label, "SIZE V");
+    assert.equal(lanePages("chords")[3]?.groups[0], "VEL");
     assert.equal(pageGroup("chords", 8), "fx");
+    assert.equal(pageGroup("chords", 9), "fx");
     assert.equal(pageGroupColor("kick", 7), 9);
     assert.equal(lanePages("bass").at(-1)?.groups[0], "REV");
     assert.equal(lanePages("bass").at(-1)?.groups[1], "DLY");
@@ -815,10 +819,10 @@ describe("surface", () => {
       return n;
     };
     assert.ok(run(0) < run(64));
-    const play = renderScreen(project, { ...defaultUi(), context: "chords", page: 0 }, 0);
+    const play = renderScreen(project, { ...defaultUi(), context: "chords", page: 1 }, 0);
     assert.ok(play.labels.some((label) => label.text === "RATE"));
     assert.ok(play.labels.some((label) => label.text === "GATE"));
-    const tonePage = renderScreen(project, { ...defaultUi(), context: "chords", page: 1 }, 0);
+    const tonePage = renderScreen(project, { ...defaultUi(), context: "chords", page: 2 }, 0);
     assert.match(tonePage.header, /TONE/);
     assert.match(tonePage.header, /OCTAVE/);
     const toneNames = tonePage.labels.filter((label) => label.y === NAME_Y).map((label) => label.text);
@@ -826,39 +830,86 @@ describe("surface", () => {
     const toneHeld = renderScreen(project, {
       ...defaultUi(),
       context: "chords",
-      page: 1,
+      page: 2,
       focus: { label: "TONE V", path: "tone.value", generator: "tone.value", showPattern: false, held: true, untilTick: 0, untilMs: 0 },
     }, 0);
     assert.equal(toneHeld.header, "C4");
     const octaveHeld = renderScreen(project, {
       ...defaultUi(),
       context: "chords",
-      page: 1,
+      page: 2,
       focus: { label: "OCTAVE V", path: "octave.value", generator: "octave.value", showPattern: false, held: true, untilTick: 0, untilMs: 0 },
     }, 0);
     assert.equal(octaveHeld.header, "OCT 4");
     const zone = (rate: number) => renderScreen(
       { ...project, working: { ...project.working, chords: { ...project.working.chords, rate: modulated(rate) } } },
-      { ...defaultUi(), context: "chords", page: 0, focus: { label: "RATE V", path: "rate.value", generator: "rate.value", showPattern: false, held: true, untilTick: 0, untilMs: 0 } },
+      { ...defaultUi(), context: "chords", page: 1, focus: { label: "RATE V", path: "rate.value", generator: "rate.value", showPattern: false, held: true, untilTick: 0, untilMs: 0 } },
       0,
     ).header;
     assert.equal(zone(0), "BLOCK");
     assert.equal(zone(0.01), "1/1");
     assert.equal(zone(0.25), "1/4");
     assert.match(zone(0.75), /^\d/);
-    const roll = renderScreen(project, { ...defaultUi(), context: "chords", page: 1 }, 0);
+    const roll = renderScreen(project, { ...defaultUi(), context: "chords", page: 2 }, 0);
     assert.equal(
       roll.labels.some((label) => label.y >= HEADER_H && label.y < HEADER_H + VIZ_H && /^[A-G]/.test(label.text)),
       false,
     );
     assert.ok(pitchSpread(roll) > 1);
     assert.equal(columnSpan(roll, 0), 1);
-    const sound = renderScreen(project, { ...defaultUi(), context: "chords", page: 3 }, 0);
+    const sound = renderScreen(project, { ...defaultUi(), context: "chords", page: 4 }, 0);
     assert.equal(
       sound.labels.some((label) => label.y >= HEADER_H && label.y < HEADER_H + VIZ_H && /^[A-G]/.test(label.text)),
       false,
     );
     assert.ok(pitchSpread(sound) > 1);
+  });
+
+  it("draws sliced blocks with a gap and keeps the roll while an euclid knob is held", () => {
+    const project = defaultProject();
+    project.global.phrase = 1;
+    project.progression.count = 1;
+    project.progression.length = 4;
+    project.progression.variation = 0;
+    project.working.chords.rate = modulated(0);
+    project.working.chords.gen1 = { ...project.working.chords.gen1, length: 16, hits: 4, rotate: 0 };
+    project.working.chords.size = modulated(0.5);
+    const cut = renderScreen(project, { ...defaultUi(), context: "chords", page: 0 }, 0);
+    assert.equal(cut.viz, "phrase");
+    assert.ok(columnSpan(cut, 0) >= 3);
+    assert.equal(columnSpan(cut, 24), 0);
+    assert.ok(columnSpan(cut, 32) >= 3);
+
+    project.working.chords.size = modulated(1);
+    const joined = renderScreen(project, { ...defaultUi(), context: "chords", page: 0 }, 0);
+    let row = -1;
+    for (let y = HEADER_H; y < HEADER_H + VIZ_H - 1; y++) {
+      if (pixel(joined, 0, y) && pixel(joined, 32, y) && !pixel(joined, 31, y)) row = y;
+    }
+    assert.ok(row >= 0);
+
+    const hits = renderScreen(project, {
+      ...defaultUi(),
+      context: "chords",
+      page: 0,
+      focus: { label: "G1 HIT", path: "gen1.hits", generator: null, showPattern: false, held: true, untilTick: 0, untilMs: 0 },
+    }, 0);
+    assert.equal(hits.viz, "phrase");
+    assert.equal(columnSpan(hits, 0) >= 3, true);
+
+    const size = renderScreen(project, {
+      ...defaultUi(),
+      context: "chords",
+      page: 0,
+      focus: { label: "SIZE V", path: "size.value", generator: "size", showPattern: false, held: true, untilTick: 0, untilMs: 0 },
+    }, 0);
+    assert.equal(size.viz, "generator");
+    assert.equal(size.header, "4/4");
+
+    project.working.chords.gen1 = { ...project.working.chords.gen1, hits: 1, rotate: 14 };
+    const wrapped = renderScreen(project, { ...defaultUi(), context: "chords", page: 0 }, 0);
+    assert.ok(columnSpan(wrapped, 0) >= 3);
+    assert.ok(columnSpan(wrapped, 112) >= 3);
   });
 
   it("keeps big digits for 0..99 and uses small 3+ digit text past that", () => {
