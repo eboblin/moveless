@@ -176,7 +176,7 @@ function morphTarget(project: Project): Scene | undefined {
   return project.journal.find((scene) => scene.id === morph.targetId);
 }
 
-const BASS_OCTAVE = 2;
+const BASS_OCTAVE = 3;
 const LEAD_OCTAVE = 4;
 /** Pitch value walks the selected scale ± one octave (seven degrees). */
 const SCALE_REACH = 7;

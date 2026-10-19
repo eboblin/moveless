@@ -92,7 +92,7 @@ describe("euclid generator", () => {
       snare: [4, 12],
       hat: [2, 10],
       perc: [6, 14],
-      bass: [1, 9],
+      bass: [0, 4],
       lead: [5, 13],
     } as const;
     const rotates = new Set<number>();
@@ -109,7 +109,7 @@ describe("euclid generator", () => {
         rotates.add(rotate);
       }
     }
-    assert.equal(rotates.size, 12);
+    assert.equal(rotates.size, 10);
     assert.equal(lanes.chords.rate.value, 0.01);
     assert.equal(lanes.chords.gate.value, 0.06);
     assert.equal(lanes.chords.tone.value, 0);
@@ -153,6 +153,22 @@ describe("euclid generator", () => {
     assert.equal(perc.fmRatio.value, 0.29);
     assert.equal(perc.attack.value, 0.16);
     assert.equal(perc.damp.value, 0.11);
+    const bass = lanes.bass;
+    assert.equal(bass.gen1.velocity.value, 0.8);
+    assert.equal(bass.gen2.velocity.value, 0.3);
+    assert.equal(bass.pitch.value, 0.5);
+    assert.equal(bass.octave.value, unitForOctave(3));
+    assert.equal(bass.length.value, 0.04);
+    assert.equal(bass.follow, 1);
+    assert.equal(bass.step.value, 0);
+    assert.equal(bass.sound.wave.value, 0.28);
+    assert.equal(bass.sound.bend.value, 0);
+    assert.equal(bass.sound.sync.value, 0);
+    assert.equal(bass.sound.fold.value, 0);
+    assert.equal(bass.sound.drive.value, 0);
+    assert.equal(bass.sound.wide.value, 0);
+    assert.equal(bass.sound.attack.value, 0.15);
+    assert.equal(bass.sound.release.value, 0.09);
   });
 
   it("parks repeat count and rate at zero on every lane", () => {
@@ -815,8 +831,8 @@ describe("harmony", () => {
     const followed = generatePhrase(project).lanes.bass[0].note;
     project.working.bass.follow = 0;
     const free = generatePhrase(project).lanes.bass[0].note;
-    assert.equal(followed, 24);
-    assert.equal(free, 26);
+    assert.equal(followed, 36);
+    assert.equal(free, 38);
     project.mute.chords = true;
     const phrase = generatePhrase(project);
     assert.ok(phrase.harmony.length > 0);
@@ -1013,7 +1029,7 @@ describe("harmony", () => {
     project.working.bass.pitch = modulated(0.5);
     const notes = generatePhrase(project).lanes.bass.filter((event) => event.step === 0).map((event) => event.note);
     assert.equal(notes.length, 4);
-    assert.deepEqual(notes, [24, 36, 48, 60]);
+    assert.deepEqual(notes, [36, 48, 60, 72]);
   });
 });
 

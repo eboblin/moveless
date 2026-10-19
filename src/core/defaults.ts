@@ -34,13 +34,13 @@ function euclid(rotate: number, velocity: number): EuclidGen {
   };
 }
 
-/** One hit per generator, each on its own sixteenth, so the lanes do not stack. */
+/** One hit per generator. Drums and lead each take a free sixteenth. Bass is the dialed line. */
 const ROTATE = {
   kick: [0, 8],
   snare: [4, 12],
   hat: [2, 10],
   perc: [6, 14],
-  bass: [1, 9],
+  bass: [0, 4],
   lead: [5, 13],
 } as const;
 
@@ -90,14 +90,14 @@ const SOUND_VALUE: Record<LaneId, Record<string, number>> = {
     damp: 0.11,
   },
   bass: {
-    wave: 0.36,
-    bend: 0.08,
+    wave: 0.28,
+    bend: 0,
     sync: 0,
     fold: 0,
-    drive: 0.12,
-    wide: 0.06,
-    attack: 0.015,
-    release: 0.4,
+    drive: 0,
+    wide: 0,
+    attack: 0.15,
+    release: 0.09,
   },
   lead: {
     wave: 0.48,
@@ -164,15 +164,16 @@ function drum(id: DrumId): DrumLane {
 
 function pitched(lane: "bass" | "lead", follow: number): PitchedLane {
   const [first, second] = ROTATE[lane];
+  const bass = lane === "bass";
   return {
     gen1: euclid(first, 0.8),
-    gen2: euclid(second, 0.55),
+    gen2: euclid(second, bass ? 0.3 : 0.55),
     follow,
     pitch: home(0.5),
     octave: home(unitForOctave(homeOctave(lane))),
-    length: home(lane === "bass" ? 0.55 : 0.35),
+    length: home(bass ? 0.04 : 0.35),
     repeat: home(0),
-    step: home(0.5),
+    step: home(bass ? 0 : 0.5),
     sound: sound(lane),
     filter: laneFilter(),
     send: laneSend(),

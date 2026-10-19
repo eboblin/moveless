@@ -742,7 +742,7 @@ describe("surface", () => {
     bassProject.working.bass.gen1.hits = 8;
     const pitchPage = renderScreen(defaultProject(), { ...defaultUi(), context: "bass", page: 3 }, 0);
     assert.ok(pitchPage.digits.some((digit) => digit.cell === 0 && digit.amount.kind === "big" && digit.amount.n === 50));
-    assert.ok(pitchPage.digits.some((digit) => digit.cell === 4 && digit.amount.kind === "big" && digit.amount.n === 2));
+    assert.ok(pitchPage.digits.some((digit) => digit.cell === 4 && digit.amount.kind === "big" && digit.amount.n === 3));
     const leadPitch = renderScreen(defaultProject(), { ...defaultUi(), context: "lead", page: 3 }, 0);
     assert.ok(leadPitch.digits.some((digit) => digit.cell === 4 && digit.amount.kind === "big" && digit.amount.n === 4));
     const pitchHeld = renderScreen(defaultProject(), {
@@ -751,7 +751,7 @@ describe("surface", () => {
       page: 3,
       focus: { label: "PITCH V", path: "pitch.value", generator: null, showPattern: false, held: true, untilTick: 0, untilMs: 0 },
     }, 0);
-    assert.equal(pitchHeld.header, "C2");
+    assert.equal(pitchHeld.header, "C3");
     const lengthPage = renderScreen(defaultProject(), { ...defaultUi(), context: "bass", page: 4 }, 0);
     assert.ok(lengthPage.labels.some((label) => label.text === "FOL"));
     const bass = renderScreen(bassProject, { ...defaultUi(), context: "bass" }, 0);

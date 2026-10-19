@@ -574,7 +574,7 @@ describe("dsp adapter", () => {
     assert.equal(project.working.kick.sound.drive.value < 0.3, true);
     assert.equal(project.working.bass.sound.sync.value < 0.2, true);
     assert.equal(project.working.bass.sound.fold.value < 0.1, true);
-    assert.equal(project.working.bass.sound.wave.value > 0.3 && project.working.bass.sound.wave.value < 0.5, true);
+    assert.equal(project.working.bass.sound.wave.value, 0.28);
     assert.equal(project.working.lead.sound.attack.value < 0.1, true);
     assert.equal(project.working.lead.sound.wide.value > 0.1 && project.working.lead.sound.wide.value < 0.4, true);
     assert.equal(project.working.chords.sound.wide.value, 0.4);
