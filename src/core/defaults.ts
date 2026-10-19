@@ -204,6 +204,7 @@ function chords(): ChordLane {
     gate: home(0.06),
     size: home(1),
     velocity: home(0.85),
+    probability: home(1),
     sound: sound("chords"),
     filter: laneFilter(),
     send: laneSend(),

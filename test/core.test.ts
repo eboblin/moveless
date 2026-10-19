@@ -115,6 +115,7 @@ describe("euclid generator", () => {
     assert.equal(lanes.chords.gen1.rotate, 0);
     assert.equal(lanes.chords.gen1.probability, 1);
     assert.equal(lanes.chords.size.value, 1);
+    assert.equal(lanes.chords.probability.value, 1);
     assert.equal(lanes.chords.rate.value, 0.01);
     assert.equal(lanes.chords.gate.value, 0.06);
     assert.equal(lanes.chords.tone.value, 0);
@@ -1001,6 +1002,76 @@ describe("harmony", () => {
     assert.equal(found, true);
     project.working.chords.gen1 = { ...project.working.chords.gen1, probability: 0 };
     assert.equal(generatePhrase(project).lanes.chords.length, 0);
+  });
+
+  it("rolls a block once and an arp note by note", () => {
+    const project = bar(defaultProject(), 1);
+    project.progression.count = 1;
+    project.progression.length = 4;
+    project.progression.variation = 0;
+    project.working.chords.rate = modulated(0);
+    project.working.chords.size = modulated(1);
+    project.working.chords.gen1 = { ...project.working.chords.gen1, length: 16, hits: 4, rotate: 0, probability: 1 };
+    project.working.chords.probability = modulated(0);
+    assert.equal(generatePhrase(project).lanes.chords.length, 0);
+
+    project.working.chords.probability = modulated(0.5);
+    let thinned = false;
+    for (let seed = 0; seed < 40 && !thinned; seed++) {
+      project.global.seed = seed;
+      const notes = generatePhrase(project).lanes.chords;
+      const ticks = [...new Set(notes.map((event) => event.tick))];
+      if (ticks.length === 0 || ticks.length === 4) continue;
+      thinned = true;
+      for (const tick of ticks) assert.equal(notes.filter((event) => event.tick === tick).length, 3);
+    }
+    assert.equal(thinned, true);
+
+    project.working.chords.gen1 = { ...project.working.chords.gen1, probability: 0 };
+    project.working.chords.probability = modulated(1);
+    assert.equal(generatePhrase(project).lanes.chords.length, 0);
+
+    const walking = bar(defaultProject(), 2);
+    walking.progression.count = 2;
+    walking.progression.length = 4;
+    walking.progression.variation = 0;
+    walking.progression.motion = 1;
+    walking.progression.way = 0;
+    walking.working.chords.rate = modulated(0);
+    walking.working.chords.size = modulated(1);
+    walking.working.chords.gen1 = { ...walking.working.chords.gen1, length: 32, hits: 1, rotate: 0, probability: 1 };
+    walking.working.chords.probability = modulated(0.5);
+    let both = false;
+    let neither = false;
+    for (let seed = 0; seed < 40 && !(both && neither); seed++) {
+      walking.global.seed = seed;
+      const notes = generatePhrase(walking).lanes.chords;
+      const first = notes.filter((event) => event.tick === 0);
+      const second = notes.filter((event) => event.tick === 16 * SIXTEENTH_TICKS);
+      assert.equal(first.length === 0, second.length === 0);
+      assert.ok(first.length === 0 || first.length === 3);
+      if (first.length === 3) both = true;
+      if (first.length === 0) neither = true;
+    }
+    assert.equal(both && neither, true);
+
+    project.working.chords.gen1 = { ...project.working.chords.gen1, length: 16, hits: 1, rotate: 0, probability: 1 };
+    project.working.chords.rate = modulated(0.5);
+    project.working.chords.gate = modulated(0.5);
+    project.working.chords.size = modulated(1);
+    project.working.chords.probability = modulated(0);
+    assert.equal(generatePhrase(project).lanes.chords.length, 0);
+    project.working.chords.probability = modulated(1);
+    const full = generatePhrase(project).lanes.chords.length;
+    assert.ok(full > 4);
+    project.working.chords.probability = modulated(0.5);
+    let mixed = false;
+    for (let seed = 0; seed < 40 && !mixed; seed++) {
+      project.global.seed = seed;
+      const count = generatePhrase(project).lanes.chords.length;
+      mixed = count > 0 && count < full;
+    }
+    assert.equal(mixed, true);
   });
 
   it("draws the rest of a slice that crosses the loop back at the start", () => {

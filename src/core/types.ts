@@ -144,6 +144,11 @@ export interface ChordLane {
   size: Modulated;
   /** Loudness of each chord note. */
   velocity: Modulated;
+  /**
+   * Second gate after the euclidean probability.
+   * A block rolls once for the whole hit. A pulse rolls each note on its own.
+   */
+  probability: Modulated;
   sound: Record<string, Modulated>;
   filter: LaneFilter;
   send: LaneSend;

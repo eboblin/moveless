@@ -12,6 +12,7 @@ import {
 import { blendPhrases } from "./blend.ts";
 import { euclidPattern, generateHits, keptVelocity, phraseStepsOf, rotatePattern } from "./events.ts";
 import { getPath, mixFieldValues } from "./fields.ts";
+import { hash01 } from "./hash.ts";
 import { morphEndpoints } from "./morph.ts";
 import { applyFollowMidi, chordTonePitchClasses, degreeToMidi, generateHarmony, harmonyAt, pitchClassName, scaleOf } from "./harmony.ts";
 import { bipolarFromUnit, evalModulated, soundMacro, withMacro } from "./modulate.ts";
@@ -532,7 +533,8 @@ function chordAudio(
     const sizeU = evalModulated(withMacro(lane.size, macro(macros, "size")), hit.step);
     const start = swungStepTick(hit.step, global.swing);
     const end = start + sliceLength(gap, sizeU) * SIXTEENTH_TICKS;
-    fillSlice(out, lane, harmony, global, macros, sound, filter, send, scale, rootPc, start, end, phraseTicks);
+    const blockKept = rollChance(chanceAt(lane, macros, hit.step), global.seed, "block", hit.step);
+    fillSlice(out, lane, harmony, global, macros, sound, filter, send, scale, rootPc, start, end, phraseTicks, blockKept);
   }
   return out;
 }
@@ -552,6 +554,7 @@ function fillSlice(
   start: number,
   end: number,
   phraseTicks: number,
+  blockKept: boolean,
 ): void {
   const ranges: Array<[number, number]> = [];
   if (end <= phraseTicks) ranges.push([Math.max(0, start), end]);
@@ -578,6 +581,9 @@ function fillSlice(
           note: chordToneMidi(harm, scale, rootPc, toneU, octaveU),
           voices: chordVoices(harm, scale, rootPc, octaveU),
         };
+      }, {
+        block: blockKept,
+        note: (tick, note) => rollChance(chanceAt(lane, macros, tick / SIXTEENTH_TICKS), global.seed, "note", tick, note),
       });
       for (const { note, delay, lengthTicks } of notes) {
         const at = a + delay;
@@ -611,9 +617,21 @@ type FigureAt = ChordFigure & { gate: number; note: number; voices: readonly num
  * each sixteenth and holds every chord tone at the octave it read when the
  * block began. Tone picks a single voice only while the figure is an arp.
  */
+function chanceAt(lane: ChordLane, macros: Record<string, number>, step: number): number {
+  return clamp01(evalModulated(withMacro(lane.probability, macro(macros, "probability")), step));
+}
+
+/** 1 keeps the note. 0 drops it. Anything between rolls once for this salt. */
+function rollChance(probability: number, seed: number, ...salt: (string | number)[]): boolean {
+  if (probability >= 1) return true;
+  if (probability <= 0) return false;
+  return hash01(seed, "chords", ...salt) < probability;
+}
+
 function walkChord(
   harm: HarmonicEvent,
   at: (tick: number) => FigureAt,
+  hear: { block: boolean; note: (tick: number, note: number) => boolean },
 ): { note: number; delay: number; lengthTicks: number }[] {
   const length = harm.lengthTicks;
   const hits: { note: number; delay: number; lengthTicks: number }[] = [];
@@ -623,7 +641,9 @@ function walkChord(
     if (now.mode === "block" || now.ticks <= 0) {
       const end = blockEnd(cursor, length, harm.startTick, at);
       const room = Math.max(1, end - cursor);
-      for (const note of now.voices) hits.push({ note, delay: cursor, lengthTicks: room });
+      if (hear.block) {
+        for (const note of now.voices) hits.push({ note, delay: cursor, lengthTicks: room });
+      }
       cursor = end;
       continue;
     }
@@ -631,7 +651,7 @@ function walkChord(
     const next = Math.min(length, cursor + step);
     const gateTicks = Math.max(1, Math.round(step * clampGate(now.gate)));
     const room = Math.max(1, Math.min(gateTicks, next - cursor, length - cursor));
-    hits.push({ note: now.note, delay: cursor, lengthTicks: room });
+    if (hear.note(harm.startTick + cursor, now.note)) hits.push({ note: now.note, delay: cursor, lengthTicks: room });
     cursor = next;
   }
   return hits;

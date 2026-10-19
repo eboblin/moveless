@@ -48,12 +48,16 @@ describe("pages and leds", () => {
     assert.equal(pageGroup("kick", 8), "fx");
     assert.equal(pageGroup("bass", 9), "fx");
     assert.equal(pageGroup("bass", 10), "fx");
-    assert.equal(pageGroup("chords", 2), "notes");
-    assert.equal(pageGroupColor("chords", 2), 14);
+    assert.equal(pageGroup("chords", 2), "pattern");
+    assert.equal(pageGroupColor("chords", 2), 3);
+    assert.equal(pageGroup("chords", 3), "notes");
+    assert.equal(pageGroupColor("chords", 3), 14);
     assert.equal(lanePages("chords")[0]?.title, "GEN 1");
     assert.deepEqual(lanePages("chords")[0]?.groups, ["GEN 1", "SIZE"]);
     assert.equal(lanePages("chords")[0]?.bindings[4]?.label, "SIZE V");
-    assert.equal(lanePages("chords")[3]?.groups[0], "VEL");
+    assert.deepEqual(lanePages("chords")[2]?.groups, ["VEL", "PRB"]);
+    assert.equal(lanePages("chords")[2]?.bindings[4]?.label, "PRB V");
+    assert.equal(lanePages("chords")[3]?.groups[0], "TONE");
     assert.equal(pageGroup("chords", 8), "fx");
     assert.equal(pageGroup("chords", 9), "fx");
     assert.equal(pageGroupColor("kick", 7), 9);
@@ -209,7 +213,8 @@ describe("pages and leds", () => {
     assert.equal(bass[17].color, 9);
     const chords = padLeds(project, "journal", { ...defaultUi(), wheelTouch: true, context: "chords" });
     assert.equal(chords[24].color, 3);
-    assert.equal(chords[26].color, 14);
+    assert.equal(chords[26].color, 3);
+    assert.equal(chords[27].color, 14);
     assert.equal(chords[28].color, 20);
     assert.equal(chords[16].color, 9);
   });
@@ -822,7 +827,10 @@ describe("surface", () => {
     const play = renderScreen(project, { ...defaultUi(), context: "chords", page: 1 }, 0);
     assert.ok(play.labels.some((label) => label.text === "RATE"));
     assert.ok(play.labels.some((label) => label.text === "GATE"));
-    const tonePage = renderScreen(project, { ...defaultUi(), context: "chords", page: 2 }, 0);
+    const velPage = renderScreen(project, { ...defaultUi(), context: "chords", page: 2 }, 0);
+    assert.ok(velPage.labels.some((label) => label.text === "VEL"));
+    assert.ok(velPage.labels.some((label) => label.text === "PRB"));
+    const tonePage = renderScreen(project, { ...defaultUi(), context: "chords", page: 3 }, 0);
     assert.match(tonePage.header, /TONE/);
     assert.match(tonePage.header, /OCTAVE/);
     const toneNames = tonePage.labels.filter((label) => label.y === NAME_Y).map((label) => label.text);
@@ -830,14 +838,14 @@ describe("surface", () => {
     const toneHeld = renderScreen(project, {
       ...defaultUi(),
       context: "chords",
-      page: 2,
+      page: 3,
       focus: { label: "TONE V", path: "tone.value", generator: "tone.value", showPattern: false, held: true, untilTick: 0, untilMs: 0 },
     }, 0);
     assert.equal(toneHeld.header, "C4");
     const octaveHeld = renderScreen(project, {
       ...defaultUi(),
       context: "chords",
-      page: 2,
+      page: 3,
       focus: { label: "OCTAVE V", path: "octave.value", generator: "octave.value", showPattern: false, held: true, untilTick: 0, untilMs: 0 },
     }, 0);
     assert.equal(octaveHeld.header, "OCT 4");
@@ -850,7 +858,7 @@ describe("surface", () => {
     assert.equal(zone(0.01), "1/1");
     assert.equal(zone(0.25), "1/4");
     assert.match(zone(0.75), /^\d/);
-    const roll = renderScreen(project, { ...defaultUi(), context: "chords", page: 2 }, 0);
+    const roll = renderScreen(project, { ...defaultUi(), context: "chords", page: 3 }, 0);
     assert.equal(
       roll.labels.some((label) => label.y >= HEADER_H && label.y < HEADER_H + VIZ_H && /^[A-G]/.test(label.text)),
       false,
