@@ -24,18 +24,18 @@ const KICK: Record<string, Sound> = {
 };
 
 const SNARE: Record<string, Sound> = {
-  "808": { pitch: 0.35, body: 0.08, bodyDecay: 0.45, noise: 0.75, noiseDecay: 0.7, snap: 0.35, tone: 0.22, drive: 0.1 },
-  "909": { pitch: 0.42, body: 0.28, bodyDecay: 0.32, noise: 0.55, noiseDecay: 0.22, snap: 0.72, tone: 0.5, drive: 0.15 },
-  "cr snap": { pitch: 0.55, body: 0.08, bodyDecay: 0.12, noise: 0.35, noiseDecay: 0.1, snap: 0.92, tone: 0.82, drive: 0.05 },
-  linn: { pitch: 0.4, body: 0.28, bodyDecay: 0.18, noise: 0.4, noiseDecay: 0.15, snap: 0.65, tone: 0.5, drive: 0.2 },
-  rimshot: { pitch: 0.62, body: 0.5, bodyDecay: 0.15, noise: 0.25, noiseDecay: 0.12, snap: 0.85, tone: 0.72, drive: 0.1 },
-  clack: { pitch: 0.7, body: 0.28, bodyDecay: 0.1, noise: 0.15, noiseDecay: 0.08, snap: 0.95, tone: 0.78, drive: 0.05 },
-  woodblock: { pitch: 0.72, body: 0.5, bodyDecay: 0.22, noise: 0.08, noiseDecay: 0.1, snap: 0.45, tone: 0.22, drive: 0 },
-  clave: { pitch: 0.82, body: 0.5, bodyDecay: 0.16, noise: 0.05, noiseDecay: 0.08, snap: 0.3, tone: 0.22, drive: 0 },
-  clap: { pitch: 0.45, body: 0.08, bodyDecay: 0.2, noise: 0.92, noiseDecay: 0.48, snap: 0.4, tone: 0.5, drive: 0.15 },
-  industrial: { pitch: 0.5, body: 0.9, bodyDecay: 0.4, noise: 0.45, noiseDecay: 0.35, snap: 0.5, tone: 0.85, drive: 0.8 },
-  tight: { pitch: 0.38, body: 0.28, bodyDecay: 0.16, noise: 0.35, noiseDecay: 0.12, snap: 0.55, tone: 0.5, drive: 0.25 },
-  "fat noise": { pitch: 0.32, body: 0.08, bodyDecay: 0.35, noise: 0.95, noiseDecay: 0.78, snap: 0.25, tone: 0.18, drive: 0.2 },
+  "808": { pitch: 0.29, body: 0.28, bodyDecay: 0.48, noise: 0.72, noiseDecay: 0.38, snap: 0.28, tone: 0.4, drive: 0.08 },
+  "909": { pitch: 0.36, body: 0.28, bodyDecay: 0.3, noise: 0.62, noiseDecay: 0.22, snap: 0.7, tone: 0.52, drive: 0.12 },
+  "cr snap": { pitch: 0.58, body: 0.28, bodyDecay: 0.1, noise: 0.28, noiseDecay: 0.08, snap: 0.92, tone: 0.78, drive: 0.05 },
+  linn: { pitch: 0.34, body: 0.28, bodyDecay: 0.16, noise: 0.48, noiseDecay: 0.14, snap: 0.62, tone: 0.48, drive: 0.18 },
+  rimshot: { pitch: 0.62, body: 0.5, bodyDecay: 0.14, noise: 0.22, noiseDecay: 0.1, snap: 0.88, tone: 0.7, drive: 0.08 },
+  clack: { pitch: 0.7, body: 0.5, bodyDecay: 0.1, noise: 0.12, noiseDecay: 0.08, snap: 0.9, tone: 0.62, drive: 0.05 },
+  woodblock: { pitch: 0.72, body: 0.5, bodyDecay: 0.22, noise: 0.06, noiseDecay: 0.08, snap: 0.4, tone: 0.28, drive: 0 },
+  clave: { pitch: 0.82, body: 0.5, bodyDecay: 0.16, noise: 0.02, noiseDecay: 0.06, snap: 0.25, tone: 0.2, drive: 0 },
+  clap: { pitch: 0.4, body: 0.08, bodyDecay: 0.12, noise: 0.95, noiseDecay: 0.55, snap: 0.35, tone: 0.42, drive: 0.12 },
+  industrial: { pitch: 0.48, body: 0.9, bodyDecay: 0.38, noise: 0.4, noiseDecay: 0.3, snap: 0.45, tone: 0.82, drive: 0.85 },
+  tight: { pitch: 0.36, body: 0.28, bodyDecay: 0.14, noise: 0.4, noiseDecay: 0.12, snap: 0.58, tone: 0.5, drive: 0.22 },
+  "fat noise": { pitch: 0.3, body: 0.28, bodyDecay: 0.32, noise: 0.95, noiseDecay: 0.72, snap: 0.2, tone: 0.16, drive: 0.15 },
 };
 
 const HAT: Record<string, Sound> = {
@@ -138,6 +138,18 @@ function f0(buf: Float32Array, start: number, len: number, minHz: number, maxHz:
     }
   }
   return SR / lag;
+}
+
+function band(buf: Float32Array, hz: number, start: number, len: number): number {
+  const w = (2 * Math.PI * hz) / SR;
+  let re = 0;
+  let im = 0;
+  for (let i = 0; i < len; i++) {
+    const s = buf[start + i] ?? 0;
+    re += s * Math.cos(w * i);
+    im -= s * Math.sin(w * i);
+  }
+  return Math.sqrt(re * re + im * im);
 }
 
 function centroid(buf: Float32Array, start: number, len: number): number {
@@ -253,6 +265,8 @@ describe("drum landmarks", () => {
     assert.ok(tail(SNARE["808"]) > tail(SNARE["909"]));
     assert.ok(tail(SNARE["fat noise"]) > tail(SNARE.tight));
     assert.ok(tail(SNARE.woodblock) < tail(SNARE["808"]));
+    const wires = (sound: Sound) => rms(mono(hit("snare", sound, Math.floor(SR * 0.25))), Math.floor(SR * 0.04), Math.floor(SR * 0.09));
+    assert.ok(wires(SNARE["808"]) > wires(SNARE["909"]));
     const lateHigh = (sound: Sound) => {
       const audio = mono(hit("snare", sound, Math.floor(SR * 0.25)));
       let prev = 0;
@@ -266,13 +280,51 @@ describe("drum landmarks", () => {
       }
       return energy;
     };
-    assert.ok(lateHigh(SNARE["808"]) > lateHigh(SNARE["909"]) * 2);
     assert.ok(lateHigh(SNARE.clap) > lateHigh(SNARE.clave) * 2);
-    const early = (sound: Sound) => rms(mono(hit("snare", sound, 2000)), 0, 160);
-    assert.ok(early(SNARE["cr snap"]) > early(SNARE["fat noise"]));
-    const tone = (value: number) => centroid(mono(hit("snare", {
+    const edge = (body: number) => {
+      const audio = mono(hit("snare", {
+        pitch: 0.4, body, bodyDecay: 0.5, noise: 0, noiseDecay: 0, snap: 0, tone: 0.55, drive: 0,
+      }, 4000));
+      let energy = 0;
+      let prev = 0;
+      for (let i = 200; i < 900; i++) {
+        const delta = audio[i] - prev;
+        energy += delta * delta;
+        prev = audio[i];
+      }
+      return energy;
+    };
+    assert.ok(edge(0.28) > edge(0.08) * 2);
+    const crack = (sound: Sound) => {
+      const audio = mono(hit("snare", sound, 2000));
+      let early = 0;
+      let late = 0;
+      for (let i = 0; i < 30; i++) early += audio[i] * audio[i];
+      for (let i = 80; i < 400; i++) late += audio[i] * audio[i];
+      return early / Math.max(1e-6, late);
+    };
+    assert.ok(crack(SNARE["cr snap"]) > crack(SNARE["fat noise"]) * 2);
+    const snapTail = (snap: number) => {
+      const audio = mono(hit("snare", {
+        pitch: 0.4, body: 0.28, bodyDecay: 0.35, noise: 0.05, noiseDecay: 0.05, snap, tone: 0.2, drive: 0,
+      }, 1500));
+      let early = 0;
+      let late = 0;
+      for (let i = 0; i < 36; i++) early += audio[i] * audio[i];
+      for (let i = 90; i < 220; i++) late += audio[i] * audio[i];
+      return late / Math.max(1e-6, early);
+    };
+    assert.ok(snapTail(0.35) > snapTail(0.6) && snapTail(0.6) > snapTail(0.9));
+    const noiseAt = (pitch: number) => {
+      const audio = mono(hit("snare", {
+        pitch, body: 0.08, bodyDecay: 0.25, noise: 0.9, noiseDecay: 0.4, snap: 0, tone: 0.5, drive: 0,
+      }, 2500));
+      return band(audio, 10000, 80, 700) / Math.max(0.05, band(audio, 200, 80, 700));
+    };
+    assert.ok(noiseAt(0.82) > noiseAt(0.5) && noiseAt(0.5) > noiseAt(0.22) * 2);
+    const tone = (value: number) => band(mono(hit("snare", {
       pitch: 0.45, body: 0.5, bodyDecay: 0.4, noise: 0.7, noiseDecay: 0.35, snap: 0.2, tone: value, drive: 0,
-    }, 3000)), 100, 700);
+    }, 3000)), 10000, 100, 700);
     assert.ok(tone(0.85) > tone(0.5) && tone(0.5) > tone(0.18));
     assert.ok(Math.abs(tone(0.5) - tone(0.55)) < Math.abs(tone(0.5) - tone(0.18)));
     const body = (value: number) => centroid(mono(hit("snare", {
@@ -327,6 +379,27 @@ describe("drum landmarks", () => {
       assert.ok(Math.abs(near - mid) <= Math.abs(far - mid) + 0.08, `metal ${value}`);
     }
     assert.ok(toneShare(0.9) > toneShare(0.04) + 0.15);
+    const chick = (velocity: number) => mono(renderBlock(createEngine(), [{
+      sampleOffset: 0,
+      lane: "hat",
+      note: DRUM_NOTE.hat,
+      velocity,
+      lengthTicks: 48,
+      params: [...mapSound("hat", {
+        pitch: 0.6, metal: 0, noise: 0, color: 0.5, decay: 0.05, attack: 0.85, ring: 0, width: 0,
+      }), ...mapFilter({ cutoff: 0.5, resonance: 0 })],
+    }], 120, 1500));
+    assert.ok(rms(chick(28), 0, 160) < rms(chick(112), 0, 160) * 0.5);
+    const sweep = chick(110);
+    let energy = 0;
+    for (let i = 0; i < 96; i++) energy += sweep[i] * sweep[i];
+    let best = 0;
+    for (let lag = 3; lag <= 40; lag++) {
+      let corr = 0;
+      for (let i = 0; i < 96; i++) corr += sweep[i] * (sweep[i + lag] ?? 0);
+      if (corr > best) best = corr;
+    }
+    assert.ok(energy > 1e-6 && best < energy * 0.55);
   });
 
   it("reaches perc landmarks from a tom to an FM blip", () => {

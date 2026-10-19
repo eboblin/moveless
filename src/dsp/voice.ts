@@ -119,6 +119,8 @@ interface DrumVoice {
   noiseK: number;
   pitchK: number;
   clickK: number;
+  /** Hit level. Body and noise envelopes already start here; the transient has its own shape and uses this as a gain. */
+  gain: number;
 }
 
 interface NoteVoice {
@@ -349,6 +351,7 @@ function trigger(engine: Engine, event: BlockEvent | LoopEvent, tempo: number): 
 function armDrum(drum: DrumVoice, event: BlockEvent | LoopEvent, pitch: number, loop: number): void {
   const lane = drumIndex(event.lane);
   const vel = event.velocity / 127;
+  drum.gain = vel;
   drum.on = true;
   drum.lane = lane;
   drum.phase0 = 0;
@@ -391,10 +394,11 @@ function armDrum(drum: DrumVoice, event: BlockEvent | LoopEvent, pitch: number, 
     drum.click = knob(event, "snap", 0.4);
     drum.tone = knob(event, "tone", 0.5);
     drum.drive = knob(event, "dist", 0.1);
-    drum.bend = 0;
-    drum.bendTime = 0.05;
+    const bend = snarePitchBend(drum.body);
+    drum.bend = bend.bend;
+    drum.bendTime = bend.bendTime;
     drum.ratio = 1.4 + drum.body * 0.8;
-    drum.damp = 0.3;
+    drum.damp = 0;
   } else if (lane === 2) {
     drum.body = knob(event, "metal", 0.5);
     drum.noise = knob(event, "noise", 0.5);
@@ -462,7 +466,7 @@ function drumSample(engine: Engine, drum: DrumVoice): [number, number] {
   const freq = drum.freq * 2 ** (drum.bend * drum.pitchEnv);
   const body = drum.lane === 2 ? hatBody(drum, freq) : tonalBody(drum, freq);
   const noisy = noiseSample(engine, drum) * drum.noiseEnv;
-  const click = transientSample(engine, drum);
+  const click = transientSample(engine, drum) * drum.gain;
   let mid = body.mid * drum.env + noisy + click;
   let side = body.side * drum.env;
   if (drum.drive > 1e-4) {
@@ -711,7 +715,13 @@ function applyDrum(drum: DrumVoice, param: number, unit: number): void {
   } else if (param === P_BODY || param === P_MAT || param === P_METAL) {
     drum.body = u;
     if (drum.lane === 0) drum.tone = 0.12 + u * 0.35;
-    if (drum.lane === 1) drum.ratio = 1.4 + u * 0.8;
+    if (drum.lane === 1) {
+      drum.ratio = 1.4 + u * 0.8;
+      const bend = snarePitchBend(u);
+      drum.bend = bend.bend;
+      drum.bendTime = bend.bendTime;
+      refreshDrumEnv(drum);
+    }
     if (drum.lane === 3) {
       drum.noise = percNoiseAmt(u);
       drum.tone = percTone(u);
@@ -757,7 +767,8 @@ function refreshDrumEnv(drum: DrumVoice): void {
   drum.envK = Math.exp(-1 / (Math.max(0.004, bodySec) * SAMPLE_RATE));
   drum.noiseK = Math.exp(-1 / (Math.max(0.003, drum.noiseDecay) * SAMPLE_RATE));
   drum.pitchK = Math.exp(-1 / (Math.max(0.004, drum.bendTime) * SAMPLE_RATE));
-  drum.clickK = Math.exp(-1 / Math.max(1, 12 + drum.click * 520));
+  const clickSamples = drum.lane === 1 ? 40 + (1 - drum.click) ** 1.4 * 700 : 12 + drum.click * 520;
+  drum.clickK = Math.exp(-1 / Math.max(1, clickSamples));
 }
 
 function refreshRelease(note: NoteVoice): void {
@@ -968,6 +979,13 @@ export function percDecaySeconds(unit: number): number {
   return squaredSeconds(unit, 0.03, 1.2);
 }
 
+/** The 808/909 shelf is the octave pair. It carries a short drop; wood and metal stay put. */
+function snarePitchBend(body: number): { bend: number; bendTime: number } {
+  const distance = Math.abs(body - 0.28);
+  if (distance >= 0.1) return { bend: 0, bendTime: 0.02 };
+  return { bend: 0.4 * (1 - distance / 0.1), bendTime: 0.02 };
+}
+
 const FM_STOPS = [1, 1.5, 2, 3, 4, 5, 7];
 const FM_CENTER = [0.06, 0.21, 0.36, 0.51, 0.66, 0.81, 0.96];
 
@@ -1063,7 +1081,7 @@ const KICK_SPEC = [
 
 const SNARE_SPEC = [
   2, 0.02, 3, 0, 0, 0,
-  1.5, 0.72, 2.1, 0.16, 0.05, 0,
+  2, 0.92, 4, 0.08, 0, 0,
   2.29, 0.58, 3.71, 0.36, 0.1, 0,
   2.76, 0.64, 5.4, 0.42, 0.12, 0.45,
   1.41, 0.3, 2, 0.18, 0.2, 1.7,
@@ -1092,9 +1110,10 @@ function tonalBody(drum: DrumVoice, freq: number): { mid: number; side: number }
   let a2 = spec.a2;
   let a3 = spec.a3;
   if (drum.lane === 1) {
-    const bright = 0.4 + drum.tone * 1.35;
-    a2 *= bright;
-    a3 *= bright * (0.45 + drum.tone);
+    const pair = 0.4 + drum.tone * 0.95;
+    const fall = Math.max(drum.env, 1e-4) ** 0.7;
+    a2 *= pair * fall;
+    a3 *= pair * (0.35 + drum.tone) * fall * fall;
   }
   let dull = 1;
   if (drum.damp > 0.001) {
@@ -1142,8 +1161,22 @@ function hatBody(drum: DrumVoice, freq: number): { mid: number; side: number } {
   return { mid: (s0 + s1 + s2 + s3) * 0.42, side: drum.width * (s1 - s3) * 0.9 };
 }
 
+function poleCoef(hz: number): number {
+  return 1 - Math.exp((-TWO_PI * hz) / SAMPLE_RATE);
+}
+
 function noiseSample(engine: Engine, drum: DrumVoice): number {
   const white = rng(engine);
+  if (drum.lane === 1) {
+    const tone = Math.max(0, Math.min(1, drum.tone));
+    const sounded = Math.max(40, drum.freq * 2 ** (drum.bend * drum.pitchEnv));
+    const center = sounded * (4.5 * 4 ** tone);
+    const low = Math.max(140, Math.min(5000, center * 0.5));
+    const high = Math.min(14000, Math.max(low * 2, center * 2.4));
+    drum.nlp += (white - drum.nlp) * poleCoef(high);
+    drum.nhp += (drum.nlp - drum.nhp) * poleCoef(low);
+    return (drum.nlp - drum.nhp) * drum.noise * (3.6 + tone * 2.2);
+  }
   const tilt = Math.max(0, Math.min(1, drum.tone));
   drum.nlp += (white - drum.nlp) * (0.04 + tilt * 0.5);
   drum.nhp += (white - drum.nhp) * (0.03 + tilt * 0.45);
@@ -1157,6 +1190,24 @@ function transientSample(engine: Engine, drum: DrumVoice): number {
   drum.clickEnv *= drum.clickK;
   const burst = rng(engine);
   if (u < 0.001 || env < 1e-5) return 0;
+  if (drum.lane === 1) {
+    const tickW = 1 - fade(u, 0.12, 0.62);
+    const pulseW = fade(u, 0.08, 0.55);
+    const crackHz = 900 * (7500 / 900) ** u;
+    const coef = poleCoef(crackHz);
+    drum.phase3 += (burst - drum.phase3) * coef;
+    const crack = drum.phase3 * (1 - u * 0.7) + burst * (u * 0.7);
+    const tickHz = 600 + u * 3400;
+    drum.clickPhase = wrapPhase(drum.clickPhase + (TWO_PI * tickHz) / SAMPLE_RATE);
+    const tick = Math.sin(drum.clickPhase);
+    const sharp = env ** (1 + u * 0.8);
+    const level = 0.75 + u * 0.45;
+    return (tick * tickW * 0.8 + crack * pulseW * 2.6) * level * sharp;
+  }
+  if (drum.lane === 2) {
+    const sharp = env ** (0.5 + u);
+    return burst * u * 1.8 * sharp;
+  }
   const tickW = 1 - fade(u, 0.12, 0.5);
   const pulseW = fade(u, 0.15, 0.45) * (1 - fade(u, 0.55, 0.9));
   const chirpW = fade(u, 0.4, 0.8);
@@ -1185,7 +1236,7 @@ function emptyDrum(): DrumVoice {
     decay: 0.2, noiseDecay: 0.05, bendTime: 0.08, bend: 0, body: 0, noise: 0, tone: 0.3,
     click: 0, drive: 0, fm: 0, ratio: 1, ring: 0, width: 0, damp: 0,
     cutoff: 0.5, resonance: 0, reverb: 0, delay: 0, nlp: 0, nhp: 0, flt: 0, band: 0, loop: 0,
-    envK: 1, noiseK: 1, pitchK: 1, clickK: 1,
+    envK: 1, noiseK: 1, pitchK: 1, clickK: 1, gain: 0,
   };
 }
 

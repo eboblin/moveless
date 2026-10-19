@@ -66,7 +66,7 @@ typedef struct {
     float freq, decay, noise_decay, bend_time, bend;
     float body, noise, tone, click, drive, fm, ratio, ring, width, damp;
     float cutoff, resonance, reverb, delay, nlp, nhp, flt, band;
-    float env_k, noise_k, pitch_k, click_k;
+    float env_k, noise_k, pitch_k, click_k, gain;
     int loop;
 } Drum;
 
@@ -357,6 +357,21 @@ static float snare_noise_decay_seconds(float unit) { return squared_seconds(unit
 static float hat_decay_seconds(float unit) { return squared_seconds(unit, 0.02f, 1.0f); }
 static float perc_decay_seconds(float unit) { return squared_seconds(unit, 0.03f, 1.2f); }
 
+static void snare_pitch_bend(float body, float *bend, float *bend_time) {
+    float distance = body - 0.28f;
+    if (distance < 0) distance = -distance;
+    *bend_time = 0.02f;
+    if (distance >= 0.1f) {
+        *bend = 0;
+        return;
+    }
+    *bend = 0.4f * (1.0f - distance / 0.1f);
+}
+
+static float pole_coef(float hz) {
+    return 1.0f - expf((-TWO_PI * hz) / SR);
+}
+
 static const float FM_STOPS[7] = {1.0f, 1.5f, 2.0f, 3.0f, 4.0f, 5.0f, 7.0f};
 static const float FM_CENTER[7] = {0.06f, 0.21f, 0.36f, 0.51f, 0.66f, 0.81f, 0.96f};
 
@@ -522,7 +537,7 @@ static void refresh_drum_env(Drum *drum) {
     float body = drum->lane == 2 ? drum->decay * (1.0f + drum->ring * 2.8f) : drum->decay;
     float ndcy = drum->noise_decay < 0.003f ? 0.003f : drum->noise_decay;
     float bend = drum->bend_time < 0.004f ? 0.004f : drum->bend_time;
-    float tau = 12.0f + drum->click * 520.0f;
+    float tau = drum->lane == 1 ? 40.0f + powf(1.0f - drum->click, 1.4f) * 700.0f : 12.0f + drum->click * 520.0f;
     if (body < 0.004f) body = 0.004f;
     if (tau < 1.0f) tau = 1.0f;
     drum->env_k = expf(-1.0f / (body * SR));
@@ -571,7 +586,11 @@ static void apply_drum(Drum *drum, int param, float unit) {
     case P_METAL:
         drum->body = u;
         if (drum->lane == 0) drum->tone = 0.12f + u * 0.35f;
-        if (drum->lane == 1) drum->ratio = 1.4f + u * 0.8f;
+        if (drum->lane == 1) {
+            drum->ratio = 1.4f + u * 0.8f;
+            snare_pitch_bend(u, &drum->bend, &drum->bend_time);
+            refresh_drum_env(drum);
+        }
         if (drum->lane == 3) {
             drum->noise = perc_noise_amt(u);
             drum->tone = perc_tone(u);
@@ -680,6 +699,7 @@ static void arm_drum(Engine *engine, int lane, int note, int velocity, const cha
     Drum *drum = &engine->drums[idx];
     float pitch = clampf01(read_param(params, "freq", 0.5f));
     float vel = velocity / 127.0f;
+    drum->gain = vel;
     (void)engine;
     (void)note;
     drum->on = 1;
@@ -724,10 +744,9 @@ static void arm_drum(Engine *engine, int lane, int note, int velocity, const cha
         drum->click = clampf01(read_param(params, "snap", 0.4f));
         drum->tone = clampf01(read_param(params, "tone", 0.5f));
         drum->drive = clampf01(read_param(params, "dist", 0.1f));
-        drum->bend = 0;
-        drum->bend_time = 0.05f;
+        snare_pitch_bend(drum->body, &drum->bend, &drum->bend_time);
         drum->ratio = 1.4f + drum->body * 0.8f;
-        drum->damp = 0.3f;
+        drum->damp = 0;
     } else if (idx == 2) {
         drum->body = clampf01(read_param(params, "metal", 0.5f));
         drum->noise = clampf01(read_param(params, "noise", 0.5f));
@@ -865,7 +884,7 @@ static const float KICK_SPEC[30] = {
 };
 static const float SNARE_SPEC[30] = {
     2, 0.02f, 3, 0, 0, 0,
-    1.5f, 0.72f, 2.1f, 0.16f, 0.05f, 0,
+    2, 0.92f, 4, 0.08f, 0, 0,
     2.29f, 0.58f, 3.71f, 0.36f, 0.1f, 0,
     2.76f, 0.64f, 5.4f, 0.42f, 0.12f, 0.45f,
     1.41f, 0.3f, 2, 0.18f, 0.2f, 1.7f,
@@ -934,9 +953,11 @@ static void tonal_body(Drum *drum, float freq, float *mid, float *side) {
     float dull = 1.0f;
     float inc, index, fm_mix, ratio, p1, p2, sine, bent, x, gain;
     if (drum->lane == 1) {
-        float bright = 0.4f + drum->tone * 1.35f;
-        a2 *= bright;
-        a3 *= bright * (0.45f + drum->tone);
+        float pair = 0.4f + drum->tone * 0.95f;
+        float e = drum->env > 1e-4f ? drum->env : 1e-4f;
+        float fall = powf(e, 0.7f);
+        a2 *= pair * fall;
+        a3 *= pair * (0.35f + drum->tone) * fall * fall;
     }
     if (drum->damp > 0.001f) {
         float e = drum->env > 1e-4f ? drum->env : 1e-4f;
@@ -988,8 +1009,24 @@ static void hat_body(Drum *drum, float freq, float *mid, float *side) {
 
 static float noise_sample(Engine *engine, Drum *drum) {
     float white = rng(engine);
-    float tilt = clampf01(drum->tone);
-    float high;
+    float tilt, high;
+    if (drum->lane == 1) {
+        float tone = clampf01(drum->tone);
+        float sounded = drum->freq * powf(2.0f, drum->bend * drum->pitch_env);
+        float center, low, high_hz;
+        if (sounded < 40.0f) sounded = 40.0f;
+        center = sounded * (4.5f * powf(4.0f, tone));
+        low = center * 0.5f;
+        if (low < 140.0f) low = 140.0f;
+        if (low > 5000.0f) low = 5000.0f;
+        high_hz = center * 2.4f;
+        if (high_hz < low * 2.0f) high_hz = low * 2.0f;
+        if (high_hz > 14000.0f) high_hz = 14000.0f;
+        drum->nlp += (white - drum->nlp) * pole_coef(high_hz);
+        drum->nhp += (drum->nlp - drum->nhp) * pole_coef(low);
+        return (drum->nlp - drum->nhp) * drum->noise * (3.6f + tone * 2.2f);
+    }
+    tilt = clampf01(drum->tone);
     drum->nlp += (white - drum->nlp) * (0.04f + tilt * 0.5f);
     drum->nhp += (white - drum->nhp) * (0.03f + tilt * 0.45f);
     high = white - drum->nhp;
@@ -1003,6 +1040,25 @@ static float transient_sample(Engine *engine, Drum *drum) {
     drum->click_env *= drum->click_k;
     burst = rng(engine);
     if (u < 0.001f || env < 1e-5f) return 0;
+    if (drum->lane == 1) {
+        float tick_only = 1.0f - fade01(u, 0.12f, 0.62f);
+        float pulse = fade01(u, 0.08f, 0.55f);
+        float crack_hz = 900.0f * powf(7500.0f / 900.0f, u);
+        float coef = pole_coef(crack_hz);
+        float crack, tick, sharp, level, tick_hz;
+        drum->phase3 += (burst - drum->phase3) * coef;
+        crack = drum->phase3 * (1.0f - u * 0.7f) + burst * (u * 0.7f);
+        tick_hz = 600.0f + u * 3400.0f;
+        drum->click_phase = wrap_phase(drum->click_phase + (TWO_PI * tick_hz) / SR);
+        tick = sinf(drum->click_phase);
+        sharp = powf(env, 1.0f + u * 0.8f);
+        level = 0.75f + u * 0.45f;
+        return (tick * tick_only * 0.8f + crack * pulse * 2.6f) * level * sharp;
+    }
+    if (drum->lane == 2) {
+        float sharp = powf(env, 0.5f + u);
+        return burst * u * 1.8f * sharp;
+    }
     tick_w = 1.0f - fade01(u, 0.12f, 0.5f);
     pulse_w = fade01(u, 0.15f, 0.45f) * (1.0f - fade01(u, 0.55f, 0.9f));
     chirp_w = fade01(u, 0.4f, 0.8f);
@@ -1024,7 +1080,7 @@ static void drum_sample(Engine *engine, Drum *drum, float *left, float *right) {
     if (drum->lane == 2) hat_body(drum, freq, &mid, &side);
     else tonal_body(drum, freq, &mid, &side);
     noisy = noise_sample(engine, drum) * drum->noise_env;
-    click = transient_sample(engine, drum);
+    click = transient_sample(engine, drum) * drum->gain;
     mid = mid * drum->env + noisy + click;
     side *= drum->env;
     if (drum->drive > 1e-4f) {
