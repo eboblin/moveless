@@ -932,13 +932,24 @@ function soft(sample: number): number {
   return scaled / (1 + Math.abs(scaled));
 }
 
+/**
+ * A block arms every tone before any of them renders, so each new one still
+ * has age 0 and a silent envelope. Stealing the quietest voice would take the
+ * tone just armed and leave a single voice once releases fill the pool.
+ */
 function steal(engine: Engine): NoteVoice {
-  let quiet = engine.notes[0];
+  let quietRelease: NoteVoice | null = null;
+  let oldestHeld: NoteVoice | null = null;
   for (const note of engine.notes) {
     if (!note.on) return note;
-    if (note.env < quiet.env) quiet = note;
+    if (note.age === 0) continue;
+    if (note.left <= 0) {
+      if (!quietRelease || note.env < quietRelease.env) quietRelease = note;
+    } else if (!oldestHeld || note.age > oldestHeld.age) {
+      oldestHeld = note;
+    }
   }
-  return quiet;
+  return quietRelease ?? oldestHeld ?? engine.notes[0];
 }
 
 function read(params: EngineParam[], keys: string[], fallback: number): number {

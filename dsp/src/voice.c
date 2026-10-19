@@ -781,13 +781,25 @@ static void arm_drum(Engine *engine, int lane, int note, int velocity, const cha
     refresh_drum_env(drum);
 }
 
+/* A block arms every tone before any of them renders, so each new one still
+ * has age 0 and a silent envelope. Stealing the quietest voice would take the
+ * tone just armed and leave a single voice once releases fill the pool. */
 static Note *steal(Engine *engine) {
-    Note *quiet = &engine->notes[0];
+    Note *quiet_release = NULL;
+    Note *oldest_held = NULL;
     for (int i = 0; i < NOTES; i++) {
-        if (!engine->notes[i].on) return &engine->notes[i];
-        if (engine->notes[i].env < quiet->env) quiet = &engine->notes[i];
+        Note *note = &engine->notes[i];
+        if (!note->on) return note;
+        if (note->age == 0) continue;
+        if (note->left <= 0) {
+            if (!quiet_release || note->env < quiet_release->env) quiet_release = note;
+        } else if (!oldest_held || note->age > oldest_held->age) {
+            oldest_held = note;
+        }
     }
-    return quiet;
+    if (quiet_release) return quiet_release;
+    if (oldest_held) return oldest_held;
+    return &engine->notes[0];
 }
 
 static Note *arm_note(Engine *engine, int note_num, int velocity, int ticks, const char *params, int lane, int loop) {

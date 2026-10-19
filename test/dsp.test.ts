@@ -238,6 +238,40 @@ describe("dsp adapter", () => {
     assert.ok(held.env < atGate * 0.5);
   });
 
+  it("keeps every tone of a block while earlier notes are still releasing", () => {
+    const tempo = 120;
+    const engine = createEngine();
+    const loop = tickToSample(64 * SIXTEENTH_TICKS, tempo);
+    const tail = mapSound("lead", { wave: 0.2, attack: 0, release: 1, bend: 0, sync: 0, fold: 0, drive: 0, wide: 0 });
+    loadPhrase(engine, Array.from({ length: 12 }, (_, i) => ({
+      sample: 0,
+      loop,
+      lane: "lead" as const,
+      note: 36 + i,
+      velocity: 100,
+      lengthTicks: SIXTEENTH_TICKS,
+      params: tail,
+    })), tempo, true);
+    const pastGate = tickToSample(SIXTEENTH_TICKS, tempo) + 128;
+    for (let i = 0; i < Math.ceil(pastGate / 128); i++) renderClock(engine);
+    assert.equal(engine.notes.filter((note) => note.on).length, 12);
+
+    const chord = mapSound("chords", { wave: 0.2, attack: 0, release: 1, bend: 0, sync: 0, fold: 0, drive: 0, wide: 0 });
+    renderBlock(engine, [60, 64, 67].map((note) => ({
+      sampleOffset: 0,
+      lane: "chords" as const,
+      note,
+      velocity: 110,
+      lengthTicks: 8 * SIXTEENTH_TICKS,
+      params: chord,
+    })), tempo);
+    const freq = (midi: number) => 440 * 2 ** ((midi - 69) / 12);
+    const held = engine.notes.filter((note) => note.on && note.left > 0);
+    for (const midi of [60, 64, 67]) {
+      assert.ok(held.some((note) => Math.abs(note.freq - freq(midi)) < 0.01), `missing midi ${midi}`);
+    }
+  });
+
   it("starts a rebuilt chord that the clock has already passed", () => {
     const tempo = 120;
     const bar = tickToSample(16 * SIXTEENTH_TICKS, tempo);
