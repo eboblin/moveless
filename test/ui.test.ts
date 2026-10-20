@@ -213,27 +213,37 @@ describe("pages and leds", () => {
     const wheel = padLeds(project, "journal", { ...defaultUi(), wheelTouch: true });
     assert.equal(wheel[24].color, 3);
     assert.equal(wheel[24].blink, true);
-    assert.equal(wheel[16].color, 9);
+    assert.equal(wheel[25].color, 3);
+    assert.equal(wheel[16].color, offColor(9));
     assert.equal(wheel[0].color, offColor(LED.yellow));
     assert.equal(wheel[0].blink, false);
     assert.equal(wheel[1].color, LED.yellow);
     assert.equal(wheel[1].blink, false);
     assert.equal(wheel[4].color, offColor(LED.purple));
     assert.equal(wheel[4].blink, false);
-    assert.equal(wheel[27].color, 20);
-    assert.equal(wheel[28].color, 20);
+    assert.equal(wheel[27].color, offColor(20));
+    assert.equal(wheel[28].color, offColor(20));
+    const reset = padLeds({ ...project, captureIntensity: "clear" }, "journal", { ...defaultUi(), wheelTouch: true });
+    assert.equal(reset[24].color, LED.red);
+    assert.equal(reset[24].blink, true);
+    assert.equal(reset[24].blinkTo, 66);
+    assert.equal(reset[25].color, LED.red);
+    assert.equal(reset[27].color, offColor(20));
+    const only = padLeds({ ...project, captureScope: "page" }, "journal", { ...defaultUi(), wheelTouch: true });
+    assert.equal(only[24].color, 3);
+    assert.equal(only[25].color, offColor(3));
     const bass = padLeds(project, "journal", { ...defaultUi(), wheelTouch: true, context: "bass" });
     assert.equal(bass[24].color, 3);
-    assert.equal(bass[27].color, 14);
-    assert.equal(bass[30].color, 20);
-    assert.equal(bass[16].color, 20);
-    assert.equal(bass[17].color, 9);
+    assert.equal(bass[27].color, offColor(14));
+    assert.equal(bass[30].color, offColor(20));
+    assert.equal(bass[16].color, offColor(20));
+    assert.equal(bass[17].color, offColor(9));
     const chords = padLeds(project, "journal", { ...defaultUi(), wheelTouch: true, context: "chords" });
     assert.equal(chords[24].color, 3);
     assert.equal(chords[26].color, 3);
-    assert.equal(chords[27].color, 14);
-    assert.equal(chords[28].color, 20);
-    assert.equal(chords[16].color, 9);
+    assert.equal(chords[27].color, offColor(14));
+    assert.equal(chords[28].color, offColor(20));
+    assert.equal(chords[16].color, offColor(9));
   });
 
   it("pulses pads on the device and keeps the step blink on the wall clock", () => {
@@ -472,11 +482,11 @@ describe("surface", () => {
 
     state = reduce(state, { kind: "note", data1: 9, data2: 127 });
     const wheel = padLeds(state.project, "journal", state.ui);
-    assert.equal(wheel[24].color, 14);
-    assert.equal(wheel[25].color, 8);
-    assert.equal(wheel[25].blink, true);
-    assert.equal(wheel[26].color, 22);
-    assert.equal(wheel[27].color, 22);
+    assert.equal(wheel[24].color, offColor(14));
+    assert.equal(wheel[25].color, offColor(8));
+    assert.equal(wheel[25].blink, false);
+    assert.equal(wheel[26].color, offColor(22));
+    assert.equal(wheel[27].color, offColor(22));
     assert.equal(wheel[29].color, 0);
     assert.equal(wheel[31].color, 0);
   });
@@ -1070,6 +1080,32 @@ describe("surface", () => {
     assert.equal(pixel(phrase, 0, HEADER_H), 1);
     assert.equal(pixel(phrase, 0, HEADER_H + 1), 1);
     assert.equal(pixel(phrase, 32, HEADER_H + 1), 0);
+  });
+
+  it("draws a generator over the phrase and darkens the phrase with a 1px checker", () => {
+    const project = defaultProject();
+    const phrase = renderScreen(project, defaultUi(), 0);
+    const over = renderScreen(project, {
+      ...defaultUi(),
+      focus: { label: "COUNT V", path: "ratchet.count.value", generator: "ratchet.count", showPattern: false, held: true, untilTick: 0, untilMs: 0 },
+    }, 0);
+    assert.equal(over.viz, "generator");
+    const yTop = HEADER_H;
+    const yBottom = HEADER_H + VIZ_H - 2;
+    let punched = 0;
+    for (let y = yTop + 2; y < yBottom; y++) {
+      for (let x = 0; x < 128; x++) {
+        if (!pixel(phrase, x, y)) {
+          assert.equal(pixel(over, x, y), 0);
+          continue;
+        }
+        const kept = (x + y) % 2 === 0;
+        assert.equal(pixel(over, x, y), kept ? 1 : 0);
+        if (!kept) punched++;
+      }
+    }
+    assert.ok(punched > 0);
+    for (let x = 0; x < 128; x++) assert.equal(pixel(over, x, yBottom), 1);
   });
 
   it("keeps the jog layer through a contact bounce and drops it after the release window", () => {

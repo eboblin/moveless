@@ -92,14 +92,19 @@ export function renderScreen(
   drawPager(pixels, mixer ? laneMark : Math.min(pageIndex, Math.max(0, pages.length - 1)), mixer ? MIX_CHANNELS.length : pages.length);
   if (!mixer) drawParamSeparator(pixels);
   const chordRoll = vizLane === "chords" && !capture;
-  const showPhrase = !notice && !mixer && !generator && !capture && (vizLane !== null || bars);
+  const showPhrase = !notice && !mixer && !capture && (vizLane !== null || bars);
   const phrase = showPhrase ? generatePhrase(project) : null;
+  const playhead = playing ? stepAt(project, tick) : -1;
   if (notice) fillViz(pixels);
   else if (mixer) drawMixer(pixels, project, focus);
-  else if (generator) drawGenerator(pixels, project, context, generator, focusState?.showPattern ?? false, playing ? stepAt(project, tick) : -1);
-  else if (bars && phrase) drawChordBars(pixels, phrase, playing ? stepAt(project, tick) : -1);
-  else if (chordRoll && phrase) drawChordRoll(pixels, phrase, playing ? stepAt(project, tick) : -1);
-  else if (vizLane && phrase) drawPhrase(pixels, project, phrase, vizLane, playing ? stepAt(project, tick) : -1);
+  else if (generator && phrase && vizLane) {
+    if (chordRoll) drawChordRoll(pixels, phrase, -1);
+    else drawPhrase(pixels, project, phrase, vizLane, -1);
+    dimPattern(pixels);
+    drawGenerator(pixels, project, context, generator, focusState?.showPattern ?? false, playhead);
+  } else if (bars && phrase) drawChordBars(pixels, phrase, playhead);
+  else if (chordRoll && phrase) drawChordRoll(pixels, phrase, playhead);
+  else if (vizLane && phrase) drawPhrase(pixels, project, phrase, vizLane, playhead);
   const labels = mixer
     ? [{ x: 1, y: 1, text: header.slice(0, LINE_LIMIT) }, ...mixerChannelLabels(project, focus)]
     : drawLabels(project, context, page, focus, header);
@@ -281,6 +286,16 @@ function drawPager(pixels: Uint8Array, index: number, count: number): void {
 /** Solid rule above the knob parameter strip. */
 function drawParamSeparator(pixels: Uint8Array): void {
   for (let x = 0; x < WIDTH; x++) set(pixels, x, SEP_Y, 1);
+}
+
+/** Darken the phrase with a 1px black checker so a VPCA curve can sit on top. */
+function dimPattern(pixels: Uint8Array): void {
+  const y1 = HEADER_H + VIZ_H - 2;
+  for (let y = HEADER_H; y <= y1; y++) {
+    for (let x = 0; x < WIDTH; x++) {
+      if ((x + y) % 2 !== 0) set(pixels, x, y, 0);
+    }
+  }
 }
 
 function drawGenerator(pixels: Uint8Array, project: Project, context: ContextId, path: string, showPattern: boolean, playhead: number): void {

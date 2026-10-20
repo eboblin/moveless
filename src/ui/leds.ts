@@ -186,23 +186,7 @@ function capturePadLeds(project: Project, surface: PadSurface): Led[] {
   const rawPage = surface.heldContext ? surface.heldPage ?? surface.page ?? 0 : surface.page ?? 0;
   const page = Math.min(rawPage, Math.max(0, pageCount(context) - 1));
   const out = Array.from({ length: 32 }, () => led("off", false));
-  const count = pageCount(context);
-  const clear = project.captureIntensity === "clear";
-  for (let index = 0; index < count; index++) {
-    const slot = index < 8 ? 24 + index : 16 + (index - 8);
-    if (index >= 16) break;
-    const color = pageGroupColor(context, index);
-    const zone = captureTouchesPage(project, context, index, page);
-    const current = index === page;
-    const shown = zone ? (clear ? LED.red : color) : offColor(color);
-    const second = clear && zone ? DIM_RED : offColor(color);
-    out[slot] = {
-      family: "yellow",
-      color: shown,
-      blink: current && zone,
-      blinkTo: current && zone ? second || (shown === 124 ? 123 : 124) : undefined,
-    };
-  }
+  paintCapturePages(out, project, context, page);
   CAPTURE_DEPTHS.forEach((id, col) => {
     out[8 + col] = choiceLed("purple", LED.purple, project.captureDepth === id);
   });
@@ -220,6 +204,26 @@ function capturePadLeds(project: Project, surface: PadSurface): Led[] {
 function choiceLed(family: LedFamily, color: number, selected: boolean): Led {
   const dim = color === LED.red ? DIM_RED : shadeColor(color, 0.2);
   return { family, color: selected ? color : dim, blink: false };
+}
+
+/** Top two rows: pages Loop will rewrite. In the zone they are bright, or red when Delete is selected. Outside it they keep a dark partner of their colour. */
+function paintCapturePages(out: Led[], project: Project, context: ContextId, page: number): void {
+  const count = pageCount(context);
+  const clear = project.captureIntensity === "clear";
+  for (let index = 0; index < count && index < 16; index++) {
+    const slot = index < 8 ? 24 + index : 16 + (index - 8);
+    const color = pageGroupColor(context, index);
+    const zone = captureTouchesPage(project, context, index, page);
+    const current = index === page;
+    const shown = zone ? (clear ? LED.red : color) : offColor(color);
+    const second = clear && zone ? DIM_RED : offColor(color);
+    out[slot] = {
+      family: "yellow",
+      color: shown,
+      blink: current && zone,
+      blinkTo: current && zone ? second || (shown === 124 ? 123 : 124) : undefined,
+    };
+  }
 }
 
 /** Pages Loop will rewrite. Aux leaves progression and global alone. */
@@ -287,7 +291,8 @@ function scenePadLeds(project: Project, mode: "journal" | "set", tick: number, j
 }
 
 function wheelPadLeds(project: Project, context: ContextId, page: number): Led[] {
-  const out = pageOverlay(Array.from({ length: 32 }, () => led("off", false)), context, page);
+  const out = Array.from({ length: 32 }, () => led("off", false));
+  paintCapturePages(out, project, context, page);
   TRANSITIONS.forEach((id, col) => {
     out[col] = choiceLed("yellow", LED.yellow, project.transition === id);
   });
