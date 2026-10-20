@@ -113,10 +113,10 @@ const SLOT = {
   amount: { weight: 1.2, min: -1, max: 1, step: 0.01, suffix: "A" },
 } as const;
 
-/** Euclidean voice. Labels stay the short tokens `TITLE_WORD` expands. */
+/** Euclidean voice. Labels stay the short tokens `TITLE_WORD` expands. Hits is light so a reroll can change the count; length stays heavy. */
 const EUCLID = {
   length: { weight: 6, min: 0, max: 64, step: 1, integer: true, word: "LEN", powers: true },
-  hits: { weight: 5, min: 0, max: 64, step: 1, integer: true, word: "HIT" },
+  hits: { weight: 2, min: 0, max: 64, step: 1, integer: true, word: "HIT" },
   rotate: { weight: 2, min: 0, max: 64, step: 1, integer: true, word: "ROT" },
   probability: { weight: 3, min: 0, max: 1, step: 0.01, integer: false, word: "PRB", macro: ["probability"] as const },
 } as const;

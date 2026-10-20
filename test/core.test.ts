@@ -1817,6 +1817,9 @@ describe("surface catalog", () => {
     assert.equal(bindingFor("sound.snap.value")?.weight, 2);
     assert.equal(bindingFor("sound.wave.value")?.weight, 1);
     assert.equal(bindingFor("length.value")?.weight, 1);
+    assert.equal(bindingFor("gen1.hits")?.weight, 2);
+    assert.equal(bindingFor("gen2.hits")?.weight, 2);
+    assert.equal(bindingFor("gen1.length")?.weight, 6);
     assert.equal(bindingFor("gen1.length")?.title, "GEN 1 LENGTH");
     assert.equal(bindingFor("follow")?.short, "FOL");
   });
