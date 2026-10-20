@@ -1,4 +1,4 @@
-import { defaultProgression, defaultProject } from "./defaults.ts";
+import { defaultProject } from "./defaults.ts";
 import { clone } from "./clone.ts";
 import { ensureTrailingEmpty } from "./journal.ts";
 import {
@@ -173,7 +173,7 @@ function mergeUi(raw: unknown): StoredUi {
 
 const PROGRESSION_CLAMP: Record<(typeof PROGRESSION_KEYS)[number], [number, number, boolean]> = {
   start: [-7, 7, true],
-  count: [1, 16, true],
+  count: [0, 16, true],
   length: [0, 4, true],
   motion: [0, 7, true],
   variation: [0, 3, true],
@@ -242,7 +242,6 @@ function acceptJournal(raw: unknown): Project["journal"] {
       id: scene.id,
       color: typeof scene.color === "number" ? scene.color : undefined,
       lanes: acceptLanes(scene.lanes),
-      progression: mergeProgression(defaultProgression(), scene.progression),
     });
   }
   return scenes;

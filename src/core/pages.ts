@@ -482,7 +482,7 @@ function plainPage(
 function progPage(): Page {
   return page("prog", "PROG", ["WALK", "TONE"], "notes", [
     plain("start", "START", -7, 7, 1, true, "progression"),
-    plain("count", "COUNT", 1, 16, 1, true, "progression"),
+    plain("count", "COUNT", 0, 16, 1, true, "progression"),
     plain("length", "LENGTH", 0, 4, 1, true, "progression"),
     plain("motion", "MOTION", 0, 7, 1, true, "progression"),
     plain("variation", "VARIATION", 0, 3, 1, true, "progression"),

@@ -35,7 +35,6 @@ export function record(project: Project): Project {
   const scene: Scene = {
     id,
     lanes: clone(project.working),
-    progression: clone(project.progression),
     color: sceneColor(id),
   };
   return {

@@ -1,5 +1,6 @@
 import { clamp01, SIXTEENTH_TICKS, sixteenthSteps } from "./clock.ts";
 import { hash01 } from "./hash.ts";
+import { latchedPcs, matchQuality } from "./latch.ts";
 import { mod } from "./motif.ts";
 import {
   QUALITY_SEMITONES,
@@ -33,6 +34,7 @@ export function degreeToMidi(degree: number, scale: readonly number[], rootPc: n
 
 /** Pitch classes the chord lane actually plays (chromatic quality from the scale-degree root). */
 export function chordTonePitchClasses(event: HarmonicEvent, scale: readonly number[], rootPc: number): number[] {
+  if (event.pcs && event.pcs.length > 0) return event.pcs.map((pc) => mod(pc, 12));
   const rootPcOfChord = pitchClassOfDegree(event.root, scale, rootPc);
   const semis = QUALITY_SEMITONES[event.quality] ?? QUALITY_SEMITONES[0];
   return [...new Set(semis.map((semi) => mod(rootPcOfChord + semi, 12)))].sort((a, b) => a - b);
@@ -97,6 +99,12 @@ const DEGREE_NUMERAL = ["I", "II", "III", "IV", "V", "VI", "VII"] as const;
 
 /** Note name plus a short quality, from the sounding root. */
 export function chordSymbol(event: HarmonicEvent, global: GlobalSettings): string {
+  if (event.pcs && event.pcs.length > 0) {
+    const matched = matchQuality(event.pcs, event.pcs[0]);
+    const root = matched?.rootPc ?? event.pcs[0];
+    const suffix = matched ? (QUALITY_SUFFIX[matched.quality] ?? "") : "";
+    return `${NOTE_NAMES[mod(root, 12)] ?? "C"}${suffix}`;
+  }
   const scale = scaleOf(global.scale);
   const rootPc = mod(global.root + global.transpose, 12);
   const pc = pitchClassOfDegree(event.root, scale, rootPc);
@@ -106,6 +114,11 @@ export function chordSymbol(event: HarmonicEvent, global: GlobalSettings): strin
 /** Scale degree of the chord root, wrapped into the scale, as a Roman numeral. */
 export function degreeNumeral(event: HarmonicEvent, global: GlobalSettings): string {
   const scale = scaleOf(global.scale);
+  if (event.pcs && event.pcs.length > 0) {
+    const index = scale.indexOf(mod(event.pcs[0] - (global.root + global.transpose), 12));
+    if (index < 0) return "";
+    return DEGREE_NUMERAL[index] ?? "";
+  }
   const index = mod(Math.round(event.root), Math.max(1, scale.length));
   return DEGREE_NUMERAL[index] ?? String(index + 1);
 }
@@ -203,6 +216,19 @@ export function chordLengths(
   return lengths;
 }
 
+function externalHarmony(global: GlobalSettings, span: number): HarmonicEvent[] {
+  const pcs = latchedPcs();
+  if (!pcs || pcs.length === 0) return [];
+  const matched = matchQuality(pcs, pcs[0]);
+  return [{
+    startTick: 0,
+    lengthTicks: Math.max(1, span) * SIXTEENTH_TICKS,
+    root: 0,
+    quality: matched?.quality ?? 0,
+    pcs,
+  }];
+}
+
 function walkSign(way: number, index: number, seed: number): number {
   if (way <= 0) return 1;
   if (way === 1) return -1;
@@ -213,6 +239,7 @@ function walkSign(way: number, index: number, seed: number): number {
 export function generateHarmony(progression: Progression, global: GlobalSettings, steps: number): HarmonicEvent[] {
   const phraseSteps = sixteenthSteps(global.phrase, global.bar);
   const span = Math.max(phraseSteps, Math.round(steps));
+  if (Math.round(progression.count) <= 0) return externalHarmony(global, span);
   const variation = Math.max(0, Math.min(3, Math.round(progression.variation)));
   const lengths = chordLengths(progression.count, progression.length, variation, global.seed, span, global.bar);
   const quality = qualityIndex(clamp01(progression.mood), clamp01(progression.tension));

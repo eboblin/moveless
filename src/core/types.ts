@@ -118,7 +118,7 @@ export const PROGRESSION_KEYS = ["start", "count", "length", "motion", "variatio
 export interface Progression {
   /** Starting scale degree. */
   start: number;
-  /** How many chords fill the phrase. */
+  /** How many chords fill the phrase. 0 listens to external MIDI instead of walking. */
   count: number;
   /** Base harmonic unit: 0 sixteenth, 1 eighth, 2 beat, 3 half bar, 4 bar. */
   length: number;
@@ -193,8 +193,6 @@ export interface Lanes {
 export interface Scene {
   id: string;
   lanes: Lanes;
-  /** Chord walk, recorded with the pattern. Heard as a whole, not blended. */
-  progression: Progression;
   /** Move pad color, assigned once when the scene is recorded. */
   color?: number;
 }
@@ -325,6 +323,8 @@ export interface HarmonicEvent {
   lengthTicks: number;
   root: number;
   quality: number;
+  /** Pitch classes of an external chord, root first. The quality stack is not used. */
+  pcs?: readonly number[];
 }
 
 export interface TimedEvent {

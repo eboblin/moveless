@@ -34,7 +34,8 @@ import {
   heardFx,
 } from "../src/core/performance.ts";
 import { generatePhrase, unitForOctave } from "../src/core/phrase.ts";
-import { pitchClassOfDegree, scaleOf } from "../src/core/harmony.ts";
+import { chordSymbol, degreeNumeral, pitchClassOfDegree, scaleOf } from "../src/core/harmony.ts";
+import { holdNote, latchedPcs, releaseChannel, resetLatch, settleLatch } from "../src/core/latch.ts";
 import { chordLabels, textPreview } from "../src/core/text-preview.ts";
 import { fieldsOf, getPath } from "../src/core/fields.ts";
 import { SOUND, bindingFor, macroOffset, pagesFor } from "../src/core/pages.ts";
@@ -238,7 +239,7 @@ describe("euclid generator", () => {
     assert.equal(generatePhrase(project).lanes.kick.length, 0);
     const other = clone(project);
     other.nextSceneId = 99;
-    other.journal = [{ id: "ghost", lanes: clone(project.working), progression: clone(project.progression) }];
+    other.journal = [{ id: "ghost", lanes: clone(project.working) }];
     assert.deepEqual(generatePhrase(project).lanes.kick, generatePhrase(other).lanes.kick);
   });
 
@@ -504,16 +505,15 @@ describe("morph, journal, macros", () => {
     project.progression.start = 3;
     project = record(project);
     project.working = clone(project.journal[0].lanes);
-    project.progression = clone(project.journal[0].progression);
     project.transition = "medium";
     project = launchScene(project, "002", 0);
     const duration = project.morph?.durationTicks ?? 0;
     const beats = project.global.bar;
     const barTicks = beats * 192;
     const start = generatePhrase({ ...project, morph: null, working: project.morph!.start });
-    const goal = generatePhrase({ ...project, morph: null, working: project.journal[1].lanes, progression: project.journal[1].progression });
+    const goal = generatePhrase({ ...project, morph: null, working: project.journal[1].lanes });
     assert.notDeepEqual(kickSig(start), kickSig(goal));
-    assert.notDeepEqual(start.harmony.map((event) => event.root), goal.harmony.map((event) => event.root));
+    assert.deepEqual(start.harmony.map((event) => event.root), goal.harmony.map((event) => event.root));
 
     const opened = generatePhrase(project);
     assert.deepEqual(kickSig(opened), kickSig(start));
@@ -548,8 +548,9 @@ describe("morph, journal, macros", () => {
 
     const done = applyMorph(project, duration);
     assert.equal(done.morph, null);
+    assert.equal(done.progression.start, 3);
     assert.deepEqual(kickSig(generatePhrase(done)), kickSig(goal));
-    assert.deepEqual(generatePhrase(done).harmony.map((event) => event.root), goal.harmony.map((event) => event.root));
+    assert.deepEqual(generatePhrase(done).harmony.map((event) => event.root), start.harmony.map((event) => event.root));
   });
 
   it("keeps the drum loop length steady and glides a hit's decay", () => {
@@ -815,7 +816,6 @@ function morphPair(setupA: (project: Project) => void, setupB: (project: Project
   setupB(project);
   project = record(project);
   project.working = clone(project.journal[0].lanes);
-  project.progression = clone(project.journal[0].progression);
   project.transition = "medium";
   return launchScene(project, "002", 0);
 }
@@ -1251,6 +1251,105 @@ describe("harmony", () => {
     const notes = generatePhrase(project).lanes.bass.filter((event) => event.step === 0).map((event) => event.note);
     assert.equal(notes.length, 4);
     assert.deepEqual(notes, [36, 48, 60, 72]);
+  });
+
+  it("plays one latched chord for the whole phrase when count is 0", () => {
+    resetLatch();
+    const project = bar(defaultProject(), 1);
+    project.global.phrase = 1;
+    project.progression.count = 0;
+    project.working.chords.rate = modulated(0);
+    assert.equal(generatePhrase(project).harmony.length, 0);
+    assert.equal(generatePhrase(project).lanes.chords.length, 0);
+
+    holdNote(0, 60, 100, 0);
+    holdNote(1, 64, 100, 10);
+    holdNote(0, 67, 80, 20);
+    assert.equal(settleLatch(40), false);
+    assert.equal(settleLatch(80), true);
+    assert.deepEqual(latchedPcs(), [0, 4, 7]);
+
+    const phrase = generatePhrase(project);
+    assert.equal(phrase.harmony.length, 1);
+    assert.deepEqual(phrase.harmony[0].pcs, [0, 4, 7]);
+    assert.equal(phrase.harmony[0].lengthTicks, phrase.steps.chords * 48);
+    assert.deepEqual(phrase.lanes.chords.map((event) => event.note).sort((a, b) => a - b), [48, 52, 55]);
+    assert.equal(chordLabels(project)[0], "C");
+    assert.equal(degreeNumeral(phrase.harmony[0], project.global), "I");
+
+    holdNote(0, 60, 0, 100);
+    holdNote(1, 64, 0, 110);
+    holdNote(0, 67, 0, 120);
+    assert.equal(settleLatch(200), false);
+    assert.deepEqual(latchedPcs(), [0, 4, 7]);
+
+    holdNote(0, 62, 100, 300);
+    assert.equal(settleLatch(340), false);
+    assert.equal(settleLatch(360), true);
+    assert.deepEqual(latchedPcs(), [2]);
+    assert.equal(chordSymbol(generatePhrase(project).harmony[0], project.global), "D");
+    resetLatch();
+  });
+
+  it("keeps a note that another channel still holds, and all-notes-off keeps the latch", () => {
+    resetLatch();
+    holdNote(0, 60, 100, 0);
+    holdNote(1, 60, 100, 0);
+    holdNote(0, 67, 100, 0);
+    assert.equal(settleLatch(50), true);
+    assert.deepEqual(latchedPcs(), [0, 7]);
+    holdNote(0, 60, 0, 80);
+    holdNote(0, 67, 0, 80);
+    assert.equal(settleLatch(140), true);
+    assert.deepEqual(latchedPcs(), [0]);
+
+    resetLatch();
+    holdNote(0, 64, 100, 0);
+    holdNote(0, 67, 100, 0);
+    holdNote(0, 72, 100, 0);
+    assert.equal(settleLatch(50), true);
+    assert.deepEqual(latchedPcs(), [0, 4, 7]);
+
+    resetLatch();
+    holdNote(0, 60, 100, 0);
+    holdNote(0, 64, 100, 0);
+    assert.equal(settleLatch(50), true);
+    releaseChannel(0, 80);
+    assert.equal(settleLatch(200), false);
+    assert.deepEqual(latchedPcs(), [0, 4]);
+    resetLatch();
+  });
+
+  it("lets bass follow latched pitch classes that sit off the scale", () => {
+    resetLatch();
+    holdNote(0, 60, 100, 0);
+    holdNote(0, 64, 100, 0);
+    holdNote(0, 67, 100, 0);
+    assert.equal(settleLatch(50), true);
+    const project = bar(defaultProject());
+    project.global.scale = "minor";
+    project.progression.count = 0;
+    project.working.chords.rate = modulated(0);
+    project.working.bass.gen1 = { ...project.working.bass.gen1, length: 16, hits: 4, rotate: 0, probability: 1 };
+    project.working.bass.gen2.hits = 0;
+    project.working.bass.pitch = modulated(0.5 + 1 / 7);
+    project.working.bass.follow = 0;
+    const free = generatePhrase(project).lanes.bass[0].note;
+    project.working.bass.follow = 1;
+    const phrase = generatePhrase(project);
+    const pcs = phrase.harmony[0].pcs ?? [];
+    assert.deepEqual(pcs, [0, 4, 7]);
+    assert.equal(degreeNumeral(phrase.harmony[0], project.global), "I");
+    for (const event of phrase.lanes.bass) assert.ok(pcs.includes(((event.note % 12) + 12) % 12));
+    assert.notEqual(phrase.lanes.bass[0].note, free);
+
+    resetLatch();
+    holdNote(0, 66, 100, 0);
+    assert.equal(settleLatch(50), true);
+    const named = generatePhrase(project).harmony[0];
+    assert.equal(chordSymbol(named, project.global), "F#");
+    assert.equal(degreeNumeral(named, project.global), "");
+    resetLatch();
   });
 });
 
@@ -1689,7 +1788,7 @@ describe("capture, wander, sets", () => {
     project = createSet(project, "A");
     for (let n = 0; n < 40; n++) {
       const id = String(200 + n);
-      project.journal.push({ id, lanes: clone(project.working), progression: clone(project.progression) });
+      project.journal.push({ id, lanes: clone(project.working) });
       project = addSceneToSet(project, project.activeSetId!, id);
     }
     assert.equal(project.sets[0].sceneIds.length, 32);

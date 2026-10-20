@@ -1,6 +1,5 @@
 import { ticksPerBar } from "./clock.ts";
 import { clone } from "./clone.ts";
-import { defaultProgression } from "./defaults.ts";
 import { fieldsOf, getPath, morphValue, setPath } from "./fields.ts";
 import { PATTERN_LANES, isDrum, isPitched, TRANSITION_BARS, type Lanes, type MorphState, type PatternId, type Project, type Scene, type TransitionId } from "./types.ts";
 
@@ -63,7 +62,6 @@ export function applyMorph(project: Project, tick: number): Project {
   return {
     ...project,
     working,
-    progression: clone(target.progression ?? defaultProgression()),
     morph: null,
     activeSceneId: target.id,
     wanderPreviousTarget: target.id,

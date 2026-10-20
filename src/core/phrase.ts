@@ -15,6 +15,7 @@ import { getPath, mixFieldValues } from "./fields.ts";
 import { hash01 } from "./hash.ts";
 import { morphEndpoints } from "./morph.ts";
 import { applyFollowMidi, chordTonePitchClasses, degreeToMidi, generateHarmony, harmonyAt, pitchClassName, scaleOf } from "./harmony.ts";
+import { latchStamp } from "./latch.ts";
 import { bipolarFromUnit, evalModulated, soundMacro, withMacro } from "./modulate.ts";
 import { macroOffset } from "./pages.ts";
 import { mod } from "./motif.ts";
@@ -111,6 +112,7 @@ function stampGlobal(mix: (n: number) => void, text: (s: string) => void, projec
   }
   for (const lane of LANES) mix(project.lock[lane] ? 1 : 0);
   for (const key of PROGRESSION_KEYS) mix(project.progression[key]);
+  if (Math.round(project.progression.count) <= 0) text(latchStamp());
 }
 
 function idleStamp(project: Project): [number, number] {
@@ -254,6 +256,10 @@ function chordToneMidi(
   toneUnit: number,
   octaveUnit: number,
 ): number {
+  if (harm.pcs && harm.pcs.length > 0) {
+    const pc = harm.pcs[chordToneIndex(toneUnit, harm.pcs.length)] ?? harm.pcs[0];
+    return octaveNumber(octaveUnit) * 12 + mod(pc, 12);
+  }
   const semis = QUALITY_SEMITONES[harm.quality] ?? QUALITY_SEMITONES[0];
   const semi = semis[chordToneIndex(toneUnit, semis.length)] ?? 0;
   const root = mod(degreeToMidi(harm.root, scale, rootPc, 0), 12);

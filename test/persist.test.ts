@@ -75,7 +75,6 @@ describe("project persist", () => {
       };
     };
     delete raw.project.progression;
-    delete raw.project.journal[0].progression;
     raw.project.working.chords.start = 3;
     raw.project.working.chords.count = 6;
     raw.project.journal[0].lanes.chords.start = 2;
@@ -83,7 +82,16 @@ describe("project persist", () => {
     assert.ok(parsed);
     assert.equal(parsed.project.progression.start, defaultProject().progression.start);
     assert.equal(parsed.project.progression.count, defaultProject().progression.count);
-    assert.equal(parsed.project.journal[0].progression.start, defaultProject().progression.start);
+    assert.equal("progression" in parsed.project.journal[0], false);
+  });
+
+  it("keeps progression count 0 on the project and out of the scene", () => {
+    const project = record(defaultProject());
+    project.progression.count = 0;
+    const parsed = parseStored(serializeStored(project, { context: "aux", page: 0, mode: "journal", playing: true }));
+    assert.ok(parsed);
+    assert.equal(parsed.project.progression.count, 0);
+    assert.equal("progression" in parsed.project.journal[0], false);
   });
 
   it("clears morph and wander origin on parse", () => {

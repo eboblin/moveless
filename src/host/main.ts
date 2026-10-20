@@ -1,5 +1,6 @@
 import { SAMPLE_RATE } from "../core/clock.ts";
 import { defaultProject } from "../core/defaults.ts";
+import { holdNote, latchStamp, releaseChannel, resetLatch, settleLatch } from "../core/latch.ts";
 import { advance, clampJournalPage, heardFx, journalPageCount, wanderCandidates } from "../core/performance.ts";
 import { generatePhrase } from "../core/phrase.ts";
 import { loadStoredProject, saveStoredProject, type HostFiles, type StoredUi } from "../core/persist.ts";
@@ -79,6 +80,7 @@ let sentMs = 0;
 let phraseProject: Project | null = null;
 let phraseBody = "";
 let phraseSent = "";
+let phraseLatch = "";
 let voiceStep = -1;
 let voiceMorph = false;
 let projectDirty = false;
@@ -120,11 +122,14 @@ function syncVoice(reset: boolean): void {
   const step = Math.floor(session.tick / 48);
   const morphing = session.project.morph !== null;
   const boundary = morphing !== voiceMorph || step !== voiceStep;
-  if (phraseProject !== session.project && (!morphing || boundary || reset)) {
+  const latch = Math.round(session.project.progression.count) <= 0 ? latchStamp() : "";
+  const latchChanged = latch !== phraseLatch;
+  if ((phraseProject !== session.project && (!morphing || boundary || reset)) || latchChanged) {
     const phrase = generatePhrase(session.project);
     phraseBody = packPhraseBody(phraseLoop(session.project, phrase), soundMotions(session.project, phrase), formatFx(heardFx(session.project), session.project.global.bar));
     phraseProject = session.project;
     phraseSent = "";
+    phraseLatch = latch;
   }
   voiceStep = step;
   voiceMorph = morphing;
@@ -172,6 +177,7 @@ let paintProject: Project | null = null;
 let paintUi: UiState | null = null;
 let paintPlaying = false;
 let paintStep = -1;
+let paintLatch = "";
 let paintNotice = false;
 let paintFocus = false;
 let paintPeek: string | null = null;
@@ -189,6 +195,7 @@ function screenChanged(): boolean {
   const notice = !!(ui.notice && now < ui.notice.untilMs);
   const focus = focusVisible(ui.focus, session.tick, now);
   const peek = peekKind(ui);
+  const latch = Math.round(session.project.progression.count) <= 0 ? latchStamp() : "";
   if (
     paintProject === session.project &&
     paintUi === ui &&
@@ -196,7 +203,8 @@ function screenChanged(): boolean {
     paintStep === step &&
     paintNotice === notice &&
     paintFocus === focus &&
-    paintPeek === peek
+    paintPeek === peek &&
+    paintLatch === latch
   ) {
     return false;
   }
@@ -207,6 +215,7 @@ function screenChanged(): boolean {
   paintNotice = notice;
   paintFocus = focus;
   paintPeek = peek;
+  paintLatch = latch;
   return true;
 }
 
@@ -411,10 +420,13 @@ function advanceClock(): void {
 
 export function init(): void {
   session = boot();
+  resetLatch();
   voiceOn = false;
   phraseProject = null;
   phraseBody = "";
   phraseSent = "";
+  phraseLatch = "";
+  paintLatch = "";
   voiceStep = -1;
   voiceMorph = false;
   clockMs = Date.now();
@@ -455,12 +467,25 @@ export function init(): void {
 }
 
 export function tick(): void {
+  settleLatch(Date.now());
   advanceClock();
   const ui = settleWheel(session.ui);
   if (ui !== session.ui) session = { ...session, ui };
   maybeAutosave();
   paint();
   drainLeds();
+}
+
+export function onMidiMessageExternal(data: number[]): void {
+  if (!data || data.length < 3) return;
+  const status = data[0] ?? 0;
+  const type = status & 0xf0;
+  const channel = status & 0x0f;
+  const data1 = data[1] ?? 0;
+  const data2 = data[2] ?? 0;
+  const now = Date.now();
+  if (type === 0xb0 && (data1 === 120 || data1 === 123)) releaseChannel(channel, now);
+  else if (type === 0x90 || type === 0x80) holdNote(channel, data1, type === 0x80 ? 0 : data2, now);
 }
 
 export function onMidiMessageInternal(data: number[]): void {
@@ -494,9 +519,11 @@ const root = globalThis as HostGlobals & {
   init?: () => void;
   tick?: () => void;
   onMidiMessageInternal?: (data: number[]) => void;
+  onMidiMessageExternal?: (data: number[]) => void;
   onUnload?: () => void;
 };
 root.init = init;
 root.tick = tick;
 root.onMidiMessageInternal = onMidiMessageInternal;
+root.onMidiMessageExternal = onMidiMessageExternal;
 root.onUnload = onUnload;

@@ -385,7 +385,7 @@ function chordNameLabels(project: Project, phrase: Phrase): Label[] {
       invert: true,
     });
     const numeral = degreeNumeral(span.event, project.global);
-    if (numeral.length > chars) continue;
+    if (!numeral || numeral.length > chars) continue;
     const numeralW = numeral.length * CHAR_W;
     labels.push({
       x: span.x0 + Math.max(0, Math.floor((width - numeralW) / 2)),
@@ -605,6 +605,9 @@ function bucket(index: number, count: number, size: number): [number, number] {
 
 /** Pitch and octave show the resting note. Chord rate shows BLOCK or a division. */
 function figureHeader(project: Project, context: ContextId, binding: Binding): string | null {
+  if (binding.store === "progression" && binding.path === "count" && Math.round(readControl(project, context, binding.path)) === 0) {
+    return "MIDI";
+  }
   switch (binding.display) {
     case "pitch":
       if (context !== "bass" && context !== "lead") return null;

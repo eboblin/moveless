@@ -798,6 +798,15 @@ describe("surface", () => {
     const chords = renderScreen(defaultProject(), { ...defaultUi(), context: "aux" }, 0);
     const chordNames = chords.labels.filter((label) => label.y === NAME_Y).map((label) => label.text);
     assert.deepEqual(chordNames, ["STA", "COU", "LEN", "MOT", "VAR", "MOO", "TEN", "WAY"]);
+    const midi = defaultProject();
+    midi.progression.count = 0;
+    const held = renderScreen(midi, {
+      ...defaultUi(),
+      context: "aux",
+      focus: { label: "COUNT", path: "count", generator: null, showPattern: false, held: true, untilTick: 0, untilMs: 0 },
+    }, 0);
+    assert.equal(held.header, "MIDI");
+    assert.equal(bindingFor("count")?.min, 0);
   });
 
   it("draws bass and lead notes across their length and wraps the tail", () => {
