@@ -6,11 +6,13 @@ import {
   isDrum,
   isLane,
   LANES,
-  STEPS,
+  STEP_COUNT,
+  contextAtStep,
   TRANSITIONS,
   WANDERS,
   type ContextId,
   type LaneId,
+  type PatternId,
   type Project,
 } from "../core/types.ts";
 import { pageCount, pageGroup, pageGroupColor, pagesFor } from "../core/pages.ts";
@@ -31,7 +33,7 @@ export const LED = {
 /** Dark partner of the standard red. Pure red 127 has none of its own. */
 const DIM_RED = 66;
 
-export type LedFamily = "red" | "yellow" | "purple" | "lock" | "off";
+export type LedFamily = "red" | "yellow" | "purple" | "lock" | "green" | "off";
 
 export interface Led {
   family: LedFamily;
@@ -47,17 +49,19 @@ const COLOR: Record<LedFamily, number> = {
   yellow: LED.yellow,
   purple: LED.purple,
   lock: LED.lock,
+  green: 9,
 };
 
 export function laneFamily(lane: LaneId): "red" | "yellow" {
   return isDrum(lane) ? "red" : "yellow";
 }
 
-export function stepLed(project: Project, context: ContextId, lane: LaneId): Led {
+export function stepLed(project: Project, context: ContextId, lane: PatternId): Led {
   const current = context === lane;
-  const family = project.lock[lane] ? "lock" : laneFamily(lane);
+  const family = project.lock[lane] ? "lock" : lane === "fx" ? "green" : laneFamily(lane);
   // The selected step blinks in every mute, solo and lock state, so the lane you are on stays visible.
   if (current) return led(family, true);
+  if (lane === "fx") return led(project.mute.fx ? "off" : family, false);
   if (!laneHeard(project, lane)) return led("off", false);
   return led(family, false);
 }
@@ -67,8 +71,13 @@ export function auxLed(current: boolean): Led {
 }
 
 export function stepLeds(project: Project, context: ContextId): Led[] {
-  const out = STEPS.map((id) => (isLane(id) ? stepLed(project, context, id) : auxLed(context === id)));
-  while (out.length < 16) out.push(led("off", false));
+  const out: Led[] = [];
+  for (let index = 0; index < STEP_COUNT; index++) {
+    const id = contextAtStep(index);
+    if (!id) out.push(led("off", false));
+    else if (isLane(id)) out.push(stepLed(project, context, id));
+    else out.push(auxLed(context === id));
+  }
   return out;
 }
 
@@ -165,6 +174,9 @@ function mutePeekLeds(project: Project): Led[] {
     out[16 + col] = { family: "yellow", color: soloed, blink: false };
     out[8 + col] = { family: "purple", color: locked, blink: false };
   });
+  const fxCol = LANES.length;
+  out[24 + fxCol] = { family: "green", color: shadeColor(9, project.mute.fx ? PEEK_DIM : 1), blink: false };
+  out[8 + fxCol] = { family: "purple", color: shadeColor(PEEK_LOCK, project.lock.fx ? 1 : PEEK_DIM), blink: false };
   return out;
 }
 
@@ -210,7 +222,7 @@ function choiceLed(family: LedFamily, color: number, selected: boolean): Led {
   return { family, color: selected ? color : dim, blink: false };
 }
 
-/** Pages Loop will rewrite. Aux leaves progression, space and global alone. */
+/** Pages Loop will rewrite. Aux leaves progression and global alone. */
 function captureTouchesPage(project: Project, context: ContextId, index: number, page: number): boolean {
   const pages = pagesFor(context);
   const item = pages[index];

@@ -123,9 +123,9 @@ describe("dsp adapter", () => {
     };
     const dry = renderBlock(createEngine(), [hit], 120, 22000);
     const engine = createEngine();
-    engine.space.reverb.decay = 0.95;
-    engine.space.reverb.level = 1;
-    engine.space.reverb.size = 0.6;
+    engine.fx.reverb.decay = 0.95;
+    engine.fx.reverb.level = 1;
+    engine.fx.reverb.size = 0.6;
     const wet = renderBlock(engine, [{
       ...hit,
       params: params.map((param) => param.id === "reverb" ? { ...param, value: 1 } : param),

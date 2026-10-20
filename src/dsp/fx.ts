@@ -1,5 +1,5 @@
 import { SAMPLE_RATE } from "../core/clock.ts";
-import { SPACE_DELAY, SPACE_REVERB, type Space } from "../core/types.ts";
+import { FX_DELAY, FX_REVERB, type Fx } from "../core/types.ts";
 
 const SR = SAMPLE_RATE;
 /** Dattorro published the plate at 29761 Hz. Delay lengths scale from there. */
@@ -148,7 +148,7 @@ function smooth(state: number, x: number, coef: number): number {
 }
 
 /** Plate. SIZE stretches the tank. DECAY is the crossfeed. DAMP darkens it, LOW thins the bottom. */
-export function tankSample(tank: Tank, knobs: Space["reverb"], inL: number, inR: number): [number, number] {
+export function tankSample(tank: Tank, knobs: Fx["reverb"], inL: number, inR: number): [number, number] {
   const energyIn = Math.abs(inL) + Math.abs(inR);
   if (energyIn < 1e-7 && tank.quiet > SR / 2) return [0, 0];
   const pre = delayed(tank.pre, Math.max(1, knobs.pre * 0.2 * SR), (inL + inR) * 0.5);
@@ -184,7 +184,7 @@ export function tankSample(tank: Tank, knobs: Space["reverb"], inL: number, inR:
 }
 
 /** Stereo delay. TIME runs from a 32nd note to one bar, never longer than two seconds. */
-export function echoSample(echo: Echo, knobs: Space["delay"], beats: number, tempo: number, inL: number, inR: number): [number, number] {
+export function echoSample(echo: Echo, knobs: Fx["delay"], beats: number, tempo: number, inL: number, inR: number): [number, number] {
   const energyIn = Math.abs(inL) + Math.abs(inR);
   if (energyIn < 1e-7 && echo.quiet > SR / 2) return [0, 0];
   const bar = Math.max(1, beats);
@@ -211,7 +211,7 @@ export function echoSample(echo: Echo, knobs: Space["delay"], beats: number, tem
   return [outL, outR];
 }
 
-function color(echo: Echo, side: "l" | "r", x: number, knobs: Space["delay"]): number {
+function color(echo: Echo, side: "l" | "r", x: number, knobs: Fx["delay"]): number {
   const hi = 0.05 + knobs.hi * 0.95;
   if (side === "l") echo.lpL = smooth(echo.lpL, x, hi);
   else echo.lpR = smooth(echo.lpR, x, hi);
@@ -224,10 +224,10 @@ function color(echo: Echo, side: "l" | "r", x: number, knobs: Space["delay"]): n
 }
 
 /** Sixteen knobs, then beats per bar, already mixed for this moment. */
-export function formatSpace(space: Space, beats: number): string {
+export function formatFx(fx: Fx, beats: number): string {
   const nums = [
-    ...SPACE_REVERB.map((key) => space.reverb[key]),
-    ...SPACE_DELAY.map((key) => space.delay[key]),
+    ...FX_REVERB.map((key) => fx.reverb[key]),
+    ...FX_DELAY.map((key) => fx.delay[key]),
     beats,
   ];
   return nums.map((n) => n.toFixed(4)).join(",");

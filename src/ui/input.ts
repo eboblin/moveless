@@ -23,7 +23,7 @@ import {
   toggleLock,
   toggleMute,
 } from "../core/performance.ts";
-import { CAPTURE_CC, CAPTURE_DEPTHS, CAPTURE_SCOPES, DOWN_CC, isLane, LANES, LOOP_CC, MENU_CC, MUTE_CC, PLAY_CC, STEPS, TRANSITIONS, UP_CC, WANDERS, type ContextId, type LaneId, type Project } from "../core/types.ts";
+import { CAPTURE_CC, CAPTURE_DEPTHS, CAPTURE_SCOPES, contextAtStep, DOWN_CC, isLane, LANES, LOOP_CC, MENU_CC, MUTE_CC, PLAY_CC, TRANSITIONS, UP_CC, WANDERS, type ContextId, type PatternId, type Project } from "../core/types.ts";
 import { resetControl, writeControl } from "./controls.ts";
 import { bindingFor, bindingPaths, mixerPage, pageCount, pageGroup, pagesFor } from "../core/pages.ts";
 import { applyBookmark, FOCUS_HOLD_MS, focusHoldTicks, HOLD_MS, HOLD_TICKS, holdIsShort, mutePeekOpen, peekKind, rememberPage, type Notice, type UiState } from "./state.ts";
@@ -82,7 +82,7 @@ function onCc(session: Session, cc: number, value: number, press: boolean): Sess
 }
 
 function onStep(session: Session, index: number, press: boolean): Session {
-  const step = STEPS[index];
+  const step = contextAtStep(index);
   if (!step) return session;
   if (isLane(step)) {
     if (session.ui.deleteHeld && press) {
@@ -299,7 +299,19 @@ function captureFromEncoder(session: Session, path: string, held: boolean): Sess
     };
   }
   const target = generatorTarget(path);
-  if (!target) return null;
+  if (!target) {
+    if (context !== "fx") return null;
+    const focusBinding = bindingFor(path) ?? { path, label: path };
+    return {
+      ...session,
+      project: capturePaths(session.project, context, [path]),
+      ui: {
+        ...session.ui,
+        captureGenerator: path,
+        focus: focusFor(session, focusBinding, held),
+      },
+    };
+  }
   const focusBinding = bindingFor(path) ?? { path, label: target };
   return {
     ...session,
@@ -372,12 +384,17 @@ function onMute(session: Session, press: boolean): Session {
   };
 }
 
-/** Top row toggles mute, the next solos, the next locks. The eighth column and the bottom row stay dark. */
+/** Top row toggles mute, the next solos, the next locks. Fx takes the eighth column: mute and lock, no solo. */
 function onMutePad(session: Session, index: number): Session {
   const row = Math.floor(index / 8);
   const col = index % 8;
+  if (col === LANES.length) {
+    if (row === 3) return { ...session, project: toggleMute(session.project, "fx") };
+    if (row === 1) return { ...session, project: toggleLock(session.project, "fx") };
+    return session;
+  }
   const lane = LANES[col];
-  if (!lane || col > 6) return session;
+  if (!lane) return session;
   if (row === 3) return { ...session, project: toggleMute(session.project, lane) };
   if (row === 2) return { ...session, project: toggleSolo(session.project, lane) };
   if (row === 1) return { ...session, project: toggleLock(session.project, lane) };
@@ -443,7 +460,7 @@ function surfaceKind(path: string): "mix" | "perf" | null {
   return null;
 }
 
-/** Mixer and macro pages of the section button. Progression, space and global stay put. */
+/** Mixer and macro pages of the section button. Progression and global stay put. */
 function auxSurface(scope: Project["captureScope"], page: number): { kind: "mix" | "perf"; paths: string[] } | null {
   const pages = pagesFor("aux");
   const current = pages[Math.min(page, Math.max(0, pages.length - 1))];
@@ -453,7 +470,7 @@ function auxSurface(scope: Project["captureScope"], page: number): { kind: "mix"
   return { kind, paths: chosen.flatMap((item) => bindingPaths(item)) };
 }
 
-function rerollCapture(project: Project, lane: LaneId, page: number): Project {
+function rerollCapture(project: Project, lane: PatternId, page: number): Project {
   if (project.captureScope === "lane") return captureLane(project, lane, "all");
   if (project.captureScope === "page") {
     const pages = pagesFor(lane);
@@ -461,7 +478,8 @@ function rerollCapture(project: Project, lane: LaneId, page: number): Project {
     return capturePaths(project, lane, current ? bindingPaths(current) : []);
   }
   const scope = pageGroup(lane, page);
-  return captureLane(project, lane, scope === "sound" || scope === "notes" || scope === "fx" ? scope : "pattern");
+  const group = scope === "sound" || scope === "notes" || scope === "fx" ? scope : "pattern";
+  return captureLane(project, lane, group);
 }
 
 function onArrow(session: Session, direction: -1 | 1): Session {

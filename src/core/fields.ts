@@ -1,5 +1,5 @@
 import { lanePages, type MorphKind } from "./pages.ts";
-import { LANES, type LaneId, type Lanes } from "./types.ts";
+import { PATTERN_LANES, type Lanes, type PatternId } from "./types.ts";
 
 export type { MorphKind };
 
@@ -16,8 +16,8 @@ interface Slot {
   kind: MorphKind;
 }
 
-const SLOTS: Record<LaneId, Slot[]> = {} as Record<LaneId, Slot[]>;
-for (const lane of LANES) {
+const SLOTS: Record<PatternId, Slot[]> = {} as Record<PatternId, Slot[]>;
+for (const lane of PATTERN_LANES) {
   const slots: Slot[] = [];
   for (const item of lanePages(lane)) {
     for (const binding of item.bindings) {
@@ -40,7 +40,7 @@ function readSlot(root: object, parts: readonly string[]): number {
 
 export function fieldsOf(lanes: Lanes): Field[] {
   const out: Field[] = [];
-  for (const lane of LANES) {
+  for (const lane of PATTERN_LANES) {
     const root = lanes[lane];
     for (const slot of SLOTS[lane]) out.push({ path: slot.full, kind: slot.kind, value: readSlot(root, slot.parts) });
   }
@@ -48,8 +48,8 @@ export function fieldsOf(lanes: Lanes): Field[] {
 }
 
 /** Mix field values into a stamp. No Field objects. */
-export function mixFieldValues(lanes: Lanes, mix: (n: number) => void, only?: LaneId): void {
-  const list = only ? [only] : LANES;
+export function mixFieldValues(lanes: Lanes, mix: (n: number) => void, only?: PatternId): void {
+  const list = only ? [only] : PATTERN_LANES;
   for (const lane of list) {
     const root = lanes[lane];
     for (const slot of SLOTS[lane]) mix(readSlot(root, slot.parts));

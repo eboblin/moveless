@@ -16,7 +16,7 @@ import {
   type Project,
   type GlobalSettings,
   type Progression,
-  type Space,
+  type Fx,
 } from "./types.ts";
 
 /** Pattern, cycle and amount sit at rest. Cycle 1 is the bottom of the knob; amount 0 keeps it silent. */
@@ -211,7 +211,7 @@ function chords(): ChordLane {
   };
 }
 
-export function defaultSpace(): Space {
+export function defaultFx(): Fx {
   return {
     reverb: {
       size: 0.45,
@@ -261,6 +261,7 @@ export function defaultLanes(): Lanes {
     bass,
     lead,
     chords: chords(),
+    fx: defaultFx(),
   };
 }
 
@@ -275,6 +276,8 @@ export function defaultProject(): Project {
     lock[lane] = false;
     mixer[lane] = 1;
   }
+  mute.fx = false;
+  lock.fx = false;
   return {
     motifBankVersion: MOTIF_BANK_VERSION,
     nextSceneId: 1,
@@ -290,7 +293,6 @@ export function defaultProject(): Project {
     lock,
     working: defaultLanes(),
     progression: defaultProgression(),
-    space: defaultSpace(),
     transition: "fast",
     wander: null,
     wanderPreviousTarget: null,

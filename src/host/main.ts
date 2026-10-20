@@ -1,10 +1,10 @@
 import { SAMPLE_RATE } from "../core/clock.ts";
 import { defaultProject } from "../core/defaults.ts";
-import { advance, clampJournalPage, journalPageCount, wanderCandidates } from "../core/performance.ts";
+import { advance, clampJournalPage, heardFx, journalPageCount, wanderCandidates } from "../core/performance.ts";
 import { generatePhrase } from "../core/phrase.ts";
 import { loadStoredProject, saveStoredProject, type HostFiles, type StoredUi } from "../core/persist.ts";
 import { phraseLoop, soundMotions } from "../dsp/schedule.ts";
-import { formatSpace } from "../dsp/space.ts";
+import { formatFx } from "../dsp/fx.ts";
 import { packPhraseBody } from "../dsp/voice.ts";
 import { reduce, type MidiMsg, type Session } from "../ui/input.ts";
 import { CAPTURE_CC, DOWN_CC, MENU_CC, MUTE_CC, PLAY_CC, UP_CC } from "../core/types.ts";
@@ -122,7 +122,7 @@ function syncVoice(reset: boolean): void {
   const boundary = morphing !== voiceMorph || step !== voiceStep;
   if (phraseProject !== session.project && (!morphing || boundary || reset)) {
     const phrase = generatePhrase(session.project);
-    phraseBody = packPhraseBody(phraseLoop(session.project, phrase), soundMotions(session.project, phrase), formatSpace(session.project.space, session.project.global.bar));
+    phraseBody = packPhraseBody(phraseLoop(session.project, phrase), soundMotions(session.project, phrase), formatFx(heardFx(session.project), session.project.global.bar));
     phraseProject = session.project;
     phraseSent = "";
   }

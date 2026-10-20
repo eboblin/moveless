@@ -4,7 +4,7 @@ import { clone } from "../src/core/clone.ts";
 import { sampleOffset, SIXTEENTH_TICKS, unitForIndex } from "../src/core/clock.ts";
 import { defaultProject } from "../src/core/defaults.ts";
 import { euclidPattern, phraseStepsOf } from "../src/core/events.ts";
-import { applyMorph, writeSpace } from "../src/core/morph.ts";
+import { applyMorph } from "../src/core/morph.ts";
 import { motif, MOTIF_COUNT } from "../src/core/motif.ts";
 import { modulated } from "../src/core/modulate.ts";
 import {
@@ -31,13 +31,14 @@ import {
   setCaptureIntensity,
   setMacro,
   audibleEvents,
+  heardFx,
 } from "../src/core/performance.ts";
 import { generatePhrase, unitForOctave } from "../src/core/phrase.ts";
 import { pitchClassOfDegree, scaleOf } from "../src/core/harmony.ts";
 import { chordLabels, textPreview } from "../src/core/text-preview.ts";
 import { fieldsOf, getPath } from "../src/core/fields.ts";
 import { SOUND, bindingFor, macroOffset, pagesFor } from "../src/core/pages.ts";
-import { LANES, type Project, type ScaleId } from "../src/core/types.ts";
+import { LANES, PATTERN_LANES, type Project, type ScaleId } from "../src/core/types.ts";
 import { hasSoundMap } from "../src/dsp/map.ts";
 import { punch } from "../src/core/morph.ts";
 
@@ -237,7 +238,7 @@ describe("euclid generator", () => {
     assert.equal(generatePhrase(project).lanes.kick.length, 0);
     const other = clone(project);
     other.nextSceneId = 99;
-    other.journal = [{ id: "ghost", lanes: clone(project.working), progression: clone(project.progression), space: clone(project.space) }];
+    other.journal = [{ id: "ghost", lanes: clone(project.working), progression: clone(project.progression) }];
     assert.deepEqual(generatePhrase(project).lanes.kick, generatePhrase(other).lanes.kick);
   });
 
@@ -1688,7 +1689,7 @@ describe("capture, wander, sets", () => {
     project = createSet(project, "A");
     for (let n = 0; n < 40; n++) {
       const id = String(200 + n);
-      project.journal.push({ id, lanes: clone(project.working), progression: clone(project.progression), space: clone(project.space) });
+      project.journal.push({ id, lanes: clone(project.working), progression: clone(project.progression) });
       project = addSceneToSet(project, project.activeSetId!, id);
     }
     assert.equal(project.sets[0].sceneIds.length, 32);
@@ -1706,24 +1707,44 @@ describe("capture, wander, sets", () => {
     assert.ok(later.wanderPreviousTarget === "001" || later.wanderPreviousTarget === "002");
   });
 
-  it("records space with the scene and glides it, holding a punched knob", () => {
+  it("records fx with the scene and glides it, holding a punched knob", () => {
     let project = defaultProject();
-    project.space.reverb.size = 0;
+    project.working.fx.reverb.size = 0;
     project = record(project);
-    assert.equal(project.journal[0].space.reverb.size, 0);
-    project.space.reverb.size = 1;
+    assert.equal(project.journal[0].lanes.fx.reverb.size, 0);
+    project.working.fx.reverb.size = 1;
     project = record(project);
     project.working = clone(project.journal[0].lanes);
-    project.space = clone(project.journal[0].space);
     project.transition = "fast";
     project = launchScene(project, "002", 0);
     const duration = project.morph?.durationTicks ?? 0;
     const mid = applyMorph(project, duration / 2);
-    assert.ok(Math.abs(mid.space.reverb.size - 0.5) < 1e-6);
-    const held = writeSpace(mid, "reverb.size", 0.2);
+    assert.ok(Math.abs(mid.working.fx.reverb.size - 0.5) < 1e-6);
+    const held = punch(mid, "fx.reverb.size", 0.2);
     const landed = applyMorph(held, duration);
-    assert.ok(Math.abs(landed.space.reverb.size - 0.2) < 1e-9);
+    assert.ok(Math.abs(landed.working.fx.reverb.size - 0.2) < 1e-9);
     assert.equal(landed.morph, null);
+
+    let locked = defaultProject();
+    locked.working.fx.reverb.size = 0;
+    locked = record(locked);
+    locked.working.fx.reverb.size = 1;
+    locked = record(locked);
+    locked.working = clone(locked.journal[0].lanes);
+    locked.lock.fx = true;
+    locked.transition = "fast";
+    locked = launchScene(locked, "002", 0);
+    const stayed = applyMorph(locked, locked.morph?.durationTicks ?? 0);
+    assert.equal(stayed.morph, null);
+    assert.equal(stayed.working.fx.reverb.size, 0);
+
+    locked.mute.fx = true;
+    assert.equal(heardFx(locked).reverb.level, 0);
+    assert.equal(locked.working.fx.reverb.level, defaultProject().working.fx.reverb.level);
+    const cleared = captureLane({ ...locked, lock: { ...locked.lock, fx: false }, captureIntensity: "clear" }, "fx", "fx");
+    assert.equal(cleared.working.fx.reverb.size, defaultProject().working.fx.reverb.size);
+    const heldLock = captureLane({ ...locked, captureIntensity: "clear" }, "fx", "all");
+    assert.equal(heldLock.working.fx.reverb.size, 0);
   });
 });
 
@@ -1732,7 +1753,7 @@ describe("surface catalog", () => {
     const project = defaultProject();
     const fields = fieldsOf(project.working);
     const fieldPaths = new Set(fields.map((field) => field.path));
-    for (const lane of LANES) {
+    for (const lane of PATTERN_LANES) {
       const seen = new Set<string>();
       for (const item of pagesFor(lane)) {
         for (const binding of item.bindings) {
@@ -1751,9 +1772,11 @@ describe("surface catalog", () => {
         const rel = field.path.slice(lane.length + 1);
         assert.equal(bindingFor(rel)?.morph, field.kind);
       }
-      for (const id of SOUND[lane]) {
-        assert.equal(typeof project.working[lane].sound[id]?.value, "number");
-        assert.equal(hasSoundMap(lane, id), true);
+      if (lane !== "fx") {
+        for (const id of SOUND[lane]) {
+          assert.equal(typeof project.working[lane].sound[id]?.value, "number");
+          assert.equal(hasSoundMap(lane, id), true);
+        }
       }
     }
     const macroKeys = new Set<string>();
@@ -1783,6 +1806,8 @@ describe("surface catalog", () => {
     assert.equal(bindingFor("sound.wave.amount")?.morph, "lerp");
     assert.equal(bindingFor("sound.wave.pattern")?.morph, "switch");
     assert.equal(bindingFor("filter.cutoff.value")?.morph, "lerp");
+    assert.equal(bindingFor("reverb.size")?.morph, "lerp");
+    assert.equal(bindingFor("delay.time")?.morph, "lerp");
     assert.equal(bindingFor("pitch.value")?.morph, "switch");
     assert.equal(bindingFor("follow")?.morph, "switch");
     assert.equal(bindingFor("gen1.length")?.morph, "switch");

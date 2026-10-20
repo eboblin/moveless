@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { defaultProject, defaultSpace } from "../src/core/defaults.ts";
+import { defaultFx, defaultProject } from "../src/core/defaults.ts";
 import { record, setCaptureDepth, setCaptureIntensity, setCaptureScope } from "../src/core/performance.ts";
 import {
   PROJECT_PATH,
@@ -49,16 +49,18 @@ describe("project persist", () => {
     assert.equal(parsed.ui.playing, false);
   });
 
-  it("fills space and sends when an older project never stored them", () => {
+  it("keeps a missing fx lane at the factory and ignores a stray fx field", () => {
     const project = defaultProject();
     const raw = JSON.parse(serializeStored(project, { context: "kick", page: 0, mode: "journal", playing: true })) as {
-      project: { space?: unknown; working: { bass: { send?: unknown } } };
+      project: { fx?: unknown; working: { fx?: unknown; bass: { send?: unknown } } };
     };
-    delete raw.project.space;
+    delete raw.project.working.fx;
     delete raw.project.working.bass.send;
+    raw.project.fx = { reverb: { size: 0.2 }, delay: { time: 0.15 } };
     const parsed = parseStored(JSON.stringify(raw));
     assert.ok(parsed);
-    assert.equal(parsed.project.space.reverb.size, defaultSpace().reverb.size);
+    assert.equal(parsed.project.working.fx.reverb.size, defaultFx().reverb.size);
+    assert.equal(parsed.project.working.fx.delay.time, defaultFx().delay.time);
     assert.equal(parsed.project.working.bass.send.reverb.value, 0);
     assert.equal(parsed.project.working.bass.send.delay.value, 0);
   });
@@ -88,7 +90,6 @@ describe("project persist", () => {
     const project = defaultProject();
     project.morph = {
       start: project.working,
-      startSpace: project.space,
       targetId: "001",
       originTick: 100,
       durationTicks: 200,

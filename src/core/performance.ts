@@ -8,6 +8,7 @@ export {
   ensureTrailingEmpty,
   journalPadIds,
   journalPageCount,
+  heardFx,
   laneHeard,
   launchScene,
   pasteClipboard,

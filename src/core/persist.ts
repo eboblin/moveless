@@ -1,11 +1,11 @@
-import { defaultProgression, defaultProject, defaultSpace } from "./defaults.ts";
+import { defaultProgression, defaultProject } from "./defaults.ts";
 import { clone } from "./clone.ts";
 import { ensureTrailingEmpty } from "./journal.ts";
 import {
   CAPTURE_DEPTHS,
   CAPTURE_INTENSITIES,
   CAPTURE_SCOPES,
-  LANES,
+  PATTERN_LANES,
   PROGRESSION_KEYS,
   SCALE_IDS,
   STEPS,
@@ -17,8 +17,8 @@ import {
   type ContextId,
   type Lanes,
   type Progression,
+  type PatternId,
   type Project,
-  type Space,
   type TransitionId,
   type WanderId,
 } from "./types.ts";
@@ -130,7 +130,6 @@ function mergeProject(raw: Record<string, unknown>): Project {
     lock: { ...base.lock, ...(isRecord(raw.lock) ? (raw.lock as Project["lock"]) : {}) },
     working: acceptLanes(raw.working),
     progression: mergeProgression(base.progression, raw.progression),
-    space: mergeSpace(base.space, raw.space),
     transition: asTransition(raw.transition) ?? base.transition,
     wander: raw.wander === null ? null : asWander(raw.wander) ?? base.wander,
     wanderPreviousTarget:
@@ -194,17 +193,6 @@ function mergeProgression(base: Progression, raw: unknown): Progression {
   return merged;
 }
 
-function mergeSpace(base: Space, raw: unknown): Space {
-  const merged = mergeKnown(base, raw) as Space;
-  for (const group of ["reverb", "delay"] as const) {
-    for (const key of Object.keys(merged[group])) {
-      const box = merged[group] as unknown as Record<string, number>;
-      box[key] = clamp(box[key], 0, 1);
-    }
-  }
-  return merged;
-}
-
 function mergeGlobal(base: Project["global"], raw: unknown): Project["global"] {
   if (!isRecord(raw)) return { ...base };
   const scale = typeof raw.scale === "string" && (SCALE_IDS as readonly string[]).includes(raw.scale) ? (raw.scale as Project["global"]["scale"]) : base.scale;
@@ -226,8 +214,9 @@ function hasValue(value: unknown): boolean {
 }
 
 /** Current lane shape only. Anything older is unreadable and stays at the factory lane. */
-function laneCurrent(id: (typeof LANES)[number], raw: unknown): boolean {
+function laneCurrent(id: PatternId, raw: unknown): boolean {
   if (!isRecord(raw)) return false;
+  if (id === "fx") return isRecord(raw.reverb) && typeof raw.reverb.size === "number" && isRecord(raw.delay);
   if (id === "chords") return hasValue(raw.tone) && hasValue(raw.octave) && hasValue(raw.rate);
   if (id === "bass" || id === "lead") return hasValue(raw.pitch) && hasValue(raw.octave);
   return isRecord(raw.gen1) && typeof raw.gen1.hits === "number" && isRecord(raw.ratchet) && hasValue(raw.ratchet.count);
@@ -237,7 +226,7 @@ function acceptLanes(raw: unknown): Lanes {
   const base = clone(defaultProject().working);
   if (!isRecord(raw)) return base;
   const out = base as unknown as Record<string, unknown>;
-  for (const lane of LANES) {
+  for (const lane of PATTERN_LANES) {
     if (!laneCurrent(lane, raw[lane])) continue;
     out[lane] = mergeKnown(out[lane], raw[lane]);
   }
@@ -254,7 +243,6 @@ function acceptJournal(raw: unknown): Project["journal"] {
       color: typeof scene.color === "number" ? scene.color : undefined,
       lanes: acceptLanes(scene.lanes),
       progression: mergeProgression(defaultProgression(), scene.progression),
-      space: mergeSpace(defaultSpace(), scene.space),
     });
   }
   return scenes;

@@ -10,9 +10,9 @@ import {
   type CaptureIntensity,
   type CaptureScope,
   type EuclidGen,
-  type LaneId,
   type Lanes,
   type Modulated,
+  type PatternId,
   type Project,
 } from "./types.ts";
 
@@ -72,21 +72,21 @@ function knobSpec(path: string): KnobSpec | null {
   return { min: binding.min, max: binding.max, step: binding.step, integer: binding.integer, weight: binding.weight };
 }
 
-function scopePages(lane: LaneId, scope: LaneCapture): string[][] {
+function scopePages(lane: PatternId, scope: LaneCapture): string[][] {
   return laneScopePaths(lane, scope);
 }
 
-function generatorFields(target: string, lane: LaneId): string[] {
+function generatorFields(target: string, lane: PatternId): string[] {
   return modulatorPaths(lane, target);
 }
 
 let factoryLanes: Lanes | null = null;
 
-function factoryLane(lane: LaneId): Lanes[LaneId] {
+function factoryLane(lane: PatternId): Lanes[PatternId] {
   factoryLanes ??= defaultProject().working;
   return factoryLanes[lane];
 }
-function spendPage(project: Project, lane: LaneId, paths: string[], tag: string): Project {
+function spendPage(project: Project, lane: PatternId, paths: string[], tag: string): Project {
   const depth = project.captureDepth;
   const intensity = project.captureIntensity;
   if (intensity === "clear") return project;
@@ -193,9 +193,9 @@ function readNumber(root: unknown, path: string): number | null {
 }
 
 /** Reroll one page group, or the whole lane when scope is `all`. Each page spends its own budget. */
-export function captureLane(project: Project, lane: LaneId, scope: LaneCapture = "pattern"): Project {
+export function captureLane(project: Project, lane: PatternId, scope: LaneCapture = "pattern"): Project {
   if (project.lock[lane]) return project;
-  if (scope === "notes" && laneFamily(lane) === "drum") return project;
+  if (scope === "notes" && lane !== "fx" && laneFamily(lane) === "drum") return project;
   if (project.captureIntensity === "clear") return clearLane(project, lane, scope);
   let next = project;
   scopePages(lane, scope).forEach((paths, index) => {
@@ -204,7 +204,7 @@ export function captureLane(project: Project, lane: LaneId, scope: LaneCapture =
   return next;
 }
 
-function clearLane(project: Project, lane: LaneId, scope: LaneCapture): Project {
+function clearLane(project: Project, lane: PatternId, scope: LaneCapture): Project {
   const working = clone(project.working);
   const home = factoryLane(lane);
   for (const paths of scopePages(lane, scope)) restoreFactory(working[lane], home, paths, project.captureDepth);
@@ -263,7 +263,7 @@ export function captureSurface(project: Project, kind: "mix" | "perf", paths: st
 }
 
 /** Reroll one euclid (`gen1`), its velocity, or another 4-param modulator. */
-export function captureGenerator(project: Project, lane: LaneId, target: string): Project {
+export function captureGenerator(project: Project, lane: PatternId, target: string): Project {
   if (project.lock[lane]) return project;
   const node = nodeAt(project.working[lane], target);
   if (!isEuclidGen(node) && !isModulated(node)) return project;
@@ -275,7 +275,7 @@ export function captureGenerator(project: Project, lane: LaneId, target: string)
 }
 
 /** Reroll only the parameters listed on one page. Non-clear spends a generators budget and a values budget. Clear restores those targets. */
-export function capturePaths(project: Project, lane: LaneId, paths: string[]): Project {
+export function capturePaths(project: Project, lane: PatternId, paths: string[]): Project {
   if (project.lock[lane]) return project;
   if (!paths.length) return project;
   if (project.captureIntensity !== "clear") return spendPage(project, lane, paths, paths.join(","));

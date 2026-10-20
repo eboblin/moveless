@@ -1259,7 +1259,7 @@ static float sized_delay(float base, float size) {
     return base * paper_scale() * (0.5f + size * 1.3f);
 }
 
-static int space_init(Engine *engine) {
+static int fx_init(Engine *engine) {
     Plate *p = &engine->plate;
     Echo *e = &engine->echo;
     float s = paper_scale();
@@ -1299,7 +1299,7 @@ static int space_init(Engine *engine) {
     return ok;
 }
 
-static void space_free(Engine *engine) {
+static void fx_free(Engine *engine) {
     Plate *p = &engine->plate;
     line_free(&p->pre);
     line_free(&p->in0);
@@ -1318,7 +1318,7 @@ static void space_free(Engine *engine) {
     line_free(&engine->echo.r);
 }
 
-static void space_clear(Engine *engine) {
+static void fx_clear(Engine *engine) {
     Plate *p = &engine->plate;
     line_clear(&p->pre);
     line_clear(&p->in0);
@@ -1350,7 +1350,7 @@ static void space_clear(Engine *engine) {
     engine->echo.quiet = 0;
 }
 
-static void apply_space(Engine *engine, const char *text) {
+static void apply_fx(Engine *engine, const char *text) {
     float v[17];
     int n = 0;
     const char *cursor = text;
@@ -1487,7 +1487,7 @@ static void ingest_phrase(Engine *engine) {
     engine->tempo = strtof(tempo + 1, NULL);
     if (atoi(reset + 1)) {
         engine->clock = 0;
-        space_clear(engine);
+        fx_clear(engine);
     }
     engine->phrase_on = 1;
     engine->phrase_count = 0;
@@ -1496,10 +1496,10 @@ static void ingest_phrase(Engine *engine) {
         engine->lanes[lane].still_count = 0;
     }
     char *cursor = body + 1;
-    char *space = strchr(cursor, '@');
-    if (space) {
-        *space = 0;
-        apply_space(engine, space + 1);
+    char *fx = strchr(cursor, '@');
+    if (fx) {
+        *fx = 0;
+        apply_fx(engine, fx + 1);
     }
     char *split = strchr(cursor, '#');
     if (split) *split = 0;
@@ -1731,8 +1731,8 @@ static void *create_instance(const char *module_dir, const char *json_defaults) 
     engine->tempo = 120.0f;
     engine->beats = 4.0f;
     ensure_wave_table();
-    if (!space_init(engine)) {
-        space_free(engine);
+    if (!fx_init(engine)) {
+        fx_free(engine);
         free(engine->phrase_text);
         free(engine);
         return NULL;
@@ -1757,7 +1757,7 @@ static void set_param(void *instance, const char *key, const char *val) {
 static void destroy_instance(void *instance) {
     Engine *engine = instance;
     if (!engine) return;
-    space_free(engine);
+    fx_free(engine);
     free(engine->phrase_text);
     free(engine);
 }

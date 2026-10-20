@@ -1,21 +1,40 @@
 export const LANES = ["kick", "snare", "hat", "perc", "bass", "lead", "chords"] as const;
 export type LaneId = (typeof LANES)[number];
+
+/** Shared effects. A pattern lane, not a voice. Reverb and delay now; more can follow. */
+export const FX_LANE = "fx" as const;
+export type FxLaneId = typeof FX_LANE;
+export type PatternId = LaneId | FxLaneId;
+export const PATTERN_LANES = [...LANES, FX_LANE] as const satisfies readonly PatternId[];
+
 export type DrumId = "kick" | "snare" | "hat" | "perc";
 export type PitchedId = "bass" | "lead";
 export type AuxId = "aux";
-export type ContextId = LaneId | AuxId;
+export type ContextId = PatternId | AuxId;
 
-/** Step buttons: the seven lanes, then one section button. */
-export const STEPS = [...LANES, "aux"] as const satisfies readonly ContextId[];
+/** Contexts that have pages. Button index is {@link contextAtStep}: aux is the last of 16. */
+export const STEPS = [...PATTERN_LANES, "aux"] as const satisfies readonly ContextId[];
 
-export function isLane(id: ContextId): id is LaneId {
+/** Hardware step buttons. Voices and fx pack to the left. Aux is the rightmost. */
+export const STEP_COUNT = 16;
+
+export function contextAtStep(index: number): ContextId | null {
+  if (index === STEP_COUNT - 1) return "aux";
+  return PATTERN_LANES[index] ?? null;
+}
+
+export function isLane(id: ContextId): id is PatternId {
+  return (PATTERN_LANES as readonly string[]).includes(id);
+}
+
+export function isVoice(id: ContextId): id is LaneId {
   return (LANES as readonly string[]).includes(id);
 }
 
 export const DRUMS: readonly DrumId[] = ["kick", "snare", "hat", "perc"];
 export const PITCHED: readonly PitchedId[] = ["bass", "lead"];
 
-export const LANE_CODE: Record<LaneId | AuxId, string> = {
+export const LANE_CODE: Record<ContextId, string> = {
   kick: "KCK",
   snare: "SNR",
   hat: "HAT",
@@ -23,6 +42,7 @@ export const LANE_CODE: Record<LaneId | AuxId, string> = {
   bass: "BAS",
   lead: "LEA",
   chords: "CHD",
+  fx: "FX",
   aux: "AUX",
 };
 
@@ -57,10 +77,10 @@ export interface LaneSend {
   delay: Modulated;
 }
 
-export const SPACE_REVERB = ["size", "decay", "damp", "diff", "pre", "width", "low", "level"] as const;
-export const SPACE_DELAY = ["time", "feed", "hi", "lo", "width", "mod", "rate", "level"] as const;
+export const FX_REVERB = ["size", "decay", "damp", "diff", "pre", "width", "low", "level"] as const;
+export const FX_DELAY = ["time", "feed", "hi", "lo", "width", "mod", "rate", "level"] as const;
 
-export interface SpaceReverb {
+export interface FxReverb {
   size: number;
   decay: number;
   damp: number;
@@ -71,7 +91,7 @@ export interface SpaceReverb {
   level: number;
 }
 
-export interface SpaceDelay {
+export interface FxDelay {
   time: number;
   feed: number;
   hi: number;
@@ -82,10 +102,14 @@ export interface SpaceDelay {
   level: number;
 }
 
-/** Shared reverb and delay. Part of the pattern, not a modulator. */
-export interface Space {
-  reverb: SpaceReverb;
-  delay: SpaceDelay;
+/**
+ * Shared effects on the fx lane.
+ * Recorded, locked, captured and morphed with the voices.
+ * Knobs are plain values, not modulators.
+ */
+export interface Fx {
+  reverb: FxReverb;
+  delay: FxDelay;
 }
 
 export const PROGRESSION_KEYS = ["start", "count", "length", "motion", "variation", "mood", "tension", "way"] as const;
@@ -162,6 +186,8 @@ export interface Lanes {
   bass: PitchedLane;
   lead: PitchedLane;
   chords: ChordLane;
+  /** Effects. Part of the pattern, same as the voices. */
+  fx: Fx;
 }
 
 export interface Scene {
@@ -169,8 +195,6 @@ export interface Scene {
   lanes: Lanes;
   /** Chord walk, recorded with the pattern. Heard as a whole, not blended. */
   progression: Progression;
-  /** Reverb and delay knobs, recorded with the pattern. */
-  space: Space;
   /** Move pad color, assigned once when the scene is recorded. */
   color?: number;
 }
@@ -246,7 +270,6 @@ export interface PageRef {
 
 export interface MorphState {
   start: Lanes;
-  startSpace: Space;
   targetId: string;
   originTick: number;
   durationTicks: number;
@@ -271,15 +294,14 @@ export interface Project {
   global: GlobalSettings;
   macros: Record<string, number>;
   bookmarks: (PageRef | null)[];
-  mute: Record<LaneId, boolean>;
-  /** Additive solo. While any lane is soloed, only soloed unmuted lanes are heard. */
+  /** Voices and the fx lane. Mute on fx silences the wet returns. */
+  mute: Record<PatternId, boolean>;
+  /** Additive solo. While any voice is soloed, only soloed unmuted voices are heard. Fx stays up. */
   solo: Record<LaneId, boolean>;
-  lock: Record<LaneId, boolean>;
+  lock: Record<PatternId, boolean>;
   working: Lanes;
   /** Heard chord walk. Record copies this into the scene. A morph keeps it until landing. */
   progression: Progression;
-  /** Heard reverb and delay. Record copies this into the scene. */
-  space: Space;
   transition: TransitionId;
   wander: WanderId | null;
   wanderPreviousTarget: string | null;

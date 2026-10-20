@@ -1,5 +1,5 @@
 import { clone } from "../core/clone.ts";
-import { punch, writeSpace } from "../core/morph.ts";
+import { punch } from "../core/morph.ts";
 import { bindingFor, type Binding } from "../core/pages.ts";
 import { setMacro, setMixer } from "../core/performance.ts";
 import { SCALE_IDS, type ContextId, type LaneId, type Progression, type Project } from "../core/types.ts";
@@ -106,8 +106,6 @@ function storeControl(project: Project, context: ContextId, binding: Binding, ra
       return punch(project, `${context}.${binding.path}`, value);
     case "macro":
       return setMacro(project, binding.path.slice("macro.".length), value);
-    case "space":
-      return writeSpace(project, binding.path, value);
     case "progression":
       return writeProgression(project, binding.path, value);
     case "mixer":
@@ -121,8 +119,6 @@ function readStored(project: Project, binding: Binding): number {
   switch (binding.store) {
     case "macro":
       return project.macros[binding.path.slice("macro.".length)] ?? 0;
-    case "space":
-      return readSpace(project, binding.path);
     case "progression":
       return project.progression[binding.path as keyof Progression];
     case "mixer":
@@ -146,14 +142,6 @@ function writeProgression(project: Project, path: string, value: number): Projec
   const next = clone(project);
   next.progression[path as keyof Progression] = value;
   return next;
-}
-
-function readSpace(project: Project, path: string): number {
-  const [group, key] = path.split(".");
-  if (group !== "reverb" && group !== "delay") return 0;
-  const box = project.space[group] as unknown as Record<string, number>;
-  const value = box[key];
-  return typeof value === "number" ? value : 0;
 }
 
 function readWorking(project: Project, path: string): number {

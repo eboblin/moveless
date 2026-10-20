@@ -1,10 +1,10 @@
 import { SAMPLE_RATE, SIXTEENTH_TICKS, tickToSample } from "../core/clock.ts";
-import { defaultSpace } from "../core/defaults.ts";
+import { defaultFx } from "../core/defaults.ts";
 import { evalModulated } from "../core/modulate.ts";
-import { isDrum, LANES, type LaneId, type Space } from "../core/types.ts";
+import { isDrum, LANES, type Fx, type LaneId } from "../core/types.ts";
 import type { EngineParam } from "./map.ts";
 import type { BlockEvent, LoopEvent, Motion } from "./schedule.ts";
-import { clearEcho, clearTank, createEcho, createTank, echoSample, tankSample, type Echo, type Tank } from "./space.ts";
+import { clearEcho, clearTank, createEcho, createTank, echoSample, tankSample, type Echo, type Tank } from "./fx.ts";
 
 const TWO_PI = Math.PI * 2;
 const DRUM_COUNT = 4;
@@ -61,7 +61,7 @@ export interface Engine {
   clock: number;
   tempo: number;
   beats: number;
-  space: Space;
+  fx: Fx;
   tank: Tank;
   echo: Echo;
   /** Pitched-note timing of the phrase last loaded. Same grid must not re-attack. */
@@ -178,7 +178,7 @@ export function createEngine(): Engine {
     clock: 0,
     tempo: 120,
     beats: 4,
-    space: defaultSpace(),
+    fx: defaultFx(),
     tank: createTank(),
     echo: createEcho(),
     holdSig: "",
@@ -235,13 +235,13 @@ export function packPhrase(events: LoopEvent[], tempo: number, reset: boolean, m
   return `P|${tempo}|${reset ? 1 : 0}|${packPhraseBody(events, motions)}`;
 }
 
-export function packPhraseBody(events: LoopEvent[], motions: Motion[] = [], space = ""): string {
+export function packPhraseBody(events: LoopEvent[], motions: Motion[] = [], fx = ""): string {
   const body = events.map((event) => {
     const lane = LANES.indexOf(event.lane);
     const params = event.params.map((param) => `${param.id}=${param.value.toFixed(4)}`).join(",");
     return `${event.sample}:${event.loop}:${lane}:${event.note}:${event.velocity}:${event.lengthTicks}:${params}`;
   }).join(";");
-  if (!motions.length) return space ? `${body}@${space}` : body;
+  if (!motions.length) return fx ? `${body}@${fx}` : body;
   const tail = motions.map((motion) => {
     const lane = LANES.indexOf(motion.lane);
     const head = `${lane}:${motion.id}:${motion.value.toFixed(4)}:${Math.round(motion.pattern)}:${Math.round(motion.cycle)}:${motion.amount.toFixed(4)}:${motion.loop}`;
@@ -250,7 +250,7 @@ export function packPhraseBody(events: LoopEvent[], motions: Motion[] = [], spac
     return `${head}:${blend.value.toFixed(4)}:${Math.round(blend.pattern)}:${Math.round(blend.cycle)}:${blend.amount.toFixed(4)}:${blend.t.toFixed(4)}`;
   }).join(";");
   const packed = `${body}#${tail}`;
-  return space ? `${packed}@${space}` : packed;
+  return fx ? `${packed}@${fx}` : packed;
 }
 
 /** Bass, Lead and Chords share these twelve notes. Drums keep one voice each. */
@@ -318,8 +318,8 @@ function renderFrames(engine: Engine, frames: number, at: (frame: number) => voi
       dlyL += pair[0] * note.delay;
       dlyR += pair[1] * note.delay;
     }
-    const wetR = tankSample(engine.tank, engine.space.reverb, revL, revR);
-    const wetD = echoSample(engine.echo, engine.space.delay, engine.beats, engine.tempo, dlyL, dlyR);
+    const wetR = tankSample(engine.tank, engine.fx.reverb, revL, revR);
+    const wetD = echoSample(engine.echo, engine.fx.delay, engine.beats, engine.tempo, dlyL, dlyR);
     out[i * 2] = soft(left + wetR[0] + wetD[0]);
     out[i * 2 + 1] = soft(right + wetR[1] + wetD[1]);
   }

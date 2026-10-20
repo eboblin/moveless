@@ -31,9 +31,9 @@ function openMutePeek(state: Session): Session {
 
 /** Press the purple step, pick a page pad when needed, then release. */
 function openAux(state: Session, page = 0): Session {
-  let next = reduce(state, { kind: "note", data1: 23, data2: 127 });
+  let next = reduce(state, { kind: "note", data1: 31, data2: 127 });
   if (page > 0) next = reduce(next, { kind: "note", data1: 92 + page, data2: 127 });
-  return reduce(next, { kind: "note", data1: 23, data2: 0 });
+  return reduce(next, { kind: "note", data1: 31, data2: 0 });
 }
 
 describe("pages and leds", () => {
@@ -63,7 +63,8 @@ describe("pages and leds", () => {
     assert.equal(pageGroupColor("kick", 7), 9);
     assert.equal(lanePages("bass").at(-1)?.groups[0], "REV");
     assert.equal(lanePages("bass").at(-1)?.groups[1], "DLY");
-    assert.equal(lanePages("bass").at(-2)?.groups[0], "CUTOFF");
+    assert.equal(lanePages("bass").at(-2)?.groups[0], "FLT CUTOFF");
+    assert.equal(lanePages("bass").at(-2)?.groups[1], "FLT RESO");
     assert.equal(lanePages("kick")[0].title, "GEN 1");
     assert.deepEqual(lanePages("kick")[0].groups, ["GEN 1", "VEL"]);
     assert.deepEqual(lanePages("kick")[2].groups, ["COUNT", "RATE"]);
@@ -80,24 +81,34 @@ describe("pages and leds", () => {
     assert.equal(pageGroup("bass", 3), "notes");
     assert.equal(pageGroup("lead", 2), "pattern");
     assert.equal(lanePages("kick")[0].bindings[4]?.label, "G1 VEL V");
+    const fx = pagesFor("fx");
+    assert.equal(pageCount("fx"), 2);
+    assert.deepEqual(fx.map((page) => page.id), ["reverb", "delay"]);
+    assert.deepEqual(fx[0].groups, ["REV SIZE", "REV TAIL"]);
+    assert.deepEqual(fx[1].groups, ["DLY TIME", "DLY ECHO"]);
+    assert.equal(fx[0].bindings[0]?.label, "SIZE");
+    assert.equal(fx[1].bindings[0]?.label, "TIME");
+    assert.equal(pageGroup("fx", 0), "fx");
+    assert.equal(pageGroupColor("fx", 1), 9);
+    assert.equal(fx[0].bindings[0]?.store, "lane");
+    assert.equal(fx[0].bindings[0]?.morph, "lerp");
+    const fxScreen = renderScreen(defaultProject(), { ...defaultUi(), context: "fx" }, 0);
+    assert.equal(fxScreen.viz, "none");
+    assert.equal(fxScreen.header.startsWith("FX"), true);
     const aux = pagesFor("aux");
-    assert.equal(pageCount("aux"), 6);
-    assert.deepEqual(aux.map((page) => page.id), ["prog", "reverb", "delay", "settings", "play", "tone"]);
+    assert.equal(pageCount("aux"), 4);
+    assert.deepEqual(aux.map((page) => page.id), ["prog", "settings", "play", "tone"]);
     assert.equal(aux[0].bindings[0]?.label, "START");
     assert.equal(pageGroup("aux", 0), "notes");
     assert.equal(pageGroupColor("aux", 0), 14);
-    assert.equal(aux[1].bindings[0]?.label, "SIZE");
-    assert.equal(aux[2].bindings[0]?.label, "TIME");
-    assert.equal(pageGroup("aux", 1), "space");
-    assert.equal(pageGroupColor("aux", 2), 9);
-    assert.equal(pageGroup("aux", 3), "global");
-    assert.equal(pageGroupColor("aux", 3), 8);
-    assert.equal(aux[4].bindings[0]?.label, "DENS");
-    assert.equal(aux[4].bindings[1]?.label, "REP");
-    assert.equal(aux[5].bindings[0]?.label, "CUT");
-    assert.equal(pageGroup("aux", 4), "macro");
-    assert.equal(pageGroup("aux", 5), "macro");
-    assert.equal(pageGroupColor("aux", 5), 22);
+    assert.equal(pageGroup("aux", 1), "global");
+    assert.equal(pageGroupColor("aux", 1), 8);
+    assert.equal(aux[2].bindings[0]?.label, "DENS");
+    assert.equal(aux[2].bindings[1]?.label, "REP");
+    assert.equal(aux[3].bindings[0]?.label, "CUT");
+    assert.equal(pageGroup("aux", 2), "macro");
+    assert.equal(pageGroup("aux", 3), "macro");
+    assert.equal(pageGroupColor("aux", 3), 22);
     assert.equal(aux.some((page) => page.title === "MACRO"), false);
   });
 
@@ -107,10 +118,15 @@ describe("pages and leds", () => {
     assert.equal(stepLed(project, "kick", "kick").blink, true);
     assert.equal(stepLed(project, "lead", "bass").family, "yellow");
     assert.equal(stepLed(project, "bass", "bass").blink, true);
-    assert.equal(stepLeds(project, "aux")[7].family, "purple");
-    assert.equal(stepLeds(project, "aux")[7].blink, true);
+    assert.equal(stepLeds(project, "fx")[7].family, "green");
+    assert.equal(stepLeds(project, "fx")[7].color, 9);
+    assert.equal(stepLeds(project, "fx")[7].blink, true);
+    assert.equal(stepLeds(project, "kick")[7].family, "green");
     assert.equal(stepLeds(project, "kick")[7].blink, false);
     assert.equal(stepLeds(project, "aux")[8].family, "off");
+    assert.equal(stepLeds(project, "aux")[15].family, "purple");
+    assert.equal(stepLeds(project, "aux")[15].blink, true);
+    assert.equal(stepLeds(project, "aux")[9].family, "off");
     project.lock.lead = true;
     assert.equal(stepLed(project, "kick", "lead").family, "lock");
     assert.equal(stepLed(project, "kick", "lead").blink, false);
@@ -134,6 +150,7 @@ describe("pages and leds", () => {
     assert.equal(stepLed(project, "bass", "bass").blink, true);
     project.mute.kick = false;
     project.solo.hat = true;
+    assert.equal(stepLed(project, "kick", "fx").family, "green");
     assert.equal(stepLed(project, "kick", "kick").family, "red");
     assert.equal(stepLed(project, "kick", "kick").blink, true);
     assert.equal(stepLed(project, "kick", "hat").family, "red");
@@ -342,9 +359,9 @@ describe("surface", () => {
   it("opens the play page of the purple step", () => {
     let state = session();
     const before = clone(state.project.working.kick);
-    state = openAux(state, 4);
+    state = openAux(state, 2);
     assert.equal(state.ui.context, "aux");
-    assert.equal(state.ui.page, 4);
+    assert.equal(state.ui.page, 2);
     state = reduce(state, { kind: "cc", data1: 52, data2: 127 });
     state = reduce(state, { kind: "cc", data1: 52, data2: 0 });
     assert.deepEqual(state.project.working.kick, before);
@@ -359,16 +376,16 @@ describe("surface", () => {
     mix = loop(mix);
     assert.notEqual(mix.project.mixer.kick, 0.2);
 
-    let perf = openAux(session(), 4);
+    let perf = openAux(session(), 2);
     assert.equal(perf.ui.context, "aux");
-    assert.equal(perf.ui.page, 4);
+    assert.equal(perf.ui.page, 2);
     perf.project.macros = { probability: 0.8, cutoff: 0.8 };
     perf = reduce(perf, { kind: "cc", data1: 52, data2: 127 });
     perf = reduce(perf, { kind: "note", data1: 0, data2: 127 });
     assert.notEqual(perf.project.macros.probability, 0.8);
     assert.equal(perf.project.macros.cutoff, 0.8);
 
-    let cleared = openAux(session(), 4);
+    let cleared = openAux(session(), 2);
     cleared.project.macros = { probability: 0.8, cutoff: 0.8 };
     cleared = reduce(cleared, { kind: "cc", data1: 52, data2: 127 });
     cleared = reduce(cleared, { kind: "note", data1: 68 + 14, data2: 127 });
@@ -439,16 +456,16 @@ describe("surface", () => {
 
   it("peeks the purple button as grouped pages", () => {
     let state = session();
-    state = reduce(state, { kind: "note", data1: 23, data2: 127 });
+    state = reduce(state, { kind: "note", data1: 31, data2: 127 });
     assert.equal(state.ui.heldContext, "aux");
     assert.equal(state.ui.context, "kick");
     const held = padLeds(state.project, "journal", state.ui);
-    assert.deepEqual(held.slice(24, 32).map((led) => led.color), [14, 9, 9, 8, 22, 22, 0, 0]);
+    assert.deepEqual(held.slice(24, 32).map((led) => led.color), [14, 8, 22, 22, 0, 0, 0, 0]);
     assert.equal(held[24].blink, true);
     state = reduce(state, { kind: "note", data1: 93, data2: 127 });
     assert.equal(state.ui.page, 1);
     assert.equal(state.ui.heldContext, "aux");
-    state = reduce(state, { kind: "note", data1: 23, data2: 0 });
+    state = reduce(state, { kind: "note", data1: 31, data2: 0 });
     assert.equal(state.ui.context, "aux");
     assert.equal(state.ui.page, 1);
     assert.equal(state.ui.heldContext, null);
@@ -456,9 +473,11 @@ describe("surface", () => {
     state = reduce(state, { kind: "note", data1: 9, data2: 127 });
     const wheel = padLeds(state.project, "journal", state.ui);
     assert.equal(wheel[24].color, 14);
-    assert.equal(wheel[25].color, 9);
+    assert.equal(wheel[25].color, 8);
     assert.equal(wheel[25].blink, true);
-    assert.equal(wheel[29].color, 22);
+    assert.equal(wheel[26].color, 22);
+    assert.equal(wheel[27].color, 22);
+    assert.equal(wheel[29].color, 0);
     assert.equal(wheel[31].color, 0);
   });
 
@@ -475,7 +494,7 @@ describe("surface", () => {
     state = session();
     state.project.global.tempo = 140;
     state.ui.context = "aux";
-    state.ui.page = 3;
+    state.ui.page = 1;
     state = reduce(state, { kind: "cc", data1: 49, data2: 127 });
     state = reduce(state, { kind: "note", data1: 0, data2: 127 });
     assert.equal(state.project.global.tempo, 40);
@@ -944,7 +963,7 @@ describe("surface", () => {
     plotAmount(0, PARAM_COL_W, DIGIT_Y, { kind: "big", n: 7, negative: true }, (x, y) => dash.push([x, y]));
     assert.ok(dash.some(([, y]) => y === DIGIT_Y - 2));
     assert.ok(dash.some(([, y]) => y >= DIGIT_Y));
-    const global = renderScreen(defaultProject(), { ...defaultUi(), context: "aux", page: 3 }, 0);
+    const global = renderScreen(defaultProject(), { ...defaultUi(), context: "aux", page: 1 }, 0);
     assert.equal(global.digits.some((d) => d.cell === 0), false);
     assert.ok(global.labels.some((label) => label.y === VALUE_Y && label.text === "120" && label.cell === 0));
     assert.ok(global.labels.some((label) => label.y === VALUE_Y && label.text === "C" && label.cell === 2));
@@ -955,7 +974,7 @@ describe("surface", () => {
     const mode = renderScreen(keyed, {
       ...defaultUi(),
       context: "aux",
-      page: 3,
+      page: 1,
       focus: { label: "SCALE", path: "scale", generator: null, showPattern: false, held: true, untilTick: 0, untilMs: 0 },
     }, 0);
     assert.ok(mode.labels.some((label) => label.y === VALUE_Y && label.text === "D" && label.cell === 2));
@@ -1496,8 +1515,17 @@ describe("surface", () => {
     assert.equal(leds[24].color, 5);
     assert.equal(leds[24].blink, false);
     assert.equal(leds[25].blink, false);
-    assert.equal(leds[31].color, 0);
+    assert.equal(leds[31].color, 9);
+    assert.equal(leds[23].color, 0);
     assert.equal(leds[0].color, 0);
+    state = reduce(state, { kind: "note", data1: 99, data2: 127 });
+    assert.equal(state.project.mute.fx, true);
+    state = reduce(state, { kind: "note", data1: 83, data2: 127 });
+    assert.equal(state.project.lock.fx, true);
+    state = reduce(state, { kind: "note", data1: 99, data2: 127 });
+    state = reduce(state, { kind: "note", data1: 83, data2: 127 });
+    assert.equal(state.project.mute.fx, false);
+    assert.equal(state.project.lock.fx, false);
     state.project.mute.snare = true;
     assert.equal(padLeds(state.project, "journal", state.ui)[25].color, shadeColor(5, 0.5));
     state = reduce(state, { kind: "note", data1: 77, data2: 127 });

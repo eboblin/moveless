@@ -9,11 +9,12 @@ import {
   type ContextId,
   type DrumId,
   type LaneId,
+  type PatternId,
   type PitchedId,
 } from "./types.ts";
 
 export type MorphKind = "lerp" | "switch";
-export type KnobStore = "lane" | "progression" | "space" | "global" | "mixer" | "macro";
+export type KnobStore = "lane" | "progression" | "global" | "mixer" | "macro";
 /** How the screen draws a knob. `number` is the plain 0..99 cell. */
 export type KnobDisplay = "number" | "pitch" | "octave" | "note" | "scale" | "division" | "chordTone" | "slice";
 
@@ -40,7 +41,7 @@ export interface Binding {
   detents?: readonly number[];
 }
 
-export type PageGroup = "pattern" | "notes" | "sound" | "fx" | "space" | "global" | "macro" | "mix";
+export type PageGroup = "pattern" | "notes" | "sound" | "fx" | "global" | "macro" | "mix";
 
 export interface Page {
   id: string;
@@ -58,7 +59,6 @@ export const PAGE_GROUP_COLOR: Record<PageGroup, number> = {
   notes: 14,
   sound: 20,
   fx: 9,
-  space: 9,
   global: 8,
   macro: 22,
   mix: 120,
@@ -83,6 +83,7 @@ const TITLE_WORD: Record<string, string> = {
   BAS: "BASS",
   LEA: "LEAD",
   CHD: "CHORDS",
+  FX: "FX",
 };
 
 const EMPTY: (Binding | null)[] = [null, null, null, null, null, null, null, null];
@@ -370,7 +371,8 @@ function soundPages(ids: readonly FieldId[]): Page[] {
 }
 
 function filterPage(): Page {
-  return pair("filter.cutoff", FIELD.cutoff, "filter.resonance", FIELD.resonance, "fx");
+  const item = pair("filter.cutoff", FIELD.cutoff, "filter.resonance", FIELD.resonance, "fx");
+  return { ...item, groups: ["FLT CUTOFF", "FLT RESO"] };
 }
 
 function sendPage(): Page {
@@ -453,17 +455,27 @@ function plain(
   integer: boolean,
   store: KnobStore,
   display?: KnobDisplay,
+  morph?: MorphKind,
 ): Binding {
-  return bind({ path, label, min, max, step, integer, store, weight: PLAIN_WEIGHT, display });
+  return bind({ path, label, min, max, step, integer, store, weight: PLAIN_WEIGHT, display, morph });
 }
 
-function plainPage(id: string, title: string, left: string, right: string, group: PageGroup, store: KnobStore, knobs: readonly [string, string][]): Page {
+function plainPage(
+  id: string,
+  title: string,
+  left: string,
+  right: string,
+  group: PageGroup,
+  store: KnobStore,
+  knobs: readonly [string, string][],
+  morph?: MorphKind,
+): Page {
   return page(
     id,
     title,
     [left, right],
     group,
-    knobs.map(([key, label]) => plain(`${id}.${key}`, label, 0, 1, 0.01, false, store)),
+    knobs.map(([key, label]) => plain(`${id}.${key}`, label, 0, 1, 0.01, false, store, undefined, morph)),
   );
 }
 
@@ -480,30 +492,28 @@ function progPage(): Page {
   ]);
 }
 
-function spacePages(): Page[] {
-  return [
-    plainPage("reverb", "REVERB", "SIZE", "TAIL", "space", "space", [
-      ["size", "SIZE"],
-      ["decay", "DECAY"],
-      ["damp", "DAMP"],
-      ["diff", "DIFF"],
-      ["pre", "PRE"],
-      ["width", "WIDTH"],
-      ["low", "LOW"],
-      ["level", "LEVEL"],
-    ]),
-    plainPage("delay", "DELAY", "TIME", "ECHO", "space", "space", [
-      ["time", "TIME"],
-      ["feed", "FEED"],
-      ["hi", "HI"],
-      ["lo", "LO"],
-      ["width", "WIDTH"],
-      ["mod", "MOD"],
-      ["rate", "RATE"],
-      ["level", "LEVEL"],
-    ]),
-  ];
-}
+const FX_PAGES: Page[] = [
+  plainPage("reverb", "REVERB", "REV SIZE", "REV TAIL", "fx", "lane", [
+    ["size", "SIZE"],
+    ["decay", "DECAY"],
+    ["damp", "DAMP"],
+    ["diff", "DIFF"],
+    ["pre", "PRE"],
+    ["width", "WIDTH"],
+    ["low", "LOW"],
+    ["level", "LEVEL"],
+  ], "lerp"),
+  plainPage("delay", "DELAY", "DLY TIME", "DLY ECHO", "fx", "lane", [
+    ["time", "TIME"],
+    ["feed", "FEED"],
+    ["hi", "HI"],
+    ["lo", "LO"],
+    ["width", "WIDTH"],
+    ["mod", "MOD"],
+    ["rate", "RATE"],
+    ["level", "LEVEL"],
+  ], "lerp"),
+];
 
 function mixPage(): Page {
   return page("mix", "MIXER", [null, null], "mix", [
@@ -570,15 +580,16 @@ function perfPages(): Page[] {
   ];
 }
 
-/** Progression, space, global, then the two macro pages. Mixer lives on the Mute peek. */
-const AUX_PAGES: Page[] = [progPage(), ...spacePages(), globalPage(), ...perfPages()];
+/** Progression, global, then the two macro pages. Fx is its own lane. Mixer lives on the Mute peek. */
+const AUX_PAGES: Page[] = [progPage(), globalPage(), ...perfPages()];
 
 /** Eight mixer faders. Not an aux page; the Mute peek edits these knobs. */
 export function mixerPage(): Page {
   return mixPage();
 }
 
-export function lanePages(lane: LaneId): Page[] {
+export function lanePages(lane: PatternId): Page[] {
+  if (lane === "fx") return FX_PAGES;
   switch (laneFamily(lane)) {
     case "drum":
       if (isDrum(lane)) return DRUM_PAGES[lane];
@@ -623,8 +634,8 @@ export function bindingPaths(page: Page): string[] {
   return paths;
 }
 
-/** Pattern, notes, sound, or filter pages for a lane, taken from the same pages the screen shows. */
-export function laneScopePaths(lane: LaneId, scope: "pattern" | "notes" | "sound" | "fx" | "all"): string[][] {
+/** Pattern, notes, sound, or fx pages for a lane, taken from the same pages the screen shows. */
+export function laneScopePaths(lane: PatternId, scope: "pattern" | "notes" | "sound" | "fx" | "all"): string[][] {
   const pages = pagesFor(lane);
   const picked: string[][] = [];
   for (const item of pages) {
@@ -636,7 +647,7 @@ export function laneScopePaths(lane: LaneId, scope: "pattern" | "notes" | "sound
 }
 
 /** Paths of one generator. A paired page contributes only the named modulator. */
-export function modulatorPaths(lane: LaneId, target: string): string[] {
+export function modulatorPaths(lane: PatternId, target: string): string[] {
   if (target === "gen1" || target === "gen2") {
     const found = pagesFor(lane).find((item) => item.id === target);
     return found ? bindingPaths(found) : [];

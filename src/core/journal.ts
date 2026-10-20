@@ -11,8 +11,10 @@ import {
   SET_CAPACITY,
   WANDER_BARS,
   type LaneId,
+  type PatternId,
   type Project,
   type Scene,
+  type Fx,
   type WanderId,
 } from "./types.ts";
 
@@ -34,7 +36,6 @@ export function record(project: Project): Project {
     id,
     lanes: clone(project.working),
     progression: clone(project.progression),
-    space: clone(project.space),
     color: sceneColor(id),
   };
   return {
@@ -135,7 +136,7 @@ export function setWander(project: Project, rate: WanderId | null, tick: number)
   return { ...project, wander: rate, wanderOriginTick: tick };
 }
 
-export function toggleMute(project: Project, lane: LaneId): Project {
+export function toggleMute(project: Project, lane: PatternId): Project {
   return { ...project, mute: { ...project.mute, [lane]: !project.mute[lane] } };
 }
 
@@ -151,15 +152,26 @@ export function laneHeard(project: Project, lane: LaneId): boolean {
   return !anySolo || project.solo[lane];
 }
 
-export function toggleLock(project: Project, lane: LaneId): Project {
+export function toggleLock(project: Project, lane: PatternId): Project {
   return { ...project, lock: { ...project.lock, [lane]: !project.lock[lane] } };
 }
 
+/** Wet reverb and delay. Mute on the fx lane zeroes the returns and leaves the knobs. */
+export function heardFx(project: Project): Fx {
+  const fx = project.working.fx;
+  if (!project.mute.fx) return fx;
+  return {
+    reverb: { ...fx.reverb, level: 0 },
+    delay: { ...fx.delay, level: 0 },
+  };
+}
+
 /** Factory parameters for one lane. Mute, lock and the mixer stay. A running morph keeps the reset. */
-export function resetLane(project: Project, lane: LaneId): Project {
+export function resetLane(project: Project, lane: PatternId): Project {
   const working = clone(project.working);
   const home = clone(defaultProject().working);
-  if (isDrum(lane)) working[lane] = home[lane];
+  if (lane === "fx") working.fx = clone(home.fx);
+  else if (isDrum(lane)) working[lane] = home[lane];
   else if (isPitched(lane)) working[lane] = home[lane];
   else working.chords = home.chords;
   if (!project.morph) return { ...project, working };
