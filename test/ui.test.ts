@@ -11,7 +11,7 @@ import { bindingFor, lanePages, pageCount, pageGroup, pageGroupColor, pagesFor }
 import { LED, advancePulseClock, blinkHalfMs, directionLit, dropLed, ledColorAt, menuLed, modeButtonLed, offColor, offerLed, padBlinkSteps, padLeds, padPackets, PLAY_LED_ON, playLed, PULSE_CLOCK_IDLE, shadeColor, stepLed, stepLeds, takeLeds, trackLeds } from "../src/ui/leds.ts";
 import { DIGIT_H, displayAmount, plotAmount } from "../src/ui/digits.ts";
 import { DIGIT_Y, FONT_H, HEADER_H, HEIGHT, NAME_Y, PAGER_Y, PARAM_COL_W, PARAM_H, SEP_Y, TITLE_Y, VALUE_Y, VIZ_H, pixel, renderScreen, type Screen } from "../src/ui/screen.ts";
-import { defaultUi, HOLD_MS, HOLD_TICKS, openSetMode } from "../src/ui/state.ts";
+import { defaultUi, HOLD_MS, HOLD_TICKS, openSetMode, settleWheel, WHEEL_RELEASE_MS } from "../src/ui/state.ts";
 import { reduce, relDelta, type Session } from "../src/ui/input.ts";
 import { DETENT_CLICKS, DETENT_REST_MS, stepKnob } from "../src/ui/controls.ts";
 
@@ -1072,6 +1072,22 @@ describe("surface", () => {
     assert.equal(pixel(phrase, 32, HEADER_H + 1), 0);
   });
 
+  it("keeps the jog layer through a contact bounce and drops it after the release window", () => {
+    let state = session();
+    state = reduce(state, { kind: "note", data1: 9, data2: 127 });
+    state = reduce(state, { kind: "note", data1: 9, data2: 0 });
+    assert.equal(state.ui.wheelTouch, true);
+    state = reduce(state, { kind: "note", data1: 9, data2: 127 });
+    assert.equal(state.ui.wheelTouch, true);
+    assert.equal(state.ui.wheelReleaseMs, null);
+    state = reduce(state, { kind: "note", data1: 9, data2: 0 });
+    const released = state.ui.wheelReleaseMs ?? 0;
+    assert.equal(settleWheel(state.ui, released + WHEEL_RELEASE_MS - 1).wheelTouch, true);
+    const settled = settleWheel(state.ui, released + WHEEL_RELEASE_MS);
+    assert.equal(settled.wheelTouch, false);
+    assert.equal(settled.wheelReleaseMs, null);
+  });
+
   it("sets transition and toggles wander from the wheel-touch row", () => {
     let state = session();
     state = reduce(state, { kind: "note", data1: 9, data2: 127 });
@@ -1231,6 +1247,32 @@ describe("surface", () => {
     assert.notDeepEqual(fx.project.working.kick.filter, open.filter);
     assert.deepEqual(fx.project.working.kick.sound, open.sound);
     assert.deepEqual(fx.project.working.kick.gen1, open.gen1);
+  });
+
+  it("treats fx knobs as values: generators leaves them, values and delete move them", () => {
+    let state = session();
+    state = reduce(state, { kind: "note", data1: 23, data2: 127 });
+    state = reduce({ ...state, tick: state.tick + 20 }, { kind: "note", data1: 23, data2: 0 });
+    assert.equal(state.ui.context, "fx");
+    const parked = clone(state.project.working.fx);
+    state.project.captureDepth = "generators";
+    state = loop(state);
+    assert.deepEqual(state.project.working.fx, parked);
+
+    state.project.captureDepth = "values";
+    state.project.captureScope = "page";
+    const delay = clone(state.project.working.fx.delay);
+    state = loop(state);
+    assert.notDeepEqual(state.project.working.fx.reverb, parked.reverb);
+    assert.deepEqual(state.project.working.fx.delay, delay);
+
+    state.project.working.fx.reverb.size = 0;
+    state.project.working.fx.delay.time = 0;
+    state.project.captureScope = "lane";
+    state.project.captureIntensity = "clear";
+    state = loop(state);
+    assert.equal(state.project.working.fx.reverb.size, defaultProject().working.fx.reverb.size);
+    assert.equal(state.project.working.fx.delay.time, defaultProject().working.fx.delay.time);
   });
 
   it("keeps page-group capture when Shift is held", () => {

@@ -229,7 +229,7 @@ export const CAPTURE_INTENSITIES: readonly CaptureIntensity[] = ["clear", "soft"
 /** Capture overlay: whole lane, the page's group, or only the page's knobs. */
 export type CaptureScope = "lane" | "group" | "page";
 export const CAPTURE_SCOPES: readonly CaptureScope[] = ["lane", "group", "page"];
-/** `all` moves everything. `generators` only pattern/cycle/amount. `values` skips those three. */
+/** `all` moves everything. `generators` only pattern/cycle/amount of a VPCA. `values` is every other knob, including plain ones. */
 export type CaptureDepth = "all" | "generators" | "values";
 export const CAPTURE_DEPTHS: readonly CaptureDepth[] = ["all", "generators", "values"];
 

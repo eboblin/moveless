@@ -26,7 +26,7 @@ import {
 import { CAPTURE_CC, CAPTURE_DEPTHS, CAPTURE_SCOPES, contextAtStep, DOWN_CC, isLane, LANES, LOOP_CC, MENU_CC, MUTE_CC, PLAY_CC, TRANSITIONS, UP_CC, WANDERS, type ContextId, type PatternId, type Project } from "../core/types.ts";
 import { resetControl, writeControl } from "./controls.ts";
 import { bindingFor, bindingPaths, mixerPage, pageCount, pageGroup, pagesFor } from "../core/pages.ts";
-import { applyBookmark, FOCUS_HOLD_MS, focusHoldTicks, HOLD_MS, HOLD_TICKS, holdIsShort, mutePeekOpen, peekKind, rememberPage, type Notice, type UiState } from "./state.ts";
+import { applyBookmark, FOCUS_HOLD_MS, focusHoldTicks, HOLD_MS, HOLD_TICKS, holdIsShort, mutePeekOpen, peekKind, rememberPage, settleWheel, type Notice, type UiState } from "./state.ts";
 import { journalPageCount } from "../core/journal.ts";
 
 export interface MidiMsg {
@@ -45,6 +45,7 @@ export interface Session {
 const SHIFT = 49;
 
 export function reduce(session: Session, msg: MidiMsg): Session {
+  session = { ...session, ui: settleWheel(session.ui) };
   const press = msg.data2 > 0;
   if (msg.kind === "note") return onNote(session, msg.data1, press);
   return onCc(session, msg.data1, msg.data2, press);
@@ -52,7 +53,7 @@ export function reduce(session: Session, msg: MidiMsg): Session {
 
 function onNote(session: Session, note: number, press: boolean): Session {
   if (note >= 0 && note <= 7) return touchEncoder(session, note, press);
-  if (note === 9) return { ...session, ui: { ...session.ui, wheelTouch: press } };
+  if (note === 9) return touchWheel(session, press);
   if (note >= 16 && note <= 31) return onStep(session, note - 16, press);
   if (note >= 68 && note <= 99) return onPad(session, note - 68, press);
   return session;
@@ -210,6 +211,16 @@ function modeNotice(title: string, value: string): Notice {
 function selectPage(session: Session, page: number): Session {
   if (page >= pageCount(session.ui.context)) return session;
   return { ...session, ui: rememberPage(session.ui, session.ui.context, page) };
+}
+
+/** Touch shows the page layer at once. Release waits out contact bounce before the layer drops. */
+function touchWheel(session: Session, press: boolean): Session {
+  if (press) {
+    if (session.ui.wheelTouch && session.ui.wheelReleaseMs === null) return session;
+    return { ...session, ui: { ...session.ui, wheelTouch: true, wheelReleaseMs: null } };
+  }
+  if (!session.ui.wheelTouch || session.ui.wheelReleaseMs !== null) return session;
+  return { ...session, ui: { ...session.ui, wheelReleaseMs: Date.now() } };
 }
 
 function turnWheel(session: Session, value: number): Session {

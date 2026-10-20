@@ -22,7 +22,7 @@ import {
   cellTextX,
   renderScreen,
 } from "../ui/screen.ts";
-import { defaultUi, focusVisible, peekKind, rememberPage, type UiState } from "../ui/state.ts";
+import { defaultUi, focusVisible, peekKind, rememberPage, settleWheel, type UiState } from "../ui/state.ts";
 import type { Project } from "../core/types.ts";
 
 interface HostGlobals {
@@ -456,6 +456,8 @@ export function init(): void {
 
 export function tick(): void {
   advanceClock();
+  const ui = settleWheel(session.ui);
+  if (ui !== session.ui) session = { ...session, ui };
   maybeAutosave();
   paint();
   drainLeds();

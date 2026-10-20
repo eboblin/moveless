@@ -36,6 +36,8 @@ export interface UiState {
   lanePages: Record<ContextId, number>;
   mode: UiMode;
   wheelTouch: boolean;
+  /** Release is pending until this time, so a contact bounce does not drop the wheel layer. */
+  wheelReleaseMs: number | null;
   muteHeld: boolean;
   /** Peek stays up after a short Mute tap. */
   muteLatched: boolean;
@@ -76,9 +78,19 @@ export interface UiState {
   trackDownMs: (number | null)[];
 }
 
+/** How long a jog release must stay up before the page layer drops. */
+export const WHEEL_RELEASE_MS = 80;
+
 export const HOLD_TICKS = 80;
 /** Wall-clock hold, so a bookmark can be stored while the transport is stopped. */
 export const HOLD_MS = 400;
+
+/** Drop the jog layer once a release has stayed up through the bounce window. */
+export function settleWheel(ui: UiState, now = Date.now()): UiState {
+  if (ui.wheelReleaseMs === null) return ui;
+  if (now - ui.wheelReleaseMs < WHEEL_RELEASE_MS) return ui;
+  return { ...ui, wheelTouch: false, wheelReleaseMs: null };
+}
 
 /** A tap under either threshold. A stopped clock still counts as short via the wall clock. */
 export function holdIsShort(downTick: number | null, downMs: number | null, tick: number, now = Date.now()): boolean {
@@ -158,6 +170,7 @@ export function defaultUi(): UiState {
     lanePages: blankLanePages(),
     mode: "journal",
     wheelTouch: false,
+    wheelReleaseMs: null,
     muteHeld: false,
     muteLatched: false,
     muteWasLatched: false,
