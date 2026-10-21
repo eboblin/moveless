@@ -7,13 +7,13 @@ import { modulated } from "../src/core/modulate.ts";
 import { applyMorph } from "../src/core/morph.ts";
 import { createSet, journalPadIds, journalPageCount, launchScene, record } from "../src/core/performance.ts";
 import { generatePhrase } from "../src/core/phrase.ts";
-import { bindingFor, lanePages, pageCount, pageGroup, pageGroupColor, pagesFor } from "../src/core/pages.ts";
+import { bindingFor, lanePages, pageCount, pageGroup, pageGroupColor, pagesFor, scopeIncludesPage } from "../src/core/pages.ts";
 import { LED, advancePulseClock, blinkHalfMs, directionLit, dropLed, ledColorAt, menuLed, modeButtonLed, offColor, offerLed, padBlinkSteps, padLeds, padPackets, PLAY_LED_ON, playLed, PULSE_CLOCK_IDLE, shadeColor, stepLed, stepLeds, takeLeds, trackLeds } from "../src/ui/leds.ts";
 import { DIGIT_H, displayAmount, plotAmount } from "../src/ui/digits.ts";
 import { CHAR_W, DIGIT_Y, FONT_H, HEADER_H, HEIGHT, NAME_Y, PAGER_Y, PARAM_COL_W, PARAM_H, SEP_Y, TITLE_Y, VALUE_Y, VIZ_H, WIDTH, loadWidth, pixel, renderScreen, type Screen } from "../src/ui/screen.ts";
-import { defaultUi, HOLD_MS, HOLD_TICKS, openSetMode, settleWheel, WHEEL_RELEASE_MS } from "../src/ui/state.ts";
+import { defaultUi, HOLD_MS, HOLD_TICKS, openSetMode, settleWheel, WHEEL_RELEASE_MS, type DetentHold } from "../src/ui/state.ts";
 import { reduce, relDelta, type Session } from "../src/ui/input.ts";
-import { DETENT_CLICKS, DETENT_REST_MS, stepKnob } from "../src/ui/controls.ts";
+import { DETENT_CLICKS, DETENT_REST_MS, stepKnob, writeControl } from "../src/ui/controls.ts";
 
 function session(): Session {
   return { project: defaultProject(), ui: defaultUi(), tick: 0, playing: false };
@@ -96,8 +96,8 @@ describe("pages and leds", () => {
     assert.equal(fxScreen.viz, "none");
     assert.equal(fxScreen.header.startsWith("FX"), true);
     const aux = pagesFor("aux");
-    assert.equal(pageCount("aux"), 4);
-    assert.deepEqual(aux.map((page) => page.id), ["prog", "settings", "play", "tone"]);
+    assert.equal(pageCount("aux"), 5);
+    assert.deepEqual(aux.map((page) => page.id), ["prog", "settings", "play", "tone", "bus"]);
     assert.equal(aux[0].bindings[0]?.label, "START");
     assert.equal(pageGroup("aux", 0), "notes");
     assert.equal(pageGroupColor("aux", 0), 14);
@@ -109,6 +109,38 @@ describe("pages and leds", () => {
     assert.equal(pageGroup("aux", 2), "macro");
     assert.equal(pageGroup("aux", 3), "macro");
     assert.equal(pageGroupColor("aux", 3), 22);
+    assert.equal(aux[4].title, "BUS");
+    assert.deepEqual(aux[4].groups, ["MOVE", "ROOM"]);
+    assert.equal(pageGroup("aux", 4), "bus");
+    assert.equal(pageGroupColor("aux", 4), 23);
+    assert.equal(aux[4].bindings[0]?.label, "GLUE");
+    assert.equal(aux[4].bindings[0]?.short, "GLU");
+    assert.equal(aux[4].bindings[1]?.label, "PMP");
+    assert.equal(aux[4].bindings[1]?.short, "PMP");
+    assert.equal(aux[4].bindings[1]?.title, "PUMP");
+    assert.equal(aux[4].bindings[4]?.label, "WIDE");
+    assert.equal(aux[4].bindings[4]?.short, "WID");
+    assert.equal(aux[4].bindings[5]?.label, "TLT");
+    assert.equal(aux[4].bindings[5]?.short, "TLT");
+    assert.equal(aux[4].bindings[5]?.title, "TILT");
+    assert.equal(aux[4].bindings[2], null);
+    assert.equal(aux[4].bindings[3], null);
+    assert.equal(aux[4].bindings[6], null);
+    assert.equal(aux[4].bindings[7], null);
+    assert.equal(aux[4].bindings[0]?.store, "bus");
+    assert.equal(aux[4].bindings[5]?.min, -1);
+    assert.equal(scopeIncludesPage("lane", "aux", 4, 0), true);
+    assert.equal(scopeIncludesPage("page", "aux", 4, 4), true);
+    assert.equal(scopeIncludesPage("page", "aux", 4, 0), false);
+    assert.equal(scopeIncludesPage("group", "aux", 4, 2), false);
+    const busScreen = renderScreen(defaultProject(), { ...defaultUi(), context: "aux", page: 4 }, 0);
+    assert.equal(busScreen.header, "AUX MOVE ROOM");
+    assert.ok(busScreen.labels.some((label) => label.text === "GLU"));
+    assert.ok(busScreen.labels.some((label) => label.text === "TLT"));
+    const glue = bindingFor("bus.glue");
+    assert.ok(glue);
+    const turned = writeControl(defaultProject(), "aux", glue, DETENT_CLICKS + 4);
+    assert.equal(turned.project.bus.glue, 0.04);
     assert.equal(aux.some((page) => page.title === "MACRO"), false);
   });
 
@@ -536,7 +568,7 @@ describe("surface", () => {
     assert.equal(state.ui.heldContext, "aux");
     assert.equal(state.ui.context, "kick");
     const held = padLeds(state.project, "journal", state.ui);
-    assert.deepEqual(held.slice(24, 32).map((led) => led.color), [14, 8, 22, 22, 0, 0, 0, 0]);
+    assert.deepEqual(held.slice(24, 32).map((led) => led.color), [14, 8, 22, 22, 23, 0, 0, 0]);
     assert.equal(held[24].blink, true);
     state = reduce(state, { kind: "note", data1: 93, data2: 127 });
     assert.equal(state.ui.page, 1);
@@ -576,6 +608,8 @@ describe("surface", () => {
     assert.equal(lane[26].color, 22);
     assert.equal(lane[26].blink, false);
     assert.equal(lane[27].color, 22);
+    assert.equal(lane[28].color, 23);
+    assert.equal(lane[28].blink, false);
 
     const tone = { wheelTouch: true, context: "aux" as const, page: 3 };
     const page = padLeds({ ...defaultProject(), randomizeScope: "page" }, "journal", tone);
@@ -1950,7 +1984,7 @@ describe("virtual detents", () => {
     const caught = stepKnob(3, cycle, 1, null);
     assert.equal(caught.value, 4);
     assert.equal(caught.hold?.left, DETENT_CLICKS);
-    let hold = caught.hold;
+    let hold: DetentHold | null = caught.hold;
     for (let i = 0; i < DETENT_CLICKS; i++) {
       const stuck = stepKnob(4, cycle, 1, hold);
       assert.equal(stuck.value, 4);
@@ -1973,7 +2007,7 @@ describe("virtual detents", () => {
     assert.deepEqual(amount.detents, [0]);
     const onto = stepKnob(0.01, amount, -1, null);
     assert.equal(onto.value, 0);
-    let hold = onto.hold;
+    let hold: DetentHold | null = onto.hold;
     for (let i = 0; i < DETENT_CLICKS; i++) {
       const stuck = stepKnob(0, amount, -1, hold);
       assert.equal(stuck.value, 0);

@@ -16,6 +16,7 @@ import {
   type Project,
   type GlobalSettings,
   type Progression,
+  type Bus,
   type Fx,
 } from "./types.ts";
 
@@ -265,6 +266,10 @@ export function defaultLanes(): Lanes {
   };
 }
 
+export function defaultBus(): Bus {
+  return { glue: 0, pump: 0, wide: 0, tilt: 0 };
+}
+
 export function defaultProject(): Project {
   const mute = {} as Project["mute"];
   const solo = {} as Project["solo"];
@@ -287,6 +292,7 @@ export function defaultProject(): Project {
     mixer,
     global: defaultGlobal(),
     macros: {},
+    bus: defaultBus(),
     bookmarks: [null, null, null, null],
     mute,
     solo,

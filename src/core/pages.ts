@@ -15,7 +15,7 @@ import {
 } from "./types.ts";
 
 export type MorphKind = "lerp" | "switch";
-export type KnobStore = "lane" | "progression" | "global" | "mixer" | "macro";
+export type KnobStore = "lane" | "progression" | "global" | "mixer" | "macro" | "bus";
 /** How the screen draws a knob. `number` is the plain 0..99 cell. */
 export type KnobDisplay = "number" | "pitch" | "octave" | "note" | "scale" | "division" | "chordTone" | "slice";
 
@@ -42,7 +42,7 @@ export interface Binding {
   detents?: readonly number[];
 }
 
-export type PageGroup = "pattern" | "notes" | "sound" | "fx" | "global" | "macro" | "mix";
+export type PageGroup = "pattern" | "notes" | "sound" | "fx" | "global" | "macro" | "mix" | "bus";
 
 export interface Page {
   id: string;
@@ -63,6 +63,7 @@ export const PAGE_GROUP_COLOR: Record<PageGroup, number> = {
   global: 8,
   macro: 22,
   mix: 120,
+  bus: 23,
 };
 
 const TITLE_WORD: Record<string, string> = {
@@ -78,6 +79,8 @@ const TITLE_WORD: Record<string, string> = {
   C: "CYCLE",
   A: "AMOUNT",
   TRANS: "TRANSPOSE",
+  PMP: "PUMP",
+  TLT: "TILT",
   KCK: "KICK",
   SNR: "SNARE",
   PRC: "PERC",
@@ -581,8 +584,32 @@ function perfPages(): Page[] {
   ];
 }
 
-/** Progression, global, then the two macro pages. Fx is its own lane. Mixer lives on the Mute peek. */
-const AUX_PAGES: Page[] = [progPage(), globalPage(), ...perfPages()];
+function busPage(): Page {
+  const knob = (path: string, label: string, min: number, max: number) =>
+    bind({
+      path: `bus.${path}`,
+      label,
+      min,
+      max,
+      step: 0.01,
+      weight: PLAIN_WEIGHT,
+      store: "bus",
+      ...(min >= 0 ? { detents: [0] } : {}),
+    });
+  return page("bus", "BUS", ["MOVE", "ROOM"], "bus", [
+    knob("glue", "GLUE", 0, 1),
+    knob("pump", "PMP", 0, 1),
+    null,
+    null,
+    knob("wide", "WIDE", 0, 1),
+    knob("tilt", "TLT", -1, 1),
+    null,
+    null,
+  ]);
+}
+
+/** Progression, global, the two macro pages, then the final mix. Fx is its own lane. Mixer lives on the Mute peek. */
+const AUX_PAGES: Page[] = [progPage(), globalPage(), ...perfPages(), busPage()];
 
 /** Eight mixer faders. Not an aux page; the Mute peek edits these knobs. */
 export function mixerPage(): Page {
@@ -672,7 +699,7 @@ export function pageGroup(context: ContextId, index: number): PageGroup {
 /**
  * Pages the scope geometry includes. `lane` is every page, `page` is the current
  * one, `group` is the current page's group. Aux groups stay as they are
- * (progression, global, macro). Lane pattern pages still share one group.
+ * (progression, global, macro, bus). Lane pattern pages still share one group.
  */
 export function scopeIncludesPage(scope: RandomizeScope, context: ContextId, index: number, page: number): boolean {
   const item = pagesFor(context)[index];

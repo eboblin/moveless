@@ -283,6 +283,18 @@ export interface SceneSet {
   sceneIds: string[];
 }
 
+/** Final mix on the aux button. Zero on a knob leaves the sum alone. Not part of a scene. */
+export interface Bus {
+  /** Bus compressor. 0 is a wire, 1 glues the sum. */
+  glue: number;
+  /** Kick ducks bass and chords. 0 leaves them alone. */
+  pump: number;
+  /** Opens the image by role. 0 leaves the existing picture. */
+  wide: number;
+  /** Darker below zero, brighter above. 0 is a wire. */
+  tilt: number;
+}
+
 export interface Project {
   motifBankVersion: number;
   nextSceneId: number;
@@ -292,6 +304,8 @@ export interface Project {
   mixer: Record<LaneId | "master", number>;
   global: GlobalSettings;
   macros: Record<string, number>;
+  /** Heard after the voices and the fx returns. Record does not bake it. */
+  bus: Bus;
   bookmarks: (PageRef | null)[];
   /** Voices and the fx lane. Mute on fx silences the wet returns. */
   mute: Record<PatternId, boolean>;

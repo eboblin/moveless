@@ -20,6 +20,7 @@ export {
   resetLane,
   sceneColor,
   sceneIdsForPads,
+  setBus,
   setMacro,
   setMixer,
   setPadIds,

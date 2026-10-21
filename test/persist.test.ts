@@ -94,6 +94,33 @@ describe("project persist", () => {
     assert.equal("progression" in parsed.project.journal[0], false);
   });
 
+  it("keeps the bus on the project and fills a missing one with zeros", () => {
+    const stored = JSON.parse(serializeStored(defaultProject(), { context: "aux", page: 0, mode: "journal", playing: true })) as {
+      project: { bus?: unknown };
+    };
+    delete stored.project.bus;
+    const missing = parseStored(JSON.stringify(stored));
+    assert.ok(missing);
+    assert.deepEqual(missing.project.bus, { glue: 0, pump: 0, wide: 0, tilt: 0 });
+    const project = defaultProject();
+    project.bus = { glue: 0.5, pump: 1, wide: 0.25, tilt: -0.4 };
+    const parsed = parseStored(serializeStored(project, { context: "aux", page: 4, mode: "journal", playing: true }));
+    assert.ok(parsed);
+    assert.deepEqual(parsed.project.bus, project.bus);
+    const recorded = record(project);
+    assert.equal("bus" in recorded.journal[0], false);
+    assert.deepEqual(recorded.bus, project.bus);
+    const wild = JSON.parse(serializeStored(project, { context: "aux", page: 0, mode: "journal", playing: true })) as {
+      project: { bus: { tilt: number; glue: number } };
+    };
+    wild.project.bus.tilt = 4;
+    wild.project.bus.glue = -2;
+    const clamped = parseStored(JSON.stringify(wild));
+    assert.ok(clamped);
+    assert.equal(clamped.project.bus.tilt, 1);
+    assert.equal(clamped.project.bus.glue, 0);
+  });
+
   it("clears morph and wander origin on parse", () => {
     const project = defaultProject();
     project.morph = {

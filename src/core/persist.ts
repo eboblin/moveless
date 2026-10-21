@@ -124,6 +124,7 @@ function mergeProject(raw: Record<string, unknown>): Project {
     mixer: { ...base.mixer, ...(isRecord(raw.mixer) ? (raw.mixer as Project["mixer"]) : {}) },
     global: mergeGlobal(base.global, raw.global),
     macros: isRecord(raw.macros) ? { ...base.macros, ...(raw.macros as Record<string, number>) } : base.macros,
+    bus: mergeBus(base.bus, raw.bus),
     bookmarks,
     mute: { ...base.mute, ...(isRecord(raw.mute) ? (raw.mute as Project["mute"]) : {}) },
     solo: { ...base.solo, ...(isRecord(raw.solo) ? (raw.solo as Project["solo"]) : {}) },
@@ -191,6 +192,16 @@ function mergeProgression(base: Progression, raw: unknown): Progression {
     merged[key] = clamp(n, min, max);
   }
   return merged;
+}
+
+function mergeBus(base: Project["bus"], raw: unknown): Project["bus"] {
+  if (!isRecord(raw)) return { ...base };
+  return {
+    glue: clamp(asNumber(raw.glue, base.glue), 0, 1),
+    pump: clamp(asNumber(raw.pump, base.pump), 0, 1),
+    wide: clamp(asNumber(raw.wide, base.wide), 0, 1),
+    tilt: clamp(asNumber(raw.tilt, base.tilt), -1, 1),
+  };
 }
 
 function mergeGlobal(base: Project["global"], raw: unknown): Project["global"] {

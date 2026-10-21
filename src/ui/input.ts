@@ -399,14 +399,14 @@ function randomizeTarget(session: Session): { context: ContextId; page: number }
   return { context, page };
 }
 
-/** One budget per aux page. Progression, global, and macro each keep their own store. */
+/** One budget per aux page. Progression, global, macro, and the bus each keep their own store. */
 function rerollAux(project: Project, page: number): Project {
   let next = project;
   pagesFor("aux").forEach((item, index) => {
     if (!scopeIncludesPage(next.randomizeScope, "aux", index, page)) return;
     const paths = bindingPaths(item);
     const store = item.bindings.find((binding) => binding)?.store;
-    if (store === "progression" || store === "global") next = randomizeSurface(next, store, paths);
+    if (store === "progression" || store === "global" || store === "bus") next = randomizeSurface(next, store, paths);
     else if (store === "macro") next = randomizeSurface(next, "perf", paths);
   });
   return next;

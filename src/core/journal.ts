@@ -14,6 +14,7 @@ import {
   type PatternId,
   type Project,
   type Scene,
+  type Bus,
   type Fx,
   type WanderId,
 } from "./types.ts";
@@ -295,6 +296,10 @@ export function deleteSet(project: Project, setId: string): Project {
 
 export function setMacro(project: Project, id: string, offset: number): Project {
   return { ...project, macros: { ...project.macros, [id]: offset } };
+}
+
+export function setBus(project: Project, id: keyof Bus, value: number): Project {
+  return { ...project, bus: { ...project.bus, [id]: value } };
 }
 
 export function setMixer(project: Project, id: LaneId | "master", value: number): Project {

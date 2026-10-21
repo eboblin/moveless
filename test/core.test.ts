@@ -1598,6 +1598,18 @@ describe("randomize, wander, sets", () => {
     assert.equal(cleared.mixer.snare, 1);
   });
 
+  it("captures the bus when the page is in scope and restores it to zero on delete", () => {
+    const project = setRandomizeIntensity(defaultProject(), "hard");
+    const paths = ["bus.glue", "bus.pump", "bus.wide", "bus.tilt"];
+    const moved = randomizeSurface(project, "bus", paths);
+    assert.ok(moved.bus.glue !== 0 || moved.bus.pump !== 0 || moved.bus.wide !== 0 || moved.bus.tilt !== 0);
+    const held = randomizeSurface(setRandomizeDepth(project, "generators"), "bus", ["bus.glue"]);
+    assert.deepEqual(held.bus, project.bus);
+    project.bus = { glue: 0.8, pump: 0.4, wide: 0.6, tilt: -0.5 };
+    const cleared = randomizeSurface(setRandomizeIntensity(project, "clear"), "bus", paths);
+    assert.deepEqual(cleared.bus, { glue: 0, pump: 0, wide: 0, tilt: 0 });
+  });
+
   it("captures one perf page and zeros a macro on delete", () => {
     const project = setRandomizeIntensity(defaultProject(), "hard");
     project.macros = { probability: 0.8, cutoff: 0.8 };

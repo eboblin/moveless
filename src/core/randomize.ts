@@ -1,5 +1,5 @@
 import { clone } from "./clone.ts";
-import { defaultGlobal, defaultProgression, defaultProject } from "./defaults.ts";
+import { defaultBus, defaultGlobal, defaultProgression, defaultProject } from "./defaults.ts";
 import { nodeAt, setPath } from "./fields.ts";
 import { hash01 } from "./hash.ts";
 import { bindingFor, laneScopePaths } from "./pages.ts";
@@ -250,10 +250,10 @@ function globalFromRecord(record: Record<string, number>): GlobalSettings {
 }
 
 /**
- * Reroll one surface page. Mixer homes are 1, macro homes are 0, progression and
- * global homes are the factory project. Each call spends one page budget.
+ * Reroll one surface page. Mixer homes are 1. Macro and bus homes are 0.
+ * Progression and global homes are the factory project. Each call spends one page budget.
  */
-export function randomizeSurface(project: Project, kind: "mix" | "perf" | "progression" | "global", paths: string[]): Project {
+export function randomizeSurface(project: Project, kind: "mix" | "perf" | "progression" | "global" | "bus", paths: string[]): Project {
   const depth = project.randomizeDepth;
   const eligible = [...new Set(paths)].filter((path) => depthAllows(path, depth) && knobSpec(path));
   if (!eligible.length) return project;
@@ -282,6 +282,13 @@ export function randomizeSurface(project: Project, kind: "mix" | "perf" | "progr
     if (intensity === "clear") restoreFactory(numbers, homes, eligible, "all");
     else applySplitBudget(numbers, homes, eligible, roll, intensity);
     return { ...project, global: globalFromRecord(numbers), randomizeNonce: nonce };
+  }
+  if (kind === "bus") {
+    const bus = { ...defaultBus(), ...project.bus };
+    const homes = { bus: defaultBus() };
+    if (intensity === "clear") restoreFactory({ bus }, homes, eligible, "all");
+    else applySplitBudget({ bus }, homes, eligible, roll, intensity);
+    return { ...project, bus, randomizeNonce: nonce };
   }
   const macros = { ...project.macros };
   const homes = { macro: {} as Record<string, number> };

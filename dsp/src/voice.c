@@ -22,6 +22,12 @@
 #define PHRASE_CAP 512
 #define LANE_COUNT 8
 #define LANE_MOTION_CAP 12
+#define HAAS_N 544
+#define LANE_HAT 2
+#define LANE_PERC 3
+#define LANE_BASS 4
+#define LANE_LEAD 5
+#define LANE_CHORDS 6
 
 enum {
     P_NONE = 0,
@@ -71,6 +77,8 @@ typedef struct {
     float cutoff, resonance, reverb, delay, nlp, nhp, flt, band;
     float env_k, noise_k, pitch_k, click_k, gain;
     int loop;
+    float haas[HAAS_N];
+    int haas_i;
 } Drum;
 
 typedef struct {
@@ -79,7 +87,9 @@ typedef struct {
     float wave, bend, sync, fold, drive, wide;
     float cutoff, resonance, reverb, delay, attack, release, gain, low, band;
     float release_k;
-    int age, left, lane, loop;
+    int age, left, lane, pitch, loop;
+    float haas[HAAS_N];
+    int haas_i;
 } Note;
 
 typedef struct {
@@ -129,6 +139,8 @@ typedef struct {
     uint32_t noise;
     float tempo;
     float beats;
+    float glue, pump, wide, tilt;
+    float pump_env, glue_gain, tilt_l, tilt_r;
     Plate plate;
     Echo echo;
     char block[TEXT_CAP];
@@ -701,6 +713,11 @@ static void arm_drum(Engine *engine, int lane, int note, int velocity, const cha
     (void)note;
     drum->on = 1;
     drum->lane = idx;
+    if (idx == 0) engine->pump_env = 1.0f;
+    if (idx == LANE_PERC) {
+        drum->haas_i = 0;
+        memset(drum->haas, 0, sizeof drum->haas);
+    }
     drum->phase0 = 0;
     drum->phase1 = 0;
     drum->phase2 = 0;
@@ -813,7 +830,10 @@ static Note *arm_note(Engine *engine, int note_num, int velocity, int ticks, con
     note->age = 0;
     note->left = samples;
     note->lane = lane;
+    note->pitch = note_num;
     note->loop = loop;
+    note->haas_i = 0;
+    memset(note->haas, 0, sizeof note->haas);
     note->freq = 440.0f * powf(2.0f, ((float)note_num - 69.0f) / 12.0f);
     note->wave = read_param(params, "wave", 0.36f);
     note->bend = read_param(params, "bend", 0.0f);
@@ -1308,6 +1328,148 @@ static void fx_free(Engine *engine) {
     line_free(&engine->echo.r);
 }
 
+static void pan_gains(float pos, float *gl, float *gr) {
+    float x = pos;
+    if (x < 0.0f) x = 0.0f;
+    if (x > 1.0f) x = 1.0f;
+    *gl = x <= 0.5f ? 1.0f : (1.0f - x) * 2.0f;
+    *gr = x >= 0.5f ? 1.0f : x * 2.0f;
+}
+
+static void open_hat(float *l, float *r, float pos, float wide) {
+    float opened, pl, pr, ol, orr, mono;
+    opened = 0.5f + (pos - 0.5f) * (1.0f + wide);
+    if (opened < 0.0f) opened = 0.0f;
+    if (opened > 1.0f) opened = 1.0f;
+    pan_gains(pos, &pl, &pr);
+    pan_gains(opened, &ol, &orr);
+    if (pl > 1e-4f) mono = *l / pl;
+    else if (pr > 1e-4f) mono = *r / pr;
+    else mono = 0.0f;
+    *l = mono * ol;
+    *r = mono * orr;
+}
+
+static void pan_chord(float *l, float *r, int pitch, int lo, int hi, float wide) {
+    float t, pos, gl, gr, mid, side;
+    t = hi > lo ? (float)(pitch - lo) / (float)(hi - lo) : 0.5f;
+    pos = 0.5f + (t - 0.5f) * wide;
+    if (pos < 0.0f) pos = 0.0f;
+    if (pos > 1.0f) pos = 1.0f;
+    pan_gains(pos, &gl, &gr);
+    mid = (*l + *r) * 0.5f;
+    side = (*l - *r) * 0.5f;
+    *l = mid * gl + side;
+    *r = mid * gr - side;
+}
+
+static void haas(float *buf, int *index, float *l, float *r, float wide) {
+    float mid, delayed;
+    int delay, pos;
+    mid = (*l + *r) * 0.5f;
+    delay = (int)(wide * 0.012f * SR + 0.5f);
+    if (delay < 1) delay = 1;
+    if (delay >= HAAS_N) delay = HAAS_N - 1;
+    pos = *index - delay;
+    if (pos < 0) pos += HAAS_N;
+    delayed = buf[pos];
+    buf[*index] = mid;
+    *index += 1;
+    if (*index >= HAAS_N) *index = 0;
+    *r = *r * (1.0f - wide) + delayed * wide;
+}
+
+static void pump_pair(Engine *engine, int lane, float *l, float *r) {
+    float g;
+    if (engine->pump <= 0.0f || engine->pump_env <= 0.0f) return;
+    if (lane != LANE_BASS && lane != LANE_CHORDS) return;
+    g = 1.0f - engine->pump * engine->pump_env;
+    *l *= g;
+    *r *= g;
+}
+
+static void decay_pump(Engine *engine) {
+    float eighth;
+    if (engine->pump_env <= 0.0f) return;
+    eighth = (SR * 30.0f) / (engine->tempo > 1.0f ? engine->tempo : 1.0f);
+    engine->pump_env -= 1.0f / eighth;
+    if (engine->pump_env < 0.0f) engine->pump_env = 0.0f;
+}
+
+static float tilt_coef(void) {
+    static float coef = 0.0f;
+    if (coef == 0.0f) coef = 1.0f - expf((-TWO_PI * 1000.0f) / SR);
+    return coef;
+}
+
+static void tilt_mix(Engine *engine, float *l, float *r) {
+    float coef = tilt_coef();
+    float tilt = engine->tilt;
+    engine->tilt_l += (*l - engine->tilt_l) * coef;
+    engine->tilt_r += (*r - engine->tilt_r) * coef;
+    if (tilt == 0.0f) return;
+    *l = *l + tilt * (*l - 2.0f * engine->tilt_l);
+    *r = *r + tilt * (*r - 2.0f * engine->tilt_r);
+}
+
+static float shave(float x, float glue) {
+    float k = glue * 2.5f;
+    return tanhf(x * (1.0f + k)) / (1.0f + k);
+}
+
+static float glue_coef(int attack) {
+    static float atk = 0.0f;
+    static float rel = 0.0f;
+    if (atk == 0.0f) {
+        atk = 1.0f - expf(-1.0f / (0.015f * SR));
+        rel = 1.0f - expf(-1.0f / (0.15f * SR));
+    }
+    return attack ? atk : rel;
+}
+
+static void glue_mix(Engine *engine, float *l, float *r) {
+    float glue = engine->glue;
+    float level, threshold, ratio, target, makeup, gain;
+    if (glue <= 0.0f) return;
+    level = fabsf(*l) > fabsf(*r) ? fabsf(*l) : fabsf(*r);
+    threshold = 1.0f - glue * 0.85f;
+    ratio = 1.0f + glue * 3.0f;
+    target = 1.0f;
+    if (level > threshold && level > 1e-8f) target = (threshold + (level - threshold) / ratio) / level;
+    engine->glue_gain += (target - engine->glue_gain) * glue_coef(target < engine->glue_gain);
+    makeup = 1.0f + glue * 0.35f;
+    gain = engine->glue_gain * makeup;
+    *l = shave(*l * gain, glue);
+    *r = shave(*r * gain, glue);
+}
+
+static void bus_clear(Engine *engine) {
+    int n;
+    engine->pump_env = 0.0f;
+    engine->glue_gain = 1.0f;
+    engine->tilt_l = 0.0f;
+    engine->tilt_r = 0.0f;
+    for (n = 0; n < DRUMS; n++) {
+        engine->drums[n].haas_i = 0;
+        memset(engine->drums[n].haas, 0, sizeof engine->drums[n].haas);
+    }
+    for (n = 0; n < NOTES; n++) {
+        engine->notes[n].haas_i = 0;
+        memset(engine->notes[n].haas, 0, sizeof engine->notes[n].haas);
+    }
+}
+
+static void apply_bus(Engine *engine, const char *text) {
+    float g = 0, p = 0, w = 0, t = 0;
+    if (!text || sscanf(text, "%f,%f,%f,%f", &g, &p, &w, &t) < 4) return;
+    engine->glue = clampf01(g);
+    engine->pump = clampf01(p);
+    engine->wide = clampf01(w);
+    if (t < -1.0f) t = -1.0f;
+    if (t > 1.0f) t = 1.0f;
+    engine->tilt = t;
+}
+
 static void fx_clear(Engine *engine) {
     Plate *p = &engine->plate;
     line_clear(&p->pre);
@@ -1338,6 +1500,7 @@ static void fx_clear(Engine *engine) {
     engine->echo.hpR = 0;
     engine->echo.phase = 0;
     engine->echo.quiet = 0;
+    bus_clear(engine);
 }
 
 static void apply_fx(Engine *engine, const char *text) {
@@ -1486,6 +1649,16 @@ static void ingest_phrase(Engine *engine) {
         engine->lanes[lane].still_count = 0;
     }
     char *cursor = body + 1;
+    char *bus = strchr(cursor, '^');
+    if (bus) {
+        *bus = 0;
+        apply_bus(engine, bus + 1);
+    } else {
+        engine->glue = 0;
+        engine->pump = 0;
+        engine->wide = 0;
+        engine->tilt = 0;
+    }
     char *fx = strchr(cursor, '@');
     if (fx) {
         *fx = 0;
@@ -1663,11 +1836,22 @@ static void render(Engine *engine, int16_t *out, int frames) {
             else arm_note(engine, ev[e].note, ev[e].velocity, ev[e].ticks, ev[e].params, ev[e].lane, 0);
         }
         if ((i & (FOLLOW_STRIDE - 1)) == 0) follow_sound(engine);
+        float wide = engine->wide;
+        int chord_lo = 128, chord_hi = -1;
+        if (wide > 0.0f) {
+            for (int n = 0; n < NOTES; n++) {
+                if (!engine->notes[n].on || engine->notes[n].lane != LANE_CHORDS) continue;
+                if (engine->notes[n].pitch < chord_lo) chord_lo = engine->notes[n].pitch;
+                if (engine->notes[n].pitch > chord_hi) chord_hi = engine->notes[n].pitch;
+            }
+        }
         float left = 0, right = 0, revL = 0, revR = 0, dlyL = 0, dlyR = 0;
         for (int d = 0; d < DRUMS; d++) {
             if (!engine->drums[d].on) continue;
             float l = 0, r = 0;
             drum_sample(engine, &engine->drums[d], &l, &r);
+            if (wide > 0.0f && engine->drums[d].lane == LANE_HAT) open_hat(&l, &r, engine->drums[d].pos, wide);
+            else if (wide > 0.0f && engine->drums[d].lane == LANE_PERC) haas(engine->drums[d].haas, &engine->drums[d].haas_i, &l, &r, wide);
             left += l;
             right += r;
             revL += l * engine->drums[d].reverb;
@@ -1679,6 +1863,9 @@ static void render(Engine *engine, int16_t *out, int frames) {
             if (!engine->notes[n].on) continue;
             float nl = 0, nr = 0;
             note_sample(engine, &engine->notes[n], &nl, &nr);
+            if (wide > 0.0f && engine->notes[n].lane == LANE_CHORDS) pan_chord(&nl, &nr, engine->notes[n].pitch, chord_lo, chord_hi, wide);
+            else if (wide > 0.0f && engine->notes[n].lane == LANE_LEAD) haas(engine->notes[n].haas, &engine->notes[n].haas_i, &nl, &nr, wide);
+            pump_pair(engine, engine->notes[n].lane, &nl, &nr);
             left += nl;
             right += nr;
             revL += nl * engine->notes[n].reverb;
@@ -1689,8 +1876,13 @@ static void render(Engine *engine, int16_t *out, int frames) {
         float wetL = 0, wetR = 0, delL = 0, delR = 0;
         plate_sample(engine, revL, revR, &wetL, &wetR);
         echo_sample(engine, dlyL, dlyR, &delL, &delR);
-        float l = soft(left + wetL + delL);
-        float r = soft(right + wetR + delR);
+        float l = left + wetL + delL;
+        float r = right + wetR + delR;
+        tilt_mix(engine, &l, &r);
+        glue_mix(engine, &l, &r);
+        l = soft(l);
+        r = soft(r);
+        decay_pump(engine);
         if (out) {
             int il = (int)(l * 32767.0f);
             int ir = (int)(r * 32767.0f);
@@ -1717,6 +1909,7 @@ static void *create_instance(const char *module_dir, const char *json_defaults) 
     engine->noise = 1;
     engine->tempo = 120.0f;
     engine->beats = 4.0f;
+    engine->glue_gain = 1.0f;
     ensure_wave_table();
     if (!fx_init(engine)) {
         fx_free(engine);
@@ -1914,6 +2107,20 @@ int main(void) {
     float held_freq = engine->drums[0].freq;
     for (int n = 0; n < 86; n++) render(engine, out, 128);
     if (engine->drums[0].freq != held_freq) return fail("pitch followed the generator");
+
+    engine = create_instance(NULL, NULL);
+    set_param(engine, "block", "P|120|1|0:30000:6:48:110:400:wave=0.0000;0:30000:6:72:30:400:wave=0.0000^0.0000,0.0000,1.0000,0.0000");
+    long bus_left = 0, bus_right = 0;
+    for (int n = 0; n < 30; n++) {
+        render(engine, out, 128);
+        for (int i = 0; i < 128; i++) {
+            int l = out[i * 2] < 0 ? -out[i * 2] : out[i * 2];
+            int r = out[i * 2 + 1] < 0 ? -out[i * 2 + 1] : out[i * 2 + 1];
+            bus_left += l;
+            bus_right += r;
+        }
+    }
+    if (bus_left <= bus_right) return fail("bus wide did not put the low chord tone on the left");
 
     printf("ok peak=%d hat=%ld width=%ld\n", peak, hat_left, diff_wide);
     return 0;

@@ -1,8 +1,8 @@
 import { clone } from "../core/clone.ts";
 import { punch } from "../core/morph.ts";
 import { bindingFor, type Binding } from "../core/pages.ts";
-import { setMacro, setMixer } from "../core/performance.ts";
-import { SCALE_IDS, type ContextId, type LaneId, type Progression, type Project } from "../core/types.ts";
+import { setBus, setMacro, setMixer } from "../core/performance.ts";
+import { SCALE_IDS, type Bus, type ContextId, type LaneId, type Progression, type Project } from "../core/types.ts";
 import type { DetentHold } from "./state.ts";
 
 export function readControl(project: Project, context: ContextId, path: string): number {
@@ -112,6 +112,8 @@ function storeControl(project: Project, context: ContextId, binding: Binding, ra
       return setMixer(project, binding.path as LaneId | "master", value);
     case "global":
       return writeGlobal(project, binding.path, value);
+    case "bus":
+      return setBus(project, binding.path.slice("bus.".length) as keyof Bus, value);
   }
 }
 
@@ -126,6 +128,8 @@ function readStored(project: Project, binding: Binding): number {
     case "global":
       if (binding.path === "scale") return SCALE_IDS.indexOf(project.global.scale);
       return project.global[binding.path as keyof typeof project.global] as number;
+    case "bus":
+      return project.bus[binding.path.slice("bus.".length) as keyof Bus];
     case "lane":
       return 0;
   }

@@ -6,7 +6,7 @@ import { generatePhrase } from "../core/phrase.ts";
 import { loadStoredProject, saveStoredProject, type HostFiles, type StoredUi } from "../core/persist.ts";
 import { phraseLoop, soundMotions } from "../dsp/schedule.ts";
 import { formatFx } from "../dsp/fx.ts";
-import { packPhraseBody } from "../dsp/voice.ts";
+import { formatBus, packPhraseBody } from "../dsp/voice.ts";
 import { reduce, type MidiMsg, type Session } from "../ui/input.ts";
 import { CAPTURE_CC, DOWN_CC, MENU_CC, MUTE_CC, PLAY_CC, UP_CC } from "../core/types.ts";
 import { advancePulseClock, blinkHalfMs, directionLit, dropLed, ledColorAt, menuLed, modeButtonLed, offerLed, padBlinkSteps, padLeds, padPackets, playLed, PULSE_CLOCK_IDLE, stepLeds, takeLeds, trackLeds, type PulseClock } from "../ui/leds.ts";
@@ -157,7 +157,12 @@ function syncVoice(reset: boolean): void {
   const latchChanged = latch !== phraseLatch;
   if ((phraseProject !== session.project && (!morphing || boundary || reset)) || latchChanged) {
     const phrase = generatePhrase(session.project);
-    phraseBody = packPhraseBody(phraseLoop(session.project, phrase), soundMotions(session.project, phrase), formatFx(heardFx(session.project), session.project.global.bar));
+    phraseBody = packPhraseBody(
+      phraseLoop(session.project, phrase),
+      soundMotions(session.project, phrase),
+      formatFx(heardFx(session.project), session.project.global.bar),
+      formatBus(session.project.bus),
+    );
     phraseProject = session.project;
     phraseSent = "";
     phraseLatch = latch;

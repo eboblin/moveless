@@ -8,7 +8,9 @@ import { clone } from "../src/core/clone.ts";
 import { launchScene, record } from "../src/core/performance.ts";
 import { mapFilter, mapKick, mapSend, mapSound } from "../src/dsp/map.ts";
 import { eventsInBlock, phraseLoop, soundMotions } from "../src/dsp/schedule.ts";
-import { createEngine, filterSample, loadPhrase, packBlock, packPhrase, renderBlock, renderClock } from "../src/dsp/voice.ts";
+import { createEngine, filterSample, formatBus, loadPhrase, packBlock, packPhrase, packPhraseBody, renderBlock, renderClock } from "../src/dsp/voice.ts";
+import type { BlockEvent } from "../src/dsp/schedule.ts";
+import type { LaneId } from "../src/core/types.ts";
 
 describe("dsp adapter", () => {
   it("maps kick semantics onto v01 chain keys", () => {
@@ -645,6 +647,57 @@ describe("dsp adapter", () => {
     }
   });
 
+  it("leaves the mix alone when every bus knob is zero", () => {
+    const events = [tone("bass", 40, 100), kick(1)];
+    const plain = renderBlock(createEngine(), events, 120, 4000);
+    const engine = createEngine();
+    engine.bus = { glue: 0, pump: 0, wide: 0, tilt: 0 };
+    const same = renderBlock(engine, events, 120, 4000);
+    assert.deepEqual(same, plain);
+  });
+
+  it("packs the bus after the fx trailer", () => {
+    const packed = packPhraseBody([], [], "1.0000", formatBus({ glue: 0, pump: 1, wide: 0.5, tilt: -0.25 }));
+    assert.equal(packed, "@1.0000^0.0000,1.0000,0.5000,-0.2500");
+  });
+
+  it("ducks bass on a kick and lets it back across an eighth", () => {
+    const events = [kick(1), tone("bass", 40, 110)];
+    const dry = renderBus(0, "pump", events, 18000);
+    const wet = renderBus(1, "pump", events, 18000);
+    const early = diffEnergy(dry, wet, 200, 2000);
+    const late = diffEnergy(dry, wet, 15000, 17000);
+    assert.ok(early > late * 4);
+    assert.ok(energy(wet, 200, 2000) < energy(dry, 200, 2000));
+  });
+
+  it("spreads chord tones by pitch and leaves the kick centered", () => {
+    const low = renderBus(1, "wide", [tone("chords", 48, 120), tone("chords", 72, 24)], 3000);
+    const high = renderBus(1, "wide", [tone("chords", 48, 24), tone("chords", 72, 120)], 3000);
+    assert.ok(channelEnergy(low, 400, 2500, 0) > channelEnergy(low, 400, 2500, 1));
+    assert.ok(channelEnergy(high, 400, 2500, 1) > channelEnergy(high, 400, 2500, 0));
+    const dryKick = renderBlock(createEngine(), [kick(110)], 120, 2000);
+    const wideKick = renderBus(1, "wide", [kick(110)], 2000);
+    assert.deepEqual(wideKick, dryKick);
+  });
+
+  it("brightens a high note and darkens a low one", () => {
+    const highUp = rms(renderBus(1, "tilt", [tone("lead", 96, 70)], 4000));
+    const highDry = rms(renderBus(0, "tilt", [tone("lead", 96, 70)], 4000));
+    const highDown = rms(renderBus(-1, "tilt", [tone("lead", 96, 70)], 4000));
+    assert.ok(highUp > highDry);
+    assert.ok(highDry > highDown);
+    const lowUp = rms(renderBus(1, "tilt", [tone("bass", 36, 80)], 4000));
+    const lowDown = rms(renderBus(-1, "tilt", [tone("bass", 36, 80)], 4000));
+    assert.ok(lowDown > lowUp);
+  });
+
+  it("lowers the crest of a hit when glue is up", () => {
+    const dry = crest(renderBus(0, "glue", [kick(120), tone("bass", 40, 90)], 8000));
+    const glued = crest(renderBus(1, "glue", [kick(120), tone("bass", 40, 90)], 8000));
+    assert.ok(glued < dry);
+  });
+
   it("lets the decay macro lengthen a melodic release", () => {
     const project = defaultProject();
     const base = project.working.bass.sound.release.value;
@@ -654,6 +707,86 @@ describe("dsp adapter", () => {
     assert.ok(Math.abs(motion.value - Math.min(1, base + 0.4)) < 1e-6);
   });
 });
+
+function tone(lane: LaneId, note: number, velocity: number): BlockEvent {
+  return {
+    sampleOffset: 0,
+    lane,
+    note,
+    velocity,
+    lengthTicks: 800,
+    params: [
+      { id: "wave", value: 0 },
+      { id: "cutoff", value: 0.5 },
+      { id: "attack", value: 0 },
+      { id: "release", value: 0.8 },
+    ],
+  };
+}
+
+function kick(velocity: number): BlockEvent {
+  return {
+    sampleOffset: 0,
+    lane: "kick",
+    note: 36,
+    velocity,
+    lengthTicks: 48,
+    params: [
+      { id: "freq", value: 0.4 },
+      { id: "decay", value: 0.45 },
+    ],
+  };
+}
+
+function renderBus(amount: number, knob: "glue" | "pump" | "wide" | "tilt", events: BlockEvent[], frames: number): Float32Array {
+  const engine = createEngine();
+  engine.bus = { glue: 0, pump: 0, wide: 0, tilt: 0, [knob]: amount };
+  engine.tempo = 120;
+  return renderBlock(engine, events, 120, frames);
+}
+
+function energy(buf: Float32Array, from: number, to: number): number {
+  let sum = 0;
+  for (let i = from; i < to; i++) {
+    sum += buf[i * 2] * buf[i * 2] + buf[i * 2 + 1] * buf[i * 2 + 1];
+  }
+  return sum;
+}
+
+function channelEnergy(buf: Float32Array, from: number, to: number, channel: number): number {
+  let sum = 0;
+  for (let i = from; i < to; i++) {
+    const x = buf[i * 2 + channel];
+    sum += x * x;
+  }
+  return sum;
+}
+
+function diffEnergy(a: Float32Array, b: Float32Array, from: number, to: number): number {
+  let sum = 0;
+  for (let i = from * 2; i < to * 2; i++) {
+    const d = a[i] - b[i];
+    sum += d * d;
+  }
+  return sum;
+}
+
+function rms(buf: Float32Array): number {
+  let sum = 0;
+  for (let i = 0; i < buf.length; i++) sum += buf[i] * buf[i];
+  return Math.sqrt(sum / buf.length);
+}
+
+function crest(buf: Float32Array): number {
+  let peak = 0;
+  let sum = 0;
+  for (let i = 0; i < buf.length; i++) {
+    const a = Math.abs(buf[i]);
+    if (a > peak) peak = a;
+    sum += buf[i] * buf[i];
+  }
+  return peak / Math.sqrt(sum / buf.length);
+}
 
 function peak(buf: Float32Array): number {
   let best = 0;

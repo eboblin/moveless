@@ -1,7 +1,7 @@
 import { SAMPLE_RATE, SIXTEENTH_TICKS, tickToSample } from "../core/clock.ts";
-import { defaultFx } from "../core/defaults.ts";
+import { defaultBus, defaultFx } from "../core/defaults.ts";
 import { evalModulated } from "../core/modulate.ts";
-import { isDrum, LANES, type Fx, type LaneId } from "../core/types.ts";
+import { isDrum, LANES, type Bus, type Fx, type LaneId } from "../core/types.ts";
 import type { EngineParam } from "./map.ts";
 import type { BlockEvent, LoopEvent, Motion } from "./schedule.ts";
 import { clearEcho, clearTank, createEcho, createTank, echoSample, tankSample, type Echo, type Tank } from "./fx.ts";
@@ -51,6 +51,15 @@ const P_WIDE = 30;
 const P_REVERB = 31;
 const P_DELAY = 32;
 const P_NOTE_DRIVE = 33;
+const LANE_HAT = 2;
+const LANE_PERC = 3;
+const LANE_BASS = 4;
+const LANE_LEAD = 5;
+const LANE_CHORDS = 6;
+const HAAS_N = 544;
+const TILT_COEF = 1 - Math.exp((-TWO_PI * 1000) / SAMPLE_RATE);
+const GLUE_ATTACK = 1 - Math.exp(-1 / (0.015 * SAMPLE_RATE));
+const GLUE_RELEASE = 1 - Math.exp(-1 / (0.15 * SAMPLE_RATE));
 
 export interface Engine {
   noise: number;
@@ -62,6 +71,13 @@ export interface Engine {
   tempo: number;
   beats: number;
   fx: Fx;
+  /** Final mix. Zero on every knob is a wire around the sum. */
+  bus: Bus;
+  /** Kick envelope. 1 on the hit, then it falls across an eighth note. */
+  pumpEnv: number;
+  glueGain: number;
+  tiltL: number;
+  tiltR: number;
   tank: Tank;
   echo: Echo;
   /** Pitched-note timing of the phrase last loaded. Same grid must not re-attack. */
@@ -122,6 +138,9 @@ interface DrumVoice {
   clickK: number;
   /** Hit level. Body and noise envelopes already start here; the transient has its own shape and uses this as a gain. */
   gain: number;
+  /** Short stereo delay for perc. Kick, snare and hat leave it unused. */
+  haas: Float32Array;
+  haasI: number;
 }
 
 interface NoteVoice {
@@ -150,8 +169,13 @@ interface NoteVoice {
   low: number;
   band: number;
   lane: number;
+  /** MIDI note, stamped at note on. Chord spread reads it. */
+  pitch: number;
   loop: number;
   releaseK: number;
+  /** Short stereo delay for the lead. Bass and chords leave it unused. */
+  haas: Float32Array;
+  haasI: number;
 }
 
 interface LaneMotion {
@@ -178,6 +202,11 @@ export function createEngine(): Engine {
     tempo: 120,
     beats: 4,
     fx: defaultFx(),
+    bus: defaultBus(),
+    pumpEnv: 0,
+    glueGain: 1,
+    tiltL: 0,
+    tiltR: 0,
     tank: createTank(),
     echo: createEcho(),
     holdSig: "",
@@ -199,6 +228,7 @@ export function loadPhrase(engine: Engine, events: LoopEvent[], tempo: number, r
     engine.clock = 0;
     clearTank(engine.tank);
     clearEcho(engine.echo);
+    clearBusState(engine);
     return;
   }
   if (engine.clock > 0 && sig !== previous) catchHolding(engine);
@@ -234,20 +264,28 @@ export function packPhrase(events: LoopEvent[], tempo: number, reset: boolean, m
   return `P|${tempo}|${reset ? 1 : 0}|${packPhraseBody(events, motions)}`;
 }
 
-export function packPhraseBody(events: LoopEvent[], motions: Motion[] = [], fx = ""): string {
+/** Four bus knobs, already the heard values. Rides after the fx trailer. */
+export function formatBus(bus: Bus): string {
+  return [bus.glue, bus.pump, bus.wide, bus.tilt].map((n) => n.toFixed(4)).join(",");
+}
+
+export function packPhraseBody(events: LoopEvent[], motions: Motion[] = [], fx = "", bus = ""): string {
   const body = events.map((event) => {
     const lane = LANES.indexOf(event.lane);
     const params = event.params.map((param) => `${param.id}=${param.value.toFixed(4)}`).join(",");
     return `${event.sample}:${event.loop}:${lane}:${event.note}:${event.velocity}:${event.lengthTicks}:${params}`;
   }).join(";");
-  if (!motions.length) return fx ? `${body}@${fx}` : body;
+  if (!motions.length) {
+    const packed = fx ? `${body}@${fx}` : body;
+    return bus ? `${packed}^${bus}` : packed;
+  }
   const tail = motions.map((motion) => {
     const lane = LANES.indexOf(motion.lane);
     const head = `${lane}:${motion.id}:${motion.value.toFixed(4)}:${Math.round(motion.pattern)}:${Math.round(motion.cycle)}:${motion.amount.toFixed(4)}:${motion.loop}`;
     return head;
   }).join(";");
-  const packed = `${body}#${tail}`;
-  return fx ? `${packed}@${fx}` : packed;
+  const packed = fx ? `${body}#${tail}@${fx}` : `${body}#${tail}`;
+  return bus ? `${packed}^${bus}` : packed;
 }
 
 /** Bass, Lead and Chords share these twelve notes. Drums keep one voice each. */
@@ -289,6 +327,16 @@ function renderFrames(engine: Engine, frames: number, at: (frame: number) => voi
   for (let i = 0; i < frames; i++) {
     at(i);
     if ((i & (FOLLOW_STRIDE - 1)) === 0) follow(engine);
+    const wide = engine.bus.wide;
+    let chordLo = 128;
+    let chordHi = -1;
+    if (wide > 0) {
+      for (const note of engine.notes) {
+        if (!note.on || note.lane !== LANE_CHORDS) continue;
+        if (note.pitch < chordLo) chordLo = note.pitch;
+        if (note.pitch > chordHi) chordHi = note.pitch;
+      }
+    }
     let left = 0;
     let right = 0;
     let revL = 0;
@@ -297,7 +345,7 @@ function renderFrames(engine: Engine, frames: number, at: (frame: number) => voi
     let dlyR = 0;
     for (const drum of engine.drums) {
       if (!drum.on) continue;
-      const pair = drumSample(engine, drum);
+      const pair = placeDrum(drum, drumSample(engine, drum), wide);
       left += pair[0];
       right += pair[1];
       revL += pair[0] * drum.reverb;
@@ -307,7 +355,8 @@ function renderFrames(engine: Engine, frames: number, at: (frame: number) => voi
     }
     for (const note of engine.notes) {
       if (!note.on) continue;
-      const pair = noteSample(engine, note);
+      let pair = placeNote(note, noteSample(engine, note), wide, chordLo, chordHi);
+      pair = pumpPair(engine, note.lane, pair);
       left += pair[0];
       right += pair[1];
       revL += pair[0] * note.reverb;
@@ -317,10 +366,125 @@ function renderFrames(engine: Engine, frames: number, at: (frame: number) => voi
     }
     const wetR = tankSample(engine.tank, engine.fx.reverb, revL, revR);
     const wetD = echoSample(engine.echo, engine.fx.delay, engine.beats, engine.tempo, dlyL, dlyR);
-    out[i * 2] = soft(left + wetR[0] + wetD[0]);
-    out[i * 2 + 1] = soft(right + wetR[1] + wetD[1]);
+    const mixed = glueMix(engine, tiltMix(engine, left + wetR[0] + wetD[0], right + wetR[1] + wetD[1]));
+    out[i * 2] = soft(mixed[0]);
+    out[i * 2 + 1] = soft(mixed[1]);
+    decayPump(engine);
   }
   return out;
+}
+
+function clearHaas(voice: { haas: Float32Array; haasI: number }): void {
+  voice.haas.fill(0);
+  voice.haasI = 0;
+}
+
+function clearBusState(engine: Engine): void {
+  engine.pumpEnv = 0;
+  engine.glueGain = 1;
+  engine.tiltL = 0;
+  engine.tiltR = 0;
+  for (const drum of engine.drums) clearHaas(drum);
+  for (const note of engine.notes) clearHaas(note);
+}
+
+/** Hat pan law. Center keeps both channels at full level. */
+function panGains(pos: number): [number, number] {
+  const x = Math.max(0, Math.min(1, pos));
+  const left = x <= 0.5 ? 1 : (1 - x) * 2;
+  const right = x >= 0.5 ? 1 : x * 2;
+  return [left, right];
+}
+
+function placeDrum(drum: DrumVoice, pair: [number, number], wide: number): [number, number] {
+  if (wide <= 0) return pair;
+  if (drum.lane === LANE_HAT) return openHat(pair, drum.pos, wide);
+  if (drum.lane === LANE_PERC) return haas(drum, pair, wide);
+  return pair;
+}
+
+function placeNote(note: NoteVoice, pair: [number, number], wide: number, lo: number, hi: number): [number, number] {
+  if (wide <= 0) return pair;
+  if (note.lane === LANE_CHORDS) return panChord(pair, note.pitch, lo, hi, wide);
+  if (note.lane === LANE_LEAD) return haas(note, pair, wide);
+  return pair;
+}
+
+/** Pull an existing hat pan further off center. A centered hat stays put. */
+function openHat(pair: [number, number], pos: number, wide: number): [number, number] {
+  const opened = Math.max(0, Math.min(1, 0.5 + (pos - 0.5) * (1 + wide)));
+  const [pl, pr] = panGains(pos);
+  const [ol, orr] = panGains(opened);
+  const mono = pl > 1e-4 ? pair[0] / pl : pr > 1e-4 ? pair[1] / pr : 0;
+  return [mono * ol, mono * orr];
+}
+
+/** Low chord tone toward the left, high chord tone toward the right. One tone stays centered. */
+function panChord(pair: [number, number], pitch: number, lo: number, hi: number, wide: number): [number, number] {
+  const t = hi > lo ? (pitch - lo) / (hi - lo) : 0.5;
+  const [gl, gr] = panGains(0.5 + (t - 0.5) * wide);
+  const mid = (pair[0] + pair[1]) * 0.5;
+  const side = (pair[0] - pair[1]) * 0.5;
+  return [mid * gl + side, mid * gr - side];
+}
+
+/** Delay one channel by up to 12 ms. Wide 0 is not called. */
+function haas(voice: { haas: Float32Array; haasI: number }, pair: [number, number], wide: number): [number, number] {
+  const mid = (pair[0] + pair[1]) * 0.5;
+  let delay = Math.round(wide * 0.012 * SAMPLE_RATE);
+  if (delay < 1) delay = 1;
+  if (delay >= HAAS_N) delay = HAAS_N - 1;
+  let pos = voice.haasI - delay;
+  if (pos < 0) pos += HAAS_N;
+  const delayed = voice.haas[pos];
+  voice.haas[voice.haasI] = mid;
+  voice.haasI += 1;
+  if (voice.haasI >= HAAS_N) voice.haasI = 0;
+  return [pair[0], pair[1] * (1 - wide) + delayed * wide];
+}
+
+function pumpPair(engine: Engine, lane: number, pair: [number, number]): [number, number] {
+  if (engine.bus.pump <= 0 || engine.pumpEnv <= 0) return pair;
+  if (lane !== LANE_BASS && lane !== LANE_CHORDS) return pair;
+  const gain = 1 - engine.bus.pump * engine.pumpEnv;
+  return [pair[0] * gain, pair[1] * gain];
+}
+
+function decayPump(engine: Engine): void {
+  if (engine.pumpEnv <= 0) return;
+  const eighth = (SAMPLE_RATE * 30) / Math.max(1, engine.tempo);
+  engine.pumpEnv = Math.max(0, engine.pumpEnv - 1 / eighth);
+}
+
+/** One pole around 1 kHz. Zero tilt returns the sample unchanged. */
+function tiltMix(engine: Engine, left: number, right: number): [number, number] {
+  engine.tiltL += (left - engine.tiltL) * TILT_COEF;
+  engine.tiltR += (right - engine.tiltR) * TILT_COEF;
+  const tilt = engine.bus.tilt;
+  if (tilt === 0) return [left, right];
+  return [left + tilt * (left - 2 * engine.tiltL), right + tilt * (right - 2 * engine.tiltR)];
+}
+
+/** Round peaks, then a slow glue compressor. Zero is a wire. */
+function glueMix(engine: Engine, pair: [number, number]): [number, number] {
+  const glue = engine.bus.glue;
+  if (glue <= 0) return pair;
+  const level = Math.max(Math.abs(pair[0]), Math.abs(pair[1]));
+  const threshold = 1 - glue * 0.85;
+  const ratio = 1 + glue * 3;
+  let target = 1;
+  if (level > threshold && level > 1e-8) target = (threshold + (level - threshold) / ratio) / level;
+  const coef = target < engine.glueGain ? GLUE_ATTACK : GLUE_RELEASE;
+  engine.glueGain += (target - engine.glueGain) * coef;
+  const makeup = 1 + glue * 0.35;
+  const gain = engine.glueGain * makeup;
+  return [shave(pair[0] * gain, glue), shave(pair[1] * gain, glue)];
+}
+
+/** Small signals pass. Peaks fold down as glue rises. */
+function shave(x: number, glue: number): number {
+  const k = glue * 2.5;
+  return Math.tanh(x * (1 + k)) / (1 + k);
 }
 
 /** One shared-memory write: tempo, then the events of this audio block. */
@@ -339,6 +503,8 @@ function trigger(engine: Engine, event: BlockEvent | LoopEvent, tempo: number): 
     const drum = engine.drums[drumIndex(event.lane)];
     const pitch = read(event.params, ["freq"], 0.5);
     armDrum(drum, event, pitch, loop);
+    if (event.lane === "kick") engine.pumpEnv = 1;
+    if (event.lane === "perc") clearHaas(drum);
     return;
   }
   const note = steal(engine);
@@ -439,7 +605,9 @@ function armNote(engine: Engine, note: NoteVoice, event: BlockEvent | LoopEvent,
   note.age = 0;
   note.left = samples;
   note.lane = LANES.indexOf(event.lane);
+  note.pitch = event.note;
   note.loop = loop;
+  clearHaas(note);
   note.freq = 440 * 2 ** ((event.note - 69) / 12);
   note.wave = read(event.params, ["wave"], 0.36);
   note.bend = read(event.params, ["bend"], 0);
@@ -1260,6 +1428,7 @@ function emptyDrum(): DrumVoice {
     click: 0, drive: 0, fm: 0, ratio: 1, ring: 0, pos: 0.5, damp: 0,
     cutoff: 0.5, resonance: 0, reverb: 0, delay: 0, nlp: 0, nhp: 0, flt: 0, band: 0, loop: 0,
     envK: 1, noiseK: 1, pitchK: 1, clickK: 1, gain: 0,
+    haas: new Float32Array(HAAS_N), haasI: 0,
   };
 }
 
@@ -1268,6 +1437,7 @@ function emptyNote(): NoteVoice {
     on: false, phase: 0, phase2: 0, slave: 0, slave2: 0, env: 0, age: 0, left: 0, freq: 0,
     wave: 0.36, bend: 0, sync: 0, fold: 0, drive: 0, wide: 0,
     cutoff: 0.5, resonance: 0, reverb: 0, delay: 0, attack: 0, release: 0.4, gain: 0,
-    low: 0, band: 0, lane: 0, loop: 0, releaseK: 1,
+    low: 0, band: 0, lane: 0, pitch: 0, loop: 0, releaseK: 1,
+    haas: new Float32Array(HAAS_N), haasI: 0,
   };
 }
