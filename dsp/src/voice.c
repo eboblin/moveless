@@ -4,11 +4,14 @@
  * Own synth — libpo32 / Surge are not vendored; keys stay compatible with map.ts.
  */
 
+#define _POSIX_C_SOURCE 200809L
+
 #include <math.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #define SR 44100.0f
 #define TWO_PI 6.28318530718f
@@ -143,6 +146,10 @@ typedef struct {
     PhraseEv phrase[PHRASE_CAP];
     Drum drums[DRUMS];
     Note notes[NOTES];
+    /* Peak render share of the callback slack, 0..99, over the open window. */
+    int cpu_pct;
+    int cpu_peak;
+    int64_t cpu_window_ns;
 } Engine;
 
 typedef struct {
@@ -1769,12 +1776,49 @@ static void on_midi(void *instance, const uint8_t *msg, int len, int source) {
     (void)source;
 }
 
+/* Slack after the SPI transfer, per 128-frame block. The sample period is
+ * ~2902 us; the transfer takes ~389 us and the measured remainder the
+ * callback may spend is ~2370 us. 99 means this render filled that slack. */
+#define CPU_SLACK_NS_128 2370000LL
+#define CPU_WINDOW_NS 100000000LL
+
+static int64_t mono_ns(void) {
+    struct timespec ts;
+    if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) return 0;
+    return (int64_t)ts.tv_sec * 1000000000LL + (int64_t)ts.tv_nsec;
+}
+
+static void account_cpu(Engine *engine, int64_t spent_ns, int frames) {
+    if (!engine || frames <= 0) return;
+    int64_t budget = CPU_SLACK_NS_128 * (int64_t)frames / 128;
+    if (budget <= 0) return;
+    if (spent_ns < 0) spent_ns = 0;
+    int pct = (int)((spent_ns * 100 + budget / 2) / budget);
+    if (pct > 99) pct = 99;
+    if (pct > engine->cpu_peak) engine->cpu_peak = pct;
+    engine->cpu_pct = engine->cpu_peak;
+    engine->cpu_window_ns += (int64_t)frames * 1000000000LL / 44100;
+    if (engine->cpu_window_ns < CPU_WINDOW_NS) return;
+    engine->cpu_peak = 0;
+    engine->cpu_window_ns = 0;
+}
+
+static int cpu_key(const char *key) {
+    if (!key) return 0;
+    const char *colon = strrchr(key, ':');
+    return strcmp(colon ? colon + 1 : key, "cpu") == 0;
+}
+
 static int get_param(void *instance, const char *key, char *buf, int buf_len) {
-    (void)instance;
-    (void)key;
-    (void)buf;
-    (void)buf_len;
-    return -1;
+    Engine *engine = instance;
+    if (!engine || !cpu_key(key) || !buf || buf_len < 3) return -1;
+    int pct = engine->cpu_pct;
+    if (pct < 0) pct = 0;
+    if (pct > 99) pct = 99;
+    buf[0] = (char)('0' + pct / 10);
+    buf[1] = (char)('0' + pct % 10);
+    buf[2] = 0;
+    return 2;
 }
 
 static int get_error(void *instance, char *buf, int buf_len) {
@@ -1784,7 +1828,9 @@ static int get_error(void *instance, char *buf, int buf_len) {
 }
 
 static void render_block(void *instance, int16_t *out, int frames) {
+    int64_t t0 = mono_ns();
     render(instance, out, frames);
+    account_cpu(instance, mono_ns() - t0, frames);
 }
 
 static plugin_api_v2_t API = {

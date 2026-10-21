@@ -58,6 +58,12 @@ export interface Screen {
   digits: DigitCell[];
 }
 
+/** Audio-frame load, 0..99, drawn as two digits. */
+export function cpuText(load: number): string {
+  const n = Math.max(0, Math.min(99, Math.floor(Number.isFinite(load) ? load : 0)));
+  return `${Math.floor(n / 10)}${n % 10}`;
+}
+
 export function renderScreen(
   project: Project,
   ui: UiState,
@@ -65,6 +71,7 @@ export function renderScreen(
   playing = false,
   now = Date.now(),
   pixels: Uint8Array = new Uint8Array(WIDTH * HEIGHT),
+  cpu = 0,
 ): Screen {
   const peek = ui.heldContext;
   const context = peek ?? ui.context;
@@ -108,8 +115,8 @@ export function renderScreen(
   else if (chordRoll && phrase) drawChordRoll(pixels, phrase, playhead);
   else if (vizLane && phrase) drawPhrase(pixels, project, phrase, vizLane, playhead);
   const labels = mixer
-    ? [{ x: 1, y: 1, text: header.slice(0, LINE_LIMIT) }, ...mixerChannelLabels(project, focus)]
-    : drawLabels(project, context, page, focus, header);
+    ? mixerLabels(header, cpu, mixerChannelLabels(project, focus))
+    : drawLabels(project, context, page, focus, header, cpu);
   if (phrase && bars) labels.push(...chordNameLabels(project, phrase));
   if (notice) labels.push(...noticeLabels(notice.title, notice.value));
   if (hint && !notice && !mixer) {
@@ -700,22 +707,53 @@ export function cellTextX(cell: number, text: string, textWidth = text.length * 
   return left + Math.max(0, Math.floor((PARAM_COL_W - textWidth) / 2));
 }
 
+/** Two digits sit against the lane code. `limit` is their left edge. */
+function headerBefore(text: string, limit: number): string {
+  const room = Math.max(0, Math.floor((limit - 1) / CHAR_W));
+  return text.slice(0, room);
+}
+
+function placeRight(text: string, limit: number): number {
+  const width = text.length * CHAR_W;
+  const x = halfLeftX(1);
+  if (x + width <= limit) return x;
+  return Math.max(halfLeftX(0) + CHAR_W, limit - width);
+}
+
+function loadLabel(tag: string, cpu: number): { text: string; x: number; tagX: number } {
+  const text = cpuText(cpu);
+  const tagX = rightEdgeX(tag);
+  return { text, x: tagX - text.length * CHAR_W, tagX };
+}
+
+function mixerLabels(header: string, cpu: number, channels: Label[]): Label[] {
+  const load = loadLabel("", cpu);
+  return [
+    { x: 1, y: TITLE_Y, text: headerBefore(header, load.x) },
+    { x: load.x, y: TITLE_Y, text: load.text },
+    ...channels,
+  ];
+}
+
 function drawLabels(
   project: Project,
   context: ContextId,
   page: Page | undefined,
   focus: string | null,
   header: string,
+  cpu: number,
 ): Label[] {
   const labels: Label[] = [];
   const tag = laneTag(project, context);
-  labels.push({ x: rightEdgeX(tag), y: TITLE_Y, text: tag });
+  const load = loadLabel(tag, cpu);
+  labels.push({ x: load.x, y: TITLE_Y, text: load.text });
+  labels.push({ x: load.tagX, y: TITLE_Y, text: tag });
   if (focus) {
-    labels.push({ x: 1, y: TITLE_Y, text: header.slice(0, LINE_LIMIT) });
+    labels.push({ x: 1, y: TITLE_Y, text: headerBefore(header, load.x) });
   } else {
     const [left, right] = page?.groups ?? [null, null];
     if (left) labels.push({ x: halfLeftX(0), y: TITLE_Y, text: left });
-    if (right) labels.push({ x: halfLeftX(1), y: TITLE_Y, text: right });
+    if (right) labels.push({ x: placeRight(right, load.x), y: TITLE_Y, text: right });
   }
   page?.bindings.forEach((binding, index) => {
     if (!binding || index >= PARAM_COLS) return;

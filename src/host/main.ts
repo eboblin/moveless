@@ -36,7 +36,9 @@ interface HostGlobals {
   get_font_height?: () => number;
   move_midi_internal_send?: (packet: number[]) => void;
   host_module_set_param?: (key: string, value: string) => void;
+  host_module_get_param?: (key: string) => string | null;
   shadow_set_param?: (slot: number, key: string, value: string) => void;
+  shadow_get_param?: (slot: number, key: string) => string | null;
   host_ensure_dir?: (path: string) => boolean | void;
   host_file_exists?: (path: string) => boolean;
   host_read_file?: (path: string) => string | null;
@@ -85,6 +87,19 @@ let voiceStep = -1;
 let voiceMorph = false;
 let projectDirty = false;
 let dirtySinceMs = 0;
+/** Last audio-frame load read from dsp.so, 0..99. */
+let audioLoad = 0;
+let audioLoadAt = 0;
+
+function pollAudioLoad(now: number): void {
+  if (now - audioLoadAt < 100) return;
+  audioLoadAt = now;
+  const host = globalThis as HostGlobals;
+  const raw = host.host_module_get_param?.("cpu") ?? host.shadow_get_param?.(0, "overtake_dsp:cpu");
+  if (typeof raw !== "string") return;
+  const n = Number.parseInt(raw, 10);
+  if (Number.isInteger(n) && n >= 0 && n <= 99) audioLoad = n;
+}
 
 function markDirty(before: Project): void {
   if (session.project === before) return;
@@ -178,6 +193,7 @@ let paintUi: UiState | null = null;
 let paintPlaying = false;
 let paintStep = -1;
 let paintLatch = "";
+let paintLoad = -1;
 let paintNotice = false;
 let paintHint = false;
 let paintCapture = false;
@@ -210,7 +226,8 @@ function screenChanged(): boolean {
     paintCapture === capture &&
     paintFocus === focus &&
     paintPeek === peek &&
-    paintLatch === latch
+    paintLatch === latch &&
+    paintLoad === audioLoad
   ) {
     return false;
   }
@@ -224,6 +241,7 @@ function screenChanged(): boolean {
   paintFocus = focus;
   paintPeek = peek;
   paintLatch = latch;
+  paintLoad = audioLoad;
   return true;
 }
 
@@ -240,7 +258,7 @@ function ledsChanged(): boolean {
 }
 
 function paintScreen(): void {
-  const screen = renderScreen(session.project, session.ui, session.tick, session.playing, Date.now(), frame);
+  const screen = renderScreen(session.project, session.ui, session.tick, session.playing, Date.now(), frame, audioLoad);
   blit(screen.pixels);
   const host = globalThis as HostGlobals;
   const invertedCells = new Set<number>();
@@ -477,7 +495,9 @@ export function init(): void {
 }
 
 export function tick(): void {
-  settleLatch(Date.now());
+  const now = Date.now();
+  pollAudioLoad(now);
+  settleLatch(now);
   advanceClock();
   const ui = settleWheel(session.ui);
   if (ui !== session.ui) session = { ...session, ui };

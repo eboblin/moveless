@@ -8,7 +8,7 @@ ptnmove is a Schwung overtake module. It starts in Play.
 
 The display is three bands:
 
-- **Header** — current lane and page. Touch a knob and this line shows that parameter’s full name.
+- **Header** — current lane and page, with the audio-frame load as two digits (`00`–`99`) immediately left of the lane code. `99` means the voice filled the callback. Touch a knob and this line shows that parameter’s full name.
 - **Pager** — the one-pixel line under the header. The current page is a solid segment. The others are dotted.
 - **Phrase** — time runs left to right. Height is pitch, including drums. A note’s height is its velocity, and never more than half the band. The playhead inverts the pixels it crosses.
 - **Parameters** — the knobs on this page. Touch a knob and its label plus value invert.
