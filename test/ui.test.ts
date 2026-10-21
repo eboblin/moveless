@@ -412,6 +412,65 @@ describe("surface", () => {
     assert.equal(cleared.project.randomizeIntensity, "clear");
     assert.equal(cleared.project.macros.probability, 0);
     assert.equal(cleared.project.macros.cutoff, 0.8);
+
+    let parked = openAux(session(), 0);
+    parked.project.macros = { probability: 0.8, cutoff: 0.8 };
+    parked.project.progression = { ...parked.project.progression, start: 7, mood: 1 };
+    parked.project.global = { ...parked.project.global, tempo: 200, scale: "major" };
+    parked.project.randomizeIntensity = "clear";
+    parked.project.randomizeDepth = "generators";
+    parked = loop(parked);
+    assert.equal(parked.project.progression.start, 7);
+    assert.equal(parked.project.global.tempo, 200);
+    assert.equal(parked.project.global.scale, "major");
+    assert.equal(parked.project.macros.probability, 0.8);
+
+    parked.project.randomizeDepth = "values";
+    parked = loop(parked);
+    assert.equal(parked.project.randomizeScope, "group");
+    assert.equal(parked.project.progression.start, 0);
+    assert.equal(parked.project.progression.mood, 0);
+    assert.equal(parked.project.global.tempo, 200);
+    assert.equal(parked.project.global.scale, "major");
+    assert.equal(parked.project.macros.probability, 0.8);
+
+    parked.project.progression = { ...parked.project.progression, start: 7 };
+    parked.project.randomizeScope = "page";
+    parked.project.randomizeDepth = "all";
+    parked.project.randomizeIntensity = "hard";
+    const before = parked.project.progression.start;
+    parked = loop(parked);
+    assert.notEqual(parked.project.progression.start, before);
+    assert.equal(parked.project.global.tempo, 200);
+
+    parked.project.randomizeScope = "lane";
+    parked.project.randomizeIntensity = "clear";
+    parked = loop(parked);
+    assert.equal(parked.project.macros.probability, 0);
+    assert.equal(parked.project.macros.cutoff, 0);
+    assert.equal(parked.project.progression.start, 0);
+    assert.equal(parked.project.global.tempo, 120);
+    assert.equal(parked.project.global.scale, "minor");
+
+    let globalPage = openAux(session(), 1);
+    globalPage.project.global = { ...globalPage.project.global, tempo: 90, scale: "dorian" };
+    globalPage.project.progression = { ...globalPage.project.progression, start: 5 };
+    globalPage.project.randomizeScope = "page";
+    globalPage.project.randomizeIntensity = "clear";
+    globalPage.project.randomizeDepth = "values";
+    globalPage = loop(globalPage);
+    assert.equal(globalPage.project.global.tempo, 120);
+    assert.equal(globalPage.project.global.scale, "minor");
+    assert.equal(globalPage.project.progression.start, 5);
+
+    let shapes = openAux(session(), 3);
+    shapes.project.macros = { probability: 0.8, cutoff: 0.8 };
+    shapes.project.randomizeScope = "page";
+    shapes.project.randomizeDepth = "generators";
+    shapes.project.randomizeIntensity = "clear";
+    shapes = loop(shapes);
+    assert.equal(shapes.project.macros.probability, 0.8);
+    assert.equal(shapes.project.macros.cutoff, 0.8);
   });
 
   it("restores each lane's own page", () => {
@@ -490,12 +549,70 @@ describe("surface", () => {
     state = reduce(state, { kind: "note", data1: 9, data2: 127 });
     const wheel = padLeds(state.project, "journal", state.ui);
     assert.equal(wheel[24].color, offColor(14));
-    assert.equal(wheel[25].color, offColor(8));
-    assert.equal(wheel[25].blink, false);
+    assert.equal(wheel[24].blink, false);
+    assert.equal(wheel[25].color, 8);
+    assert.equal(wheel[25].blink, true);
+    assert.equal(wheel[25].blinkTo, offColor(8));
     assert.equal(wheel[26].color, offColor(22));
     assert.equal(wheel[27].color, offColor(22));
     assert.equal(wheel[29].color, 0);
     assert.equal(wheel[31].color, 0);
+  });
+
+  it("shows which aux pages the randomize modifiers will rewrite", () => {
+    const surface = { wheelTouch: true, context: "aux" as const, page: 1 };
+    const group = padLeds(defaultProject(), "journal", surface);
+    assert.equal(group[24].color, offColor(14));
+    assert.equal(group[24].blink, false);
+    assert.equal(group[25].color, 8);
+    assert.equal(group[25].blink, true);
+    assert.equal(group[26].color, offColor(22));
+    assert.equal(group[27].color, offColor(22));
+
+    const lane = padLeds({ ...defaultProject(), randomizeScope: "lane" }, "journal", surface);
+    assert.equal(lane[24].color, 14);
+    assert.equal(lane[25].color, 8);
+    assert.equal(lane[25].blink, true);
+    assert.equal(lane[26].color, 22);
+    assert.equal(lane[26].blink, false);
+    assert.equal(lane[27].color, 22);
+
+    const tone = { wheelTouch: true, context: "aux" as const, page: 3 };
+    const page = padLeds({ ...defaultProject(), randomizeScope: "page" }, "journal", tone);
+    assert.equal(page[24].color, offColor(14));
+    assert.equal(page[25].color, offColor(8));
+    assert.equal(page[26].color, offColor(22));
+    assert.equal(page[26].blink, false);
+    assert.equal(page[27].color, 22);
+    assert.equal(page[27].blink, true);
+    assert.equal(page[27].blinkTo, offColor(22));
+
+    const both = padLeds({ ...defaultProject(), randomizeScope: "group" }, "journal", tone);
+    assert.equal(both[26].color, 22);
+    assert.equal(both[27].color, 22);
+    assert.equal(both[27].blink, true);
+
+    const wiped = padLeds({ ...defaultProject(), randomizeScope: "group", randomizeIntensity: "clear" }, "journal", tone);
+    assert.equal(wiped[24].color, offColor(14));
+    assert.equal(wiped[25].color, offColor(8));
+    assert.equal(wiped[26].color, LED.red);
+    assert.equal(wiped[27].color, LED.red);
+    assert.equal(wiped[27].blinkTo, 66);
+
+    const shapes = padLeds({ ...defaultProject(), randomizeScope: "lane", randomizeDepth: "generators" }, "journal", tone);
+    assert.equal(shapes[24].color, offColor(14));
+    assert.equal(shapes[25].color, offColor(8));
+    assert.equal(shapes[26].color, offColor(22));
+    assert.equal(shapes[27].color, offColor(22));
+    assert.equal(shapes[27].blink, true);
+    assert.equal(shapes[27].blinkTo, LED.off);
+
+    const fx = padLeds({ ...defaultProject(), randomizeDepth: "generators" }, "journal", { wheelTouch: true, context: "fx", page: 0 });
+    assert.equal(fx[24].color, offColor(9));
+    assert.equal(fx[24].blink, true);
+    assert.equal(fx[24].blinkTo, LED.off);
+    assert.equal(fx[25].color, offColor(9));
+    assert.equal(fx[25].blink, false);
   });
 
   it("zeros a knob on shift plus tap and leaves a plain tap alone", () => {

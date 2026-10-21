@@ -15,7 +15,8 @@ import {
   type PatternId,
   type Project,
 } from "../core/types.ts";
-import { pageCount, pageGroup, pageGroupColor, pagesFor } from "../core/pages.ts";
+import { pageCount, pageGroupColor, pagesFor, scopeIncludesPage } from "../core/pages.ts";
+import { depthTouchesPath } from "../core/randomize.ts";
 import { peekKind } from "./state.ts";
 
 export const LED = {
@@ -203,42 +204,36 @@ function choiceLed(family: LedFamily, color: number, selected: boolean): Led {
   return { family, color: selected ? color : dim, blink: false };
 }
 
-/** Top two rows: pages Loop will rewrite. In the zone they are bright, or red when Delete is selected. Outside it they keep a dark partner of their colour. */
+/**
+ * Top two rows. Outside the current scope or depth a page is dim.
+ * A page Loop will rewrite is bright, or red when Delete is selected.
+ * The current page always blinks, to the dark partner of the colour it is showing.
+ */
 function paintRandomizePages(out: Led[], project: Project, context: ContextId, page: number): void {
   const count = pageCount(context);
   const clear = project.randomizeIntensity === "clear";
   for (let index = 0; index < count && index < 16; index++) {
     const slot = index < 8 ? 24 + index : 16 + (index - 8);
     const color = pageGroupColor(context, index);
-    const zone = randomizeTouchesPage(project, context, index, page);
     const current = index === page;
+    const zone = randomizeTouchesPage(project, context, index, page);
     const shown = zone ? (clear ? LED.red : color) : offColor(color);
-    const second = clear && zone ? DIM_RED : offColor(color);
+    const second = clear ? DIM_RED : offColor(color);
     out[slot] = {
       family: "yellow",
       color: shown,
-      blink: current && zone,
-      blinkTo: current && zone ? second || (shown === 124 ? 123 : 124) : undefined,
+      blink: current,
+      blinkTo: current ? (zone ? second || (shown === 124 ? 123 : 124) : LED.off) : undefined,
     };
   }
 }
 
-/** Pages Loop will rewrite. Aux leaves progression and global alone. */
+/** Pages Loop will rewrite under the current scope and depth. */
 function randomizeTouchesPage(project: Project, context: ContextId, index: number, page: number): boolean {
-  const pages = pagesFor(context);
-  const item = pages[index];
+  if (!scopeIncludesPage(project.randomizeScope, context, index, page)) return false;
+  const item = pagesFor(context)[index];
   if (!item) return false;
-  if (context === "aux") {
-    const current = pages[page];
-    if (!current || current.group !== "macro") return false;
-    if (project.randomizeScope === "page") return index === page;
-    return item.group === current.group;
-  }
-  if (project.randomizeScope === "lane") return true;
-  if (project.randomizeScope === "page") return index === page;
-  const group = pageGroup(context, page);
-  const scope = group === "sound" || group === "notes" || group === "fx" ? group : "pattern";
-  return item.group === scope;
+  return item.bindings.some((binding) => binding && depthTouchesPath(binding.path, project.randomizeDepth));
 }
 
 /**

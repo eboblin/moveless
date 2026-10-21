@@ -11,6 +11,7 @@ import {
   type LaneId,
   type PatternId,
   type PitchedId,
+  type RandomizeScope,
 } from "./types.ts";
 
 export type MorphKind = "lerp" | "switch";
@@ -666,6 +667,22 @@ export function pageGroup(context: ContextId, index: number): PageGroup {
   const pages = pagesFor(context);
   const found = pages[index] ?? pages[pages.length - 1];
   return found?.group ?? "pattern";
+}
+
+/**
+ * Pages the scope geometry includes. `lane` is every page, `page` is the current
+ * one, `group` is the current page's group. Aux groups stay as they are
+ * (progression, global, macro). Lane pattern pages still share one group.
+ */
+export function scopeIncludesPage(scope: RandomizeScope, context: ContextId, index: number, page: number): boolean {
+  const item = pagesFor(context)[index];
+  if (!item) return false;
+  if (scope === "lane") return true;
+  if (scope === "page") return index === page;
+  if (context === "aux") return item.group === pageGroup(context, page);
+  const group = pageGroup(context, page);
+  const collapsed = group === "sound" || group === "notes" || group === "fx" ? group : "pattern";
+  return item.group === collapsed;
 }
 
 export function pageGroupColor(context: ContextId, index: number): number {

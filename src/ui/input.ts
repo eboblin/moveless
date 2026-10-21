@@ -24,7 +24,7 @@ import {
 } from "../core/performance.ts";
 import { CAPTURE_CC, contextAtStep, DOWN_CC, isLane, JOG_CLICK_CC, LANES, LOOP_CC, MENU_CC, MUTE_CC, PLAY_CC, RANDOMIZE_DEPTHS, RANDOMIZE_SCOPES, TRANSITIONS, UP_CC, WANDERS, type ContextId, type PatternId, type Project } from "../core/types.ts";
 import { resetControl, writeControl } from "./controls.ts";
-import { bindingPaths, mixerPage, pageCount, pageGroup, pagesFor } from "../core/pages.ts";
+import { bindingPaths, mixerPage, pageCount, pageGroup, pagesFor, scopeIncludesPage } from "../core/pages.ts";
 import { applyBookmark, FOCUS_HOLD_MS, focusHoldTicks, HOLD_MS, HOLD_TICKS, holdIsShort, mutePeekOpen, peekKind, RANDOMIZE_HINT_MS, rememberPage, settleWheel, type CaptureLine, type Notice, type RandomizeLine, type UiState } from "./state.ts";
 import { journalPageCount } from "../core/journal.ts";
 
@@ -387,10 +387,8 @@ function applyRandomize(session: Session): Session {
   const { context, page } = randomizeTarget(session);
   let project = session.project;
   if (mutePeekOpen(session.ui)) project = randomizeSurface(project, "mix", bindingPaths(mixerPage()));
-  else if (context === "aux") {
-    const surface = auxSurface(project.randomizeScope, page);
-    if (surface) project = randomizeSurface(project, surface.kind, surface.paths);
-  } else if (isLane(context)) project = rerollLane(project, context, page);
+  else if (context === "aux") project = rerollAux(project, page);
+  else if (isLane(context)) project = rerollLane(project, context, page);
   return { ...session, project };
 }
 
@@ -401,14 +399,17 @@ function randomizeTarget(session: Session): { context: ContextId; page: number }
   return { context, page };
 }
 
-/** Mixer and macro pages of the section button. Progression and global stay put. */
-function auxSurface(scope: Project["randomizeScope"], page: number): { kind: "mix" | "perf"; paths: string[] } | null {
-  const pages = pagesFor("aux");
-  const current = pages[Math.min(page, Math.max(0, pages.length - 1))];
-  if (!current || (current.group !== "mix" && current.group !== "macro")) return null;
-  const kind = current.group === "mix" ? "mix" : "perf";
-  const chosen = scope === "page" ? [current] : pages.filter((item) => item.group === current.group);
-  return { kind, paths: chosen.flatMap((item) => bindingPaths(item)) };
+/** One budget per aux page. Progression, global, and macro each keep their own store. */
+function rerollAux(project: Project, page: number): Project {
+  let next = project;
+  pagesFor("aux").forEach((item, index) => {
+    if (!scopeIncludesPage(next.randomizeScope, "aux", index, page)) return;
+    const paths = bindingPaths(item);
+    const store = item.bindings.find((binding) => binding)?.store;
+    if (store === "progression" || store === "global") next = randomizeSurface(next, store, paths);
+    else if (store === "macro") next = randomizeSurface(next, "perf", paths);
+  });
+  return next;
 }
 
 function rerollLane(project: Project, lane: PatternId, page: number): Project {

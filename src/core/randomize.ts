@@ -1,11 +1,13 @@
 import { clone } from "./clone.ts";
-import { defaultProject } from "./defaults.ts";
+import { defaultGlobal, defaultProgression, defaultProject } from "./defaults.ts";
 import { nodeAt, setPath } from "./fields.ts";
 import { hash01 } from "./hash.ts";
 import { bindingFor, laneScopePaths } from "./pages.ts";
 import {
   LANES,
+  SCALE_IDS,
   laneFamily,
+  type GlobalSettings,
   type RandomizeDepth,
   type RandomizeIntensity,
   type RandomizeScope,
@@ -54,6 +56,11 @@ function depthAllows(path: string, depth: RandomizeDepth): boolean {
   if (depth === "generators") return shape;
   if (depth === "values") return !shape;
   return true;
+}
+
+/** True when this depth will move the knob. Plain values are not generators. */
+export function depthTouchesPath(path: string, depth: RandomizeDepth): boolean {
+  return depthAllows(path, depth);
 }
 
 interface KnobSpec {
@@ -215,35 +222,66 @@ function restoreFactory(root: unknown, homes: unknown, paths: string[], depth: R
   }
 }
 
-/** Reroll mixer faders or perf macros. Homes: mixer channel 1 (shown as 100), macro 0. */
-export function randomizeSurface(project: Project, kind: "mix" | "perf", paths: string[]): Project {
+/** Knob index for the scale name. Factory minor is 0. */
+function globalRecord(global: GlobalSettings): Record<string, number> {
+  return {
+    tempo: global.tempo,
+    swing: global.swing,
+    root: global.root,
+    scale: Math.max(0, SCALE_IDS.indexOf(global.scale)),
+    transpose: global.transpose,
+    bar: global.bar,
+    phrase: global.phrase,
+    seed: global.seed,
+  };
+}
+
+function globalFromRecord(record: Record<string, number>): GlobalSettings {
+  return {
+    tempo: record.tempo,
+    swing: record.swing,
+    root: record.root,
+    scale: SCALE_IDS[record.scale] ?? "minor",
+    transpose: record.transpose,
+    bar: record.bar,
+    phrase: record.phrase,
+    seed: record.seed,
+  };
+}
+
+/**
+ * Reroll one surface page. Mixer homes are 1, macro homes are 0, progression and
+ * global homes are the factory project. Each call spends one page budget.
+ */
+export function randomizeSurface(project: Project, kind: "mix" | "perf" | "progression" | "global", paths: string[]): Project {
   const depth = project.randomizeDepth;
   const eligible = [...new Set(paths)].filter((path) => depthAllows(path, depth) && knobSpec(path));
   if (!eligible.length) return project;
   const intensity = project.randomizeIntensity;
   const nonce = project.randomizeNonce + 1;
-  if (intensity === "clear") {
-    if (kind === "mix") {
-      const mixer = { ...project.mixer };
-      const homes: Record<string, number> = {};
-      for (const id of [...LANES, "master"] as const) homes[id] = 1;
-      restoreFactory(mixer, homes, eligible, "all");
-      return { ...project, mixer, randomizeNonce: nonce };
-    }
-    const macros = { ...project.macros };
-    const homes = { macro: {} as Record<string, number> };
-    for (const path of eligible) homes.macro[path.slice("macro.".length)] = 0;
-    restoreFactory({ macro: macros }, homes, eligible, "all");
-    return { ...project, macros, randomizeNonce: nonce };
-  }
   const roll = (...parts: (string | number)[]) =>
     hash01(project.global.seed, "capture", nonce, kind, intensity, depth, ...parts);
   if (kind === "mix") {
     const mixer = { ...project.mixer };
     const homes: Record<string, number> = {};
     for (const id of [...LANES, "master"] as const) homes[id] = 1;
-    applySplitBudget(mixer, homes, eligible, roll, intensity);
+    if (intensity === "clear") restoreFactory(mixer, homes, eligible, "all");
+    else applySplitBudget(mixer, homes, eligible, roll, intensity);
     return { ...project, mixer, randomizeNonce: nonce };
+  }
+  if (kind === "progression") {
+    const progression = { ...project.progression };
+    const homes = defaultProgression();
+    if (intensity === "clear") restoreFactory(progression, homes, eligible, "all");
+    else applySplitBudget(progression, homes, eligible, roll, intensity);
+    return { ...project, progression, randomizeNonce: nonce };
+  }
+  if (kind === "global") {
+    const numbers = globalRecord(project.global);
+    const homes = globalRecord(defaultGlobal());
+    if (intensity === "clear") restoreFactory(numbers, homes, eligible, "all");
+    else applySplitBudget(numbers, homes, eligible, roll, intensity);
+    return { ...project, global: globalFromRecord(numbers), randomizeNonce: nonce };
   }
   const macros = { ...project.macros };
   const homes = { macro: {} as Record<string, number> };
@@ -252,7 +290,8 @@ export function randomizeSurface(project: Project, kind: "mix" | "perf", paths: 
     if (!(key in macros)) macros[key] = 0;
     homes.macro[key] = 0;
   }
-  applySplitBudget({ macro: macros }, homes, eligible, roll, intensity);
+  if (intensity === "clear") restoreFactory({ macro: macros }, homes, eligible, "all");
+  else applySplitBudget({ macro: macros }, homes, eligible, roll, intensity);
   return { ...project, macros, randomizeNonce: nonce };
 }
 
