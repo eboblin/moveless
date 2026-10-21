@@ -5,11 +5,11 @@ import { phraseStepsOf } from "../core/events.ts";
 import { chordSymbol, degreeNumeral, pitchClassName, scaleShort, scaleTitle } from "../core/harmony.ts";
 import { chordFigure, endpointLanes, endpointPhrases, generatePhrase, laneSteps, octaveNumber, restingChordToneLabel, restingPitchLabel, restingSliceLabel } from "../core/phrase.ts";
 import { evalModulated } from "../core/modulate.ts";
-import { RANDOMIZE_DEPTHS, RANDOMIZE_INTENSITIES, RANDOMIZE_SCOPES, isPitched, isVoice, LANES, LANE_CODE, type RandomizeDepth, type RandomizeIntensity, type RandomizeScope, type ContextId, type HarmonicEvent, type LaneId, type Phrase, type Project, type TimedEvent } from "../core/types.ts";
+import { RANDOMIZE_DEPTHS, RANDOMIZE_INTENSITIES, RANDOMIZE_SCOPES, TRANSITIONS, WANDERS, isPitched, isVoice, LANES, LANE_CODE, type RandomizeDepth, type RandomizeIntensity, type RandomizeScope, type ContextId, type HarmonicEvent, type LaneId, type Phrase, type Project, type TimedEvent } from "../core/types.ts";
 import { DIGIT_H, displayAmount, type BigAmount, type DisplayAmount } from "./digits.ts";
 import { readControl } from "./controls.ts";
 import { bindingFor, pagesFor, type Binding, type Page } from "../core/pages.ts";
-import { focusVisible, peekKind, type RandomizeLine, type UiState } from "./state.ts";
+import { focusVisible, peekKind, type CaptureLine, type RandomizeLine, type UiState } from "./state.ts";
 
 export const WIDTH = 128;
 export const HEIGHT = 64;
@@ -73,7 +73,9 @@ export function renderScreen(
   const page = pages[Math.min(pageIndex, pages.length - 1)];
   const kind = peekKind(ui);
   const notice = ui.notice && now < ui.notice.untilMs ? ui.notice : null;
-  const hint = ui.randomizeHint && now < ui.randomizeHint.untilMs ? ui.randomizeHint : null;
+  const randomize = ui.randomizeHint && now < ui.randomizeHint.untilMs ? ui.randomizeHint : null;
+  const capture = ui.captureHint && now < ui.captureHint.untilMs ? ui.captureHint : null;
+  const hint = !randomize ? capture : !capture ? randomize : capture.untilMs >= randomize.untilMs ? capture : randomize;
   const focusState = !notice && focusVisible(ui.focus, tick, now) ? ui.focus : null;
   const focus = focusState?.label ?? null;
   const focusBinding = focusState ? bindingFor(focusState.path) : null;
@@ -111,7 +113,9 @@ export function renderScreen(
   if (phrase && bars) labels.push(...chordNameLabels(project, phrase));
   if (notice) labels.push(...noticeLabels(notice.title, notice.value));
   if (hint && !notice && !mixer) {
-    const menu = randomizeLineLabels(project, hint.line);
+    const menu = hint.line === "transition" || hint.line === "wander"
+      ? captureLineLabels(project, hint.line)
+      : randomizeLineLabels(project, hint.line);
     clearLinePlate(pixels, menu);
     labels.push(...menu);
   }
@@ -210,12 +214,23 @@ function mixerChannelLabels(project: Project, focus: string | null): Label[] {
 const DEPTH_WORD: Record<RandomizeDepth, string> = { all: "ALL", generators: "GENS", values: "VALUES" };
 const SCOPE_WORD: Record<RandomizeScope, string> = { lane: "LANE", group: "GROUP", page: "PAGE" };
 const INTENSITY_WORD: Record<RandomizeIntensity, string> = { clear: "DELETE", soft: "LOW", medium: "MED", hard: "HIGH" };
+const TRANSITION_WORD: Record<(typeof TRANSITIONS)[number], string> = { now: "NOW", fast: "FAST", medium: "MED", slow: "SLOW" };
+const WANDER_WORD: Record<(typeof WANDERS)[number], string> = { fast: "FAST", medium: "MED", slow: "SLOW" };
 
 function randomizeLineLabels(project: Project, line: RandomizeLine): Label[] {
   const y = HEADER_H + Math.floor((VIZ_H - 1 - FONT_H) / 2);
   if (line === "depth") return menuLine(RANDOMIZE_DEPTHS.map((id) => DEPTH_WORD[id]), DEPTH_WORD[project.randomizeDepth], y);
   if (line === "scope") return menuLine(RANDOMIZE_SCOPES.map((id) => SCOPE_WORD[id]), SCOPE_WORD[project.randomizeScope], y);
   return menuLine(RANDOMIZE_INTENSITIES.map((id) => INTENSITY_WORD[id]), INTENSITY_WORD[project.randomizeIntensity], y);
+}
+
+function captureLineLabels(project: Project, line: CaptureLine): Label[] {
+  const y = HEADER_H + Math.floor((VIZ_H - 1 - FONT_H) / 2);
+  if (line === "transition") {
+    return menuLine(["TRANS", ...TRANSITIONS.map((id) => TRANSITION_WORD[id])], TRANSITION_WORD[project.transition], y);
+  }
+  const current = project.wander ? WANDER_WORD[project.wander] : "OFF";
+  return menuLine(["WANDER", "OFF", ...WANDERS.map((id) => WANDER_WORD[id])], current, y);
 }
 
 /** Black plate one character outside the whole line, not around each word. */

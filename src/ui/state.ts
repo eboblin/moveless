@@ -28,6 +28,14 @@ export interface RandomizeHint {
   untilMs: number;
 }
 
+export type CaptureLine = "transition" | "wander";
+
+/** One Capture row, shown over the lane picture after its pad is pressed. */
+export interface CaptureHint {
+  line: CaptureLine;
+  untilMs: number;
+}
+
 export interface DetentHold {
   path: string;
   dir: -1 | 1;
@@ -50,6 +58,8 @@ export interface UiState {
   randomizeLatched: boolean;
   /** The randomize row last pressed, until its caption times out. */
   randomizeHint: RandomizeHint | null;
+  /** The Capture row last pressed, until its caption times out. */
+  captureHint: CaptureHint | null;
   muteHeld: boolean;
   /** Peek stays up after a short Mute tap. */
   muteLatched: boolean;
@@ -184,6 +194,7 @@ export function defaultUi(): UiState {
     wheelReleaseMs: null,
     randomizeLatched: false,
     randomizeHint: null,
+    captureHint: null,
     muteHeld: false,
     muteLatched: false,
     muteWasLatched: false,

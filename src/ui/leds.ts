@@ -141,15 +141,16 @@ export interface PadSurface {
 /**
  * Playing and morph-target pads share one pulse. Target also shades
  * dark→dim→bright by morph progress. An empty journal/set still shows pad 0 as the
- * current working scene. Capture-hold and the randomize layer replace the grid with overlays.
+ * current working scene. Capture adds Transition and Wander on the bottom row of that list.
+ * Jog touch or a latched jog click shows randomize instead, so the Capture row stays hidden.
  */
 export function padLeds(project: Project, mode: "journal" | "set", surface?: PadSurface, tick = 0): Led[] {
   const context = surface?.context ?? "kick";
   const page = surface?.page ?? 0;
   const kind = peekKind(surface ?? {});
   if (kind === "mute") return mutePeekLeds(project);
-  if (kind === "capture") return capturePadLeds(project, surface ?? {});
   if (surface?.wheelTouch || surface?.randomizeLatched) return randomizePadLeds(project, context, page);
+  if (kind === "capture") return capturePadLeds(project, mode, surface ?? {}, tick);
   const scenes = scenePadLeds(project, mode, tick, surface?.journalPage ?? 0, surface?.copyHeld ?? false);
   if (surface?.heldContext) {
     const shown = surface.heldPage ?? surface.lanePages?.[surface.heldContext] ?? (surface.heldContext === context ? page : -1);
@@ -181,18 +182,17 @@ function mutePeekLeds(project: Project): Led[] {
   return out;
 }
 
-/** Top two rows are the lane's pages. The bottom row is transition, then wander. */
-function capturePadLeds(project: Project, surface: PadSurface): Led[] {
-  const context = surface.heldContext ?? surface.context ?? "kick";
-  const rawPage = surface.heldContext ? surface.heldPage ?? surface.page ?? 0 : surface.page ?? 0;
-  const page = Math.min(rawPage, Math.max(0, pageCount(context) - 1));
+/** Bottom row is transition, then wander with Off first. The other three rows are the first 24 patterns, one row higher than usual. */
+function capturePadLeds(project: Project, mode: "journal" | "set", surface: PadSurface, tick: number): Led[] {
+  const scenes = scenePadLeds(project, mode, tick, surface.journalPage ?? 0, surface.copyHeld ?? false);
   const out = Array.from({ length: 32 }, () => led("off", false));
-  paintRandomizePages(out, project, context, page);
+  for (let index = 0; index < 24; index++) out[8 + index] = scenes[index];
   TRANSITIONS.forEach((id, col) => {
     out[col] = choiceLed("yellow", LED.yellow, project.transition === id);
   });
+  out[4] = choiceLed("purple", LED.purple, project.wander === null);
   WANDERS.forEach((id, col) => {
-    out[4 + col] = choiceLed("purple", LED.purple, project.wander === id);
+    out[5 + col] = choiceLed("purple", LED.purple, project.wander === id);
   });
   return out;
 }

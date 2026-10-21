@@ -111,6 +111,9 @@ describe("project persist", () => {
     assert.equal(parsed.project.morph, null);
     assert.equal(parsed.project.wander, "fast");
     assert.equal(parsed.project.wanderOriginTick, 0);
+    const old = parseStored(JSON.stringify({ version: 1, project: { wander: "glacial" }, ui: { context: "kick", page: 0, mode: "journal" } }));
+    assert.ok(old);
+    assert.equal(old.project.wander, "slow");
   });
 
   it("fills missing fields from defaults and rejects bad JSON", () => {

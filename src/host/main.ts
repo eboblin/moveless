@@ -180,6 +180,7 @@ let paintStep = -1;
 let paintLatch = "";
 let paintNotice = false;
 let paintHint = false;
+let paintCapture = false;
 let paintFocus = false;
 let paintPeek: string | null = null;
 let ledPhase = -1;
@@ -195,6 +196,7 @@ function screenChanged(): boolean {
   const now = Date.now();
   const notice = !!(ui.notice && now < ui.notice.untilMs);
   const hint = !!(ui.randomizeHint && now < ui.randomizeHint.untilMs);
+  const capture = !!(ui.captureHint && now < ui.captureHint.untilMs);
   const focus = focusVisible(ui.focus, session.tick, now);
   const peek = peekKind(ui);
   const latch = Math.round(session.project.progression.count) <= 0 ? latchStamp() : "";
@@ -205,6 +207,7 @@ function screenChanged(): boolean {
     paintStep === step &&
     paintNotice === notice &&
     paintHint === hint &&
+    paintCapture === capture &&
     paintFocus === focus &&
     paintPeek === peek &&
     paintLatch === latch
@@ -217,6 +220,7 @@ function screenChanged(): boolean {
   paintStep = step;
   paintNotice = notice;
   paintHint = hint;
+  paintCapture = capture;
   paintFocus = focus;
   paintPeek = peek;
   paintLatch = latch;
@@ -457,6 +461,7 @@ export function init(): void {
   paintStep = -1;
   paintNotice = false;
   paintHint = false;
+  paintCapture = false;
   paintFocus = false;
   paintPeek = null;
   ledPhase = -1;

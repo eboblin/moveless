@@ -129,9 +129,8 @@ export function advance(project: Project, tick: number, candidates?: readonly (s
 }
 
 export function setWander(project: Project, rate: WanderId | null, tick: number): Project {
-  if (rate === null || project.wander === rate) {
-    return { ...project, wander: null };
-  }
+  if (rate === null) return { ...project, wander: null };
+  if (project.wander === rate) return project;
   return { ...project, wander: rate, wanderOriginTick: tick };
 }
 

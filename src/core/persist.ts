@@ -285,6 +285,7 @@ function asTransition(value: unknown): TransitionId | null {
 }
 
 function asWander(value: unknown): WanderId | null {
+  if (value === "glacial") return "slow";
   return typeof value === "string" && (WANDERS as readonly string[]).includes(value) ? (value as WanderId) : null;
 }
 

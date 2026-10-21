@@ -76,8 +76,8 @@ A locked lane is left as it is. A knob turned during the morph keeps the value y
 
 - **Mute** plus a lane button toggles mute. Muted drums and notes go silent. Muted chords still feed Bass and Lead.
 - **Loop** plus a lane button locks that lane. Morph, Wander, Randomize, and macros leave it alone.
-- **Loop** alone rerolls with the stored depth, scope and intensity. Touch the jog for those pads. Click the jog to leave the pads up; click again for the scene pads. Pressing a pad in one row writes that row over the lane picture for a second.
-- **Capture** shows Transition and Wander on the bottom pad row. A short press leaves that page up.
+- **Loop** alone rerolls with the stored depth, scope and intensity. Touch the jog to show the randomize pads. Click the jog to leave them up; click again for the pattern pads. While that view is up, the Capture row stays hidden. Pressing a pad in one randomize row writes that row over the lane picture for a second.
+- **Capture** adds Transition and Wander to the bottom row of the pattern pads and shifts the patterns up one row. A long press keeps that row while the button is held. A short press leaves it up. Pressing a pad in one of those groups writes its line over the lane picture for a second. The row is part of the pattern view, so it stays hidden while the jog is showing randomize.
 - **Track** buttons 1–4 are bookmarks. A short press jumps to the stored lane and page. Hold one to store the page you are on. A stored button lights in that page group's colour and changes colour when you overwrite it. An empty button stays off. The bookmark you are currently on blinks.
 
 Leave the module with **Shift + volume touch + jog click**.

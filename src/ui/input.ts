@@ -25,7 +25,7 @@ import {
 import { CAPTURE_CC, contextAtStep, DOWN_CC, isLane, JOG_CLICK_CC, LANES, LOOP_CC, MENU_CC, MUTE_CC, PLAY_CC, RANDOMIZE_DEPTHS, RANDOMIZE_SCOPES, TRANSITIONS, UP_CC, WANDERS, type ContextId, type PatternId, type Project } from "../core/types.ts";
 import { resetControl, writeControl } from "./controls.ts";
 import { bindingPaths, mixerPage, pageCount, pageGroup, pagesFor } from "../core/pages.ts";
-import { applyBookmark, FOCUS_HOLD_MS, focusHoldTicks, HOLD_MS, HOLD_TICKS, holdIsShort, mutePeekOpen, peekKind, RANDOMIZE_HINT_MS, rememberPage, settleWheel, type Notice, type RandomizeLine, type UiState } from "./state.ts";
+import { applyBookmark, FOCUS_HOLD_MS, focusHoldTicks, HOLD_MS, HOLD_TICKS, holdIsShort, mutePeekOpen, peekKind, RANDOMIZE_HINT_MS, rememberPage, settleWheel, type CaptureLine, type Notice, type RandomizeLine, type UiState } from "./state.ts";
 import { journalPageCount } from "../core/journal.ts";
 
 export interface MidiMsg {
@@ -118,6 +118,8 @@ function onPad(session: Session, index: number, press: boolean): Session {
   const col = index % 8;
   const top = row === 3;
   const second = row === 2;
+  const randomize = session.ui.wheelTouch || session.ui.randomizeLatched;
+  if (randomize) return onRandomizePad(session, row, col);
   if (kind === "capture") return onCapturePad(session, row, col);
   if (session.ui.heldContext && (top || second)) {
     const page = top ? col : 8 + col;
@@ -125,8 +127,11 @@ function onPad(session: Session, index: number, press: boolean): Session {
     if (page >= pageCount(held)) return session;
     return { ...session, ui: { ...rememberPage(session.ui, held, page), heldContext: held, heldPage: page } };
   }
-  const randomize = session.ui.wheelTouch || session.ui.randomizeLatched;
-  if (randomize) return onRandomizePad(session, row, col);
+  return onScenePad(session, index);
+}
+
+/** Patterns of the journal or the active set. */
+function onScenePad(session: Session, index: number): Session {
   const pads = session.ui.mode === "set"
     ? setPadIds(session.project)
     : journalPadIds(session.project, session.ui.journalPage);
@@ -154,33 +159,16 @@ function onPad(session: Session, index: number, press: boolean): Session {
   return { ...session, project: launchScene(session.project, sceneId, session.tick) };
 }
 
-/** Capture overlay. Top two rows pick a page. The bottom row is transition, then wander. */
+/** Capture overlay. The bottom row is transition, then Off and wander. The rows above are patterns, shifted up. */
 function onCapturePad(session: Session, row: number, col: number): Session {
-  if (row === 3 || row === 2) {
-    const page = row === 3 ? col : 8 + col;
-    const context = session.ui.heldContext ?? session.ui.context;
-    if (page >= pageCount(context)) return session;
-    if (session.ui.heldContext) {
-      return { ...session, ui: { ...rememberPage(session.ui, context, page), heldContext: context, heldPage: page } };
-    }
-    return selectPage(session, page);
-  }
-  if (row !== 0) return session;
+  if (row !== 0) return onScenePad(session, row * 8 + col - 8);
   if (col < TRANSITIONS.length) {
     const transition = TRANSITIONS[col];
-    return {
-      ...session,
-      project: { ...session.project, transition },
-      ui: { ...session.ui, notice: modeNotice("TRANSITION", transition.toUpperCase()) },
-    };
+    return showCaptureLine(session, { ...session.project, transition }, "transition");
   }
-  if (col >= 4 && col < 4 + WANDERS.length) {
-    const project = setWander(session.project, WANDERS[col - 4], session.tick);
-    return {
-      ...session,
-      project,
-      ui: { ...session.ui, notice: modeNotice("WANDER", project.wander ? project.wander.toUpperCase() : "OFF") },
-    };
+  if (col === 4) return showCaptureLine(session, setWander(session.project, null, session.tick), "wander");
+  if (col >= 5 && col < 5 + WANDERS.length) {
+    return showCaptureLine(session, setWander(session.project, WANDERS[col - 5], session.tick), "wander");
   }
   return session;
 }
@@ -210,6 +198,14 @@ function showRandomizeLine(session: Session, project: Project, line: RandomizeLi
     ...session,
     project,
     ui: { ...session.ui, randomizeHint: { line, untilMs: Date.now() + RANDOMIZE_HINT_MS } },
+  };
+}
+
+function showCaptureLine(session: Session, project: Project, line: CaptureLine): Session {
+  return {
+    ...session,
+    project,
+    ui: { ...session.ui, captureHint: { line, untilMs: Date.now() + RANDOMIZE_HINT_MS } },
   };
 }
 

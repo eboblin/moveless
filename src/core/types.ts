@@ -220,7 +220,7 @@ export interface GlobalSettings {
 }
 
 export type TransitionId = "now" | "fast" | "medium" | "slow";
-export type WanderId = "fast" | "medium" | "slow" | "glacial";
+export type WanderId = "fast" | "medium" | "slow";
 /** Clear restores the factory values in scope. Soft/medium/hard step off the current value toward that factory. */
 export type RandomizeIntensity = "clear" | "soft" | "medium" | "hard";
 export const RANDOMIZE_INTENSITIES: readonly RandomizeIntensity[] = ["clear", "soft", "medium", "hard"];
@@ -232,7 +232,7 @@ export type RandomizeDepth = "all" | "generators" | "values";
 export const RANDOMIZE_DEPTHS: readonly RandomizeDepth[] = ["all", "generators", "values"];
 
 export const TRANSITIONS: readonly TransitionId[] = ["now", "fast", "medium", "slow"];
-export const WANDERS: readonly WanderId[] = ["fast", "medium", "slow", "glacial"];
+export const WANDERS: readonly WanderId[] = ["fast", "medium", "slow"];
 /** Menu button under the jog wheel. */
 export const MENU_CC = 50;
 /** Jog wheel click. Latches the randomize pads. */
@@ -260,7 +260,6 @@ export const WANDER_BARS: Record<WanderId, number> = {
   fast: 2,
   medium: 8,
   slow: 16,
-  glacial: 32,
 };
 
 export interface PageRef {

@@ -266,7 +266,7 @@ describe("pages and leds", () => {
     const pads = [
       [68, padLeds(project, "journal")[0]],
       [92, wheel[24]],
-      [92, capture[24]],
+      [76, capture[8]],
     ] as const;
     for (const [note, lit] of pads) {
       assert.equal(lit.blink, true);
@@ -278,8 +278,11 @@ describe("pages and leds", () => {
     assert.equal(capture[1].blink, false);
     assert.equal(capture[1].color, LED.yellow);
     assert.equal(capture[4].blink, false);
-    assert.equal(capture[4].color, LED.purple);
-    assert.equal(capture[5].color, offColor(LED.purple));
+    assert.equal(capture[4].color, offColor(LED.purple));
+    assert.equal(capture[5].color, LED.purple);
+    assert.equal(capture[6].color, offColor(LED.purple));
+    assert.deepEqual(capture[8], padLeds(project, "journal")[0]);
+    assert.equal(capture[24].color, 0);
     assert.equal(wheel[0].blink, false);
     assert.equal(wheel[0].color, 66);
     assert.equal(wheel[2].blink, false);
@@ -1154,26 +1157,62 @@ describe("surface", () => {
     assert.equal(padLeds(state.project, state.ui.mode, state.ui)[8].color, 0);
   });
 
-  it("sets transition and toggles wander from the Capture row", () => {
+  it("hides the Capture row while the randomize view is showing", () => {
+    let state = session();
+    state = reduce(state, { kind: "cc", data1: 3, data2: 127 });
+    state = reduce(state, { kind: "cc", data1: 3, data2: 0 });
+    state = reduce(state, { kind: "cc", data1: 52, data2: 127 });
+    state = reduce(state, { kind: "cc", data1: 52, data2: 0 });
+    assert.equal(state.ui.randomizeLatched, true);
+    assert.equal(state.ui.captureLatched, true);
+    const covered = padLeds(state.project, state.ui.mode, state.ui);
+    assert.equal(covered[8].color, LED.purple);
+    state = reduce(state, { kind: "note", data1: 68, data2: 127 });
+    assert.equal(state.project.randomizeIntensity, "clear");
+    assert.equal(state.project.transition, "fast");
+    state = reduce(state, { kind: "note", data1: 9, data2: 127 });
+    assert.equal(padLeds(state.project, state.ui.mode, state.ui)[8].color, LED.purple);
+    state = reduce(state, { kind: "cc", data1: 3, data2: 127 });
+    state = reduce(state, { kind: "cc", data1: 3, data2: 0 });
+    state = reduce(state, { kind: "note", data1: 9, data2: 0 });
+    const released = state.ui.wheelReleaseMs ?? 0;
+    state = { ...state, ui: settleWheel(state.ui, released + WHEEL_RELEASE_MS) };
+    assert.equal(state.ui.randomizeLatched, false);
+    assert.equal(state.ui.wheelTouch, false);
+    const patterns = padLeds(state.project, state.ui.mode, state.ui);
+    assert.equal(patterns[1].color, LED.yellow);
+    assert.equal(patterns[4].color, LED.purple);
+  });
+
+  it("sets transition and clears wander from the Capture row", () => {
     let state = session();
     state = reduce(state, { kind: "cc", data1: 52, data2: 127 });
     state = reduce(state, { kind: "note", data1: 68, data2: 127 });
     assert.equal(state.project.transition, "now");
-    const chosen = renderScreen(state.project, state.ui, 0, false, (state.ui.notice?.untilMs ?? 0) - 1);
-    assert.equal(chosen.viz, "notice");
-    assert.equal(chosen.labels.some((label) => label.text === "TRANSITION" && label.invert), true);
-    assert.equal(chosen.labels.some((label) => label.text === "NOW" && label.invert), true);
-    assert.equal(pixel(chosen, 4, HEADER_H + 8), 1);
-    const gone = renderScreen(state.project, state.ui, 0, false, state.ui.notice?.untilMs ?? 0);
-    assert.equal(gone.viz, "phrase");
-    state = reduce(state, { kind: "note", data1: 72, data2: 127 });
+    const chosen = renderScreen(state.project, state.ui, 0, false, (state.ui.captureHint?.untilMs ?? 0) - 1);
+    assert.equal(chosen.viz, "phrase");
+    assert.deepEqual(
+      chosen.labels.filter((label) => ["TRANS", "NOW", "FAST", "MED", "SLOW", "WANDER", "OFF"].includes(label.text)).map((label) => label.text),
+      ["TRANS", "NOW", "FAST", "MED", "SLOW"],
+    );
+    assert.equal(chosen.labels.find((label) => label.text === "NOW")?.invert, true);
+    assert.equal(chosen.labels.find((label) => label.text === "TRANS")?.invert, false);
+    const gone = renderScreen(state.project, state.ui, 0, false, state.ui.captureHint?.untilMs ?? 0);
+    assert.equal(gone.labels.some((label) => label.text === "TRANS"), false);
+    state = reduce(state, { kind: "note", data1: 73, data2: 127 });
+    assert.equal(state.project.wander, "fast");
+    state = reduce(state, { kind: "note", data1: 73, data2: 127 });
     assert.equal(state.project.wander, "fast");
     state = reduce(state, { kind: "note", data1: 72, data2: 127 });
     assert.equal(state.project.wander, null);
-    const screen = renderScreen(state.project, state.ui, 0, false, (state.ui.notice?.untilMs ?? 0) - 1);
-    assert.equal(screen.viz, "notice");
-    assert.equal(screen.labels.some((label) => label.text === "WANDER" && label.invert), true);
-    assert.equal(screen.labels.some((label) => label.text === "OFF" && label.invert), true);
+    const screen = renderScreen(state.project, state.ui, 0, false, (state.ui.captureHint?.untilMs ?? 0) - 1);
+    assert.equal(screen.viz, "phrase");
+    assert.deepEqual(
+      screen.labels.filter((label) => ["WANDER", "OFF", "FAST", "MED", "SLOW", "TRANS", "NOW"].includes(label.text)).map((label) => label.text),
+      ["WANDER", "OFF", "FAST", "MED", "SLOW"],
+    );
+    assert.equal(screen.labels.find((label) => label.text === "OFF")?.invert, true);
+    assert.equal(screen.labels.find((label) => label.text === "WANDER")?.invert, false);
     assert.equal(screen.header.includes("T:"), false);
   });
 
