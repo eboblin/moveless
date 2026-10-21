@@ -36,6 +36,13 @@ export interface CaptureHint {
   untilMs: number;
 }
 
+/** The macro digit coasting back to zero after its offset was written into the lanes. */
+export interface MacroReturn {
+  path: string;
+  from: number;
+  untilMs: number;
+}
+
 export interface DetentHold {
   path: string;
   dir: -1 | 1;
@@ -92,6 +99,12 @@ export interface UiState {
   focus: Focus | null;
   /** Clicks of resistance still owed before leaving the current detent. */
   detent: DetentHold | null;
+  /** Encoders currently touched, bit 0 is the first knob. */
+  heldEncoders: number;
+  /** Macro knobs touched or turned since the first finger went down. */
+  macroGesture: string[];
+  /** Display-only glides back to zero. The project values are already zero. */
+  macroReturns: MacroReturn[];
   notice: Notice | null;
   trackDownTick: (number | null)[];
   trackDownMs: (number | null)[];
@@ -157,6 +170,17 @@ export function focusHoldTicks(tempo: number): number {
 /** Wall-clock linger after an encoder release. The musical clock does not run while stopped. */
 export const FOCUS_HOLD_MS = 300;
 
+/** How long a released macro digit takes to reach zero. The lanes already hold the offset. */
+export const MACRO_RETURN_MS = 500;
+
+/** Shown macro value while it coasts home. Null once the coast has ended. */
+export function macroReturnValue(ret: MacroReturn, now: number): number | null {
+  if (now >= ret.untilMs) return null;
+  const elapsed = MACRO_RETURN_MS - (ret.untilMs - now);
+  const t = Math.min(1, Math.max(0, elapsed / MACRO_RETURN_MS));
+  return ret.from * (1 - t);
+}
+
 /** Knob preview: while the encoder is down, then until both the musical and wall clocks expire. */
 export function focusVisible(focus: Focus | null, tick: number, now: number): boolean {
   if (!focus) return false;
@@ -217,6 +241,9 @@ export function defaultUi(): UiState {
     heldPage: null,
     focus: null,
     detent: null,
+    heldEncoders: 0,
+    macroGesture: [],
+    macroReturns: [],
     notice: null,
     trackDownTick: [null, null, null, null],
     trackDownMs: [null, null, null, null],

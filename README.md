@@ -49,7 +49,7 @@ Page pads are colored by group. The current page blinks.
 
 **Mixer** is one page: seven lane levels and master.
 
-**Global** is tempo, swing, root, scale, transpose, bar, phrase length, and seed, then macro pages. A macro offsets a parameter that exists on at least two lanes. Record does not bake macros into a scene. A locked lane ignores them.
+**Global** is tempo, swing, root, scale, transpose, bar, phrase length, and seed, then one macro page. While a macro knob is held it offsets the lanes that have that parameter. When every knob is released, each one you touched writes its offset into those values and returns to zero. A locked lane ignores it.
 
 ## Scenes
 

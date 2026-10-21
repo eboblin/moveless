@@ -1,13 +1,15 @@
 import { clamp01, ticksPerBar } from "./clock.ts";
 import { clone } from "./clone.ts";
 import { defaultProject } from "./defaults.ts";
-import { fieldsOf } from "./fields.ts";
+import { fieldsOf, getPath, setPath } from "./fields.ts";
+import { pagesFor } from "./pages.ts";
 import { hash01 } from "./hash.ts";
 import { applyMorph, retarget } from "./morph.ts";
 import {
   isDrum,
   isPitched,
   LANES,
+  PATTERN_LANES,
   SET_CAPACITY,
   WANDER_BARS,
   type LaneId,
@@ -296,6 +298,36 @@ export function deleteSet(project: Project, setId: string): Project {
 
 export function setMacro(project: Project, id: string, offset: number): Project {
   return { ...project, macros: { ...project.macros, [id]: offset } };
+}
+
+/**
+ * Write one macro into the value of every unlocked lane it feeds, then clear it.
+ * Pattern, cycle, and amount stay. A locked lane is left alone. The heard sum
+ * does not move: the offset leaves the macro and lands in the stored value.
+ */
+export function commitMacro(project: Project, key: string): Project {
+  const offset = project.macros[key] ?? 0;
+  if (offset === 0) return project;
+  const working = clone(project.working);
+  const punched = project.morph ? project.morph.punched.slice() : null;
+  for (const lane of PATTERN_LANES) {
+    if (project.lock[lane]) continue;
+    for (const item of pagesFor(lane)) {
+      for (const binding of item.bindings) {
+        if (!binding?.macro?.includes(key)) continue;
+        const full = `${lane}.${binding.path}`;
+        let next = getPath(working, full) + offset;
+        if (next < binding.min) next = binding.min;
+        if (next > binding.max) next = binding.max;
+        if (binding.integer) next = Math.round(next);
+        setPath(working, full, next);
+        if (punched && !punched.includes(full)) punched.push(full);
+      }
+    }
+  }
+  const macros = { ...project.macros, [key]: 0 };
+  if (!project.morph || !punched) return { ...project, working, macros };
+  return { ...project, working, macros, morph: { ...project.morph, punched } };
 }
 
 export function setBus(project: Project, id: keyof Bus, value: number): Project {

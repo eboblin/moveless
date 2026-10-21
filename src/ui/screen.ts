@@ -8,7 +8,7 @@ import { RANDOMIZE_DEPTHS, RANDOMIZE_INTENSITIES, RANDOMIZE_SCOPES, TRANSITIONS,
 import { DIGIT_H, displayAmount, type BigAmount, type DisplayAmount } from "./digits.ts";
 import { readControl } from "./controls.ts";
 import { bindingFor, pagesFor, type Binding, type Page } from "../core/pages.ts";
-import { focusVisible, peekKind, type CaptureLine, type RandomizeLine, type UiState } from "./state.ts";
+import { focusVisible, macroReturnValue, peekKind, type CaptureLine, type RandomizeLine, type UiState } from "./state.ts";
 
 export const WIDTH = 128;
 export const HEIGHT = 64;
@@ -119,7 +119,7 @@ export function renderScreen(
   else if (vizLane && phrase) drawPhrase(pixels, project, phrase, vizLane, playhead);
   const labels = mixer
     ? [{ x: 1, y: TITLE_Y, text: header.slice(0, LINE_LIMIT) }, ...mixerChannelLabels(project, focus)]
-    : drawLabels(project, context, page, focus, header);
+    : drawLabels(project, context, page, focus, header, ui, now);
   const menu = hint && !notice && !mixer ? menuLineLabels(project, hint.line) : null;
   if (phrase && bars) {
     const names = chordNameLabels(project, phrase);
@@ -131,7 +131,7 @@ export function renderScreen(
     clearLinePlate(pixels, menu);
     labels.push(...menu);
   }
-  const digits = mixer || !page ? [] : paramDigits(project, context, page, focus);
+  const digits = mixer || !page ? [] : paramDigits(project, context, page, focus, ui, now);
   return { header, viz, pixels, labels, digits };
 }
 
@@ -684,7 +684,7 @@ function figureHeader(project: Project, context: ContextId, binding: Binding): s
   }
 }
 
-function knobAmount(project: Project, context: ContextId, binding: Binding): DisplayAmount {
+function knobAmount(project: Project, context: ContextId, binding: Binding, ui: UiState, now: number): DisplayAmount {
   switch (binding.display) {
     case "octave": {
       if (context !== "bass" && context !== "lead" && context !== "chords") break;
@@ -701,7 +701,9 @@ function knobAmount(project: Project, context: ContextId, binding: Binding): Dis
     default:
       break;
   }
-  return displayAmount(readControl(project, context, binding.path), binding);
+  const ret = binding.store === "macro" ? ui.macroReturns.find((item) => item.path === binding.path) : undefined;
+  const coasting = ret ? macroReturnValue(ret, now) : null;
+  return displayAmount(coasting ?? readControl(project, context, binding.path), binding);
 }
 
 function stepAt(_project: Project, tick: number): number {
@@ -722,6 +724,8 @@ function drawLabels(
   page: Page | undefined,
   focus: string | null,
   header: string,
+  ui: UiState,
+  now: number,
 ): Label[] {
   const labels: Label[] = [];
   const tag = laneTag(project, context);
@@ -737,7 +741,7 @@ function drawLabels(
     if (!binding || index >= PARAM_COLS) return;
     const name = binding.short;
     const lit = focus === binding.label;
-    const amount = knobAmount(project, context, binding);
+    const amount = knobAmount(project, context, binding, ui, now);
     if (amount.kind === "wide") {
       labels.push({
         x: cellTextX(index, amount.text),
@@ -753,11 +757,11 @@ function drawLabels(
   return labels;
 }
 
-function paramDigits(project: Project, context: ContextId, page: Page, focus: string | null): DigitCell[] {
+function paramDigits(project: Project, context: ContextId, page: Page, focus: string | null, ui: UiState, now: number): DigitCell[] {
   const digits: DigitCell[] = [];
   page.bindings.forEach((binding, index) => {
     if (!binding || index >= PARAM_COLS) return;
-    const amount = knobAmount(project, context, binding);
+    const amount = knobAmount(project, context, binding, ui, now);
     if (amount.kind !== "big") return;
     digits.push({
       cell: index,

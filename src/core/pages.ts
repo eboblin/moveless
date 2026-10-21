@@ -539,11 +539,11 @@ function globalPage(): Page {
   ]);
 }
 
-function macroPage(id: string, title: string, knobs: readonly (readonly [string, string, number?])[]): Page {
+function macroPage(id: string, title: string, groups: [string | null, string | null], knobs: readonly (readonly [string, string, number?])[]): Page {
   return page(
     id,
     title,
-    [title, null],
+    groups,
     "macro",
     knobs.map(([key, label, weight = PLAIN_WEIGHT]) =>
       bind({
@@ -559,29 +559,18 @@ function macroPage(id: string, title: string, knobs: readonly (readonly [string,
   );
 }
 
-function perfPages(): Page[] {
-  return [
-    macroPage("play", "PLAY", [
-      ["probability", "DENS", EUCLID.probability.weight],
-      ["repeat", "REP"],
-      ["step", "STEP"],
-      ["velocity", "VEL"],
-      ["length", "LEN"],
-      ["gate", "GATE"],
-      ["rate", "RATE"],
-      ["decay", "DECAY"],
-    ]),
-    macroPage("tone", "TONE", [
-      ["cutoff", "CUT"],
-      ["resonance", "RES"],
-      ["drive", "DRV"],
-      ["noise", "NSE"],
-      ["attack", "ATK"],
-      ["wave", "WAVE"],
-      ["wide", "WIDE"],
-      ["tone", "TONE"],
-    ]),
-  ];
+/** One performance page. Rhythm on the left, sound on the right. */
+function perfPage(): Page {
+  return macroPage("play", "PLAY", ["PLAY", "TONE"], [
+    ["probability", "DENS", EUCLID.probability.weight],
+    ["repeat", "REP"],
+    ["rate", "RATE"],
+    ["velocity", "VEL"],
+    ["cutoff", "CUT"],
+    ["resonance", "RES"],
+    ["drive", "DRV"],
+    ["decay", "DECAY"],
+  ]);
 }
 
 function busPage(): Page {
@@ -604,8 +593,8 @@ function busPage(): Page {
   ]);
 }
 
-/** Progression, global, the two macro pages, then the final mix. Fx is its own lane. Mixer lives on the Mute peek. */
-const AUX_PAGES: Page[] = [progPage(), globalPage(), ...perfPages(), busPage()];
+/** Progression, global, the macro page, then the final mix. Fx is its own lane. Mixer lives on the Mute peek. */
+const AUX_PAGES: Page[] = [progPage(), globalPage(), perfPage(), busPage()];
 
 /** Eight mixer faders. Not an aux page; the Mute peek edits these knobs. */
 export function mixerPage(): Page {

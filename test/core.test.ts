@@ -28,6 +28,7 @@ import {
   wanderCandidates,
   setRandomizeDepth,
   setRandomizeIntensity,
+  commitMacro,
   setMacro,
   audibleEvents,
   heardFx,
@@ -1612,15 +1613,66 @@ describe("randomize, wander, sets", () => {
 
   it("captures one perf page and zeros a macro on delete", () => {
     const project = setRandomizeIntensity(defaultProject(), "hard");
-    project.macros = { probability: 0.8, cutoff: 0.8 };
-    const page = randomizeSurface(project, "perf", ["macro.probability", "macro.repeat", "macro.step", "macro.velocity", "macro.length", "macro.gate", "macro.rate", "macro.decay"]);
+    project.macros = { probability: 0.8, cutoff: 0.8, noise: 0.8 };
+    const page = randomizeSurface(project, "perf", ["macro.probability", "macro.repeat", "macro.rate", "macro.velocity", "macro.cutoff", "macro.resonance", "macro.drive", "macro.decay"]);
     assert.notEqual(page.macros.probability, 0.8);
-    assert.equal(page.macros.cutoff, 0.8);
+    assert.equal(page.macros.noise, 0.8);
     const held = randomizeSurface(setRandomizeDepth(project, "generators"), "perf", ["macro.probability"]);
     assert.equal(held.macros.probability, 0.8);
     const cleared = randomizeSurface(setRandomizeIntensity(project, "clear"), "perf", ["macro.cutoff"]);
     assert.equal(cleared.macros.cutoff, 0);
     assert.equal(cleared.macros.probability, 0.8);
+  });
+
+  it("writes a macro into lane values on commit and leaves a locked lane", () => {
+    const project = defaultProject();
+    project.macros = { cutoff: 0.25, decay: 0.25, repeat: 0.25 };
+    project.working.bass.filter.cutoff = modulated(0.5, 3, 8, 0.1);
+    project.working.snare.filter.cutoff = modulated(0.5);
+    project.working.bass.sound.release = modulated(0.25);
+    project.working.snare.sound.bodyDecay = modulated(0.25);
+    project.working.snare.sound.noiseDecay = modulated(0.25);
+    project.working.kick.sound.decay = modulated(0.25);
+    project.working.hat.sound.attack = modulated(0.35);
+    project.working.bass.repeat = modulated(0.25);
+    project.working.lead.repeat = modulated(0.25);
+    project.working.kick.ratchet.count = modulated(0.25);
+    project.lock.snare = true;
+    project.lock.lead = true;
+    const heard = generatePhrase(project).lanes.bass[0]?.filter.cutoff;
+    const committed = commitMacro(project, "cutoff");
+    assert.equal(committed.macros.cutoff, 0);
+    assert.equal(committed.macros.decay, 0.25);
+    assert.equal(committed.working.bass.filter.cutoff.value, 0.75);
+    assert.equal(committed.working.bass.filter.cutoff.pattern, 3);
+    assert.equal(committed.working.bass.filter.cutoff.cycle, 8);
+    assert.equal(committed.working.bass.filter.cutoff.amount, 0.1);
+    assert.equal(committed.working.snare.filter.cutoff.value, 0.5);
+    assert.equal(generatePhrase(committed).lanes.bass[0]?.filter.cutoff, heard);
+    const tails = commitMacro(committed, "decay");
+    assert.equal(tails.macros.decay, 0);
+    assert.equal(tails.working.bass.sound.release.value, 0.5);
+    assert.equal(tails.working.kick.sound.decay.value, 0.5);
+    assert.equal(tails.working.snare.sound.bodyDecay.value, 0.25);
+    assert.equal(tails.working.snare.sound.noiseDecay.value, 0.25);
+    assert.equal(tails.working.hat.sound.attack.value, 0.35);
+    const reps = commitMacro(tails, "repeat");
+    assert.equal(reps.working.bass.repeat.value, 0.5);
+    assert.equal(reps.working.lead.repeat.value, 0.25);
+    assert.equal(reps.working.kick.ratchet.count.value, 0.5);
+    assert.equal(commitMacro(reps, "cutoff"), reps);
+  });
+
+  it("keeps a committed value when the morph lands", () => {
+    let project = setMacro(record(defaultProject()), "cutoff", 0.25);
+    project = launchScene(project, "001", 0);
+    project = commitMacro(project, "cutoff");
+    assert.ok(project.morph?.punched.includes("kick.filter.cutoff.value"));
+    const morph = project.morph;
+    assert.ok(morph);
+    const done = applyMorph(project, morph.originTick + morph.durationTicks);
+    assert.equal(done.morph, null);
+    assert.equal(done.working.kick.filter.cutoff.value, 0.75);
   });
 
   it("spends a separate budget on generators and on values", () => {

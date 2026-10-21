@@ -1,6 +1,7 @@
 import {
   randomizeLane,
   randomizePaths,
+  commitMacro,
   randomizeSurface,
   clampJournalPage,
   cycleSet,
@@ -24,8 +25,8 @@ import {
 } from "../core/performance.ts";
 import { CAPTURE_CC, contextAtStep, DOWN_CC, isLane, JOG_CLICK_CC, LANES, LOOP_CC, MENU_CC, MUTE_CC, PLAY_CC, RANDOMIZE_DEPTHS, RANDOMIZE_SCOPES, TRANSITIONS, UP_CC, WANDERS, type ContextId, type PatternId, type Project } from "../core/types.ts";
 import { resetControl, writeControl } from "./controls.ts";
-import { bindingPaths, mixerPage, pageCount, pageGroup, pagesFor, scopeIncludesPage } from "../core/pages.ts";
-import { applyBookmark, FOCUS_HOLD_MS, focusHoldTicks, HOLD_MS, HOLD_TICKS, holdIsShort, mutePeekOpen, peekKind, RANDOMIZE_HINT_MS, rememberPage, settleWheel, type CaptureLine, type Notice, type RandomizeLine, type UiState } from "./state.ts";
+import { bindingFor, bindingPaths, mixerPage, pageCount, pageGroup, pagesFor, scopeIncludesPage } from "../core/pages.ts";
+import { applyBookmark, FOCUS_HOLD_MS, focusHoldTicks, HOLD_MS, HOLD_TICKS, holdIsShort, MACRO_RETURN_MS, mutePeekOpen, peekKind, RANDOMIZE_HINT_MS, rememberPage, settleWheel, type CaptureLine, type MacroReturn, type Notice, type RandomizeLine, type UiState } from "./state.ts";
 import { journalPageCount } from "../core/journal.ts";
 
 export interface MidiMsg {
@@ -241,19 +242,41 @@ function turnWheel(session: Session, value: number): Session {
 }
 
 function touchEncoder(session: Session, index: number, press: boolean): Session {
+  const bit = 1 << index;
   if (!press) {
+    if ((session.ui.heldEncoders & bit) === 0) return session;
+    const heldEncoders = session.ui.heldEncoders & ~bit;
     const focus = session.ui.focus;
-    if (!focus?.held) return session;
+    if (heldEncoders !== 0) {
+      return { ...session, ui: { ...session.ui, heldEncoders, focus: focus ? { ...focus, held: true } : focus } };
+    }
+    let project = session.project;
+    const macroReturns: MacroReturn[] = [];
+    const untilMs = Date.now() + MACRO_RETURN_MS;
+    for (const path of session.ui.macroGesture) {
+      const binding = bindingFor(path);
+      if (binding?.store !== "macro") continue;
+      const from = project.macros[path.slice("macro.".length)] ?? 0;
+      if (from === 0) continue;
+      project = commitMacro(project, path.slice("macro.".length));
+      macroReturns.push({ path, from, untilMs });
+    }
     return {
       ...session,
+      project,
       ui: {
         ...session.ui,
-        focus: {
-          ...focus,
-          held: false,
-          untilTick: session.tick + focusHoldTicks(session.project.global.tempo),
-          untilMs: Date.now() + FOCUS_HOLD_MS,
-        },
+        heldEncoders: 0,
+        macroGesture: [],
+        macroReturns,
+        focus: focus
+          ? {
+              ...focus,
+              held: false,
+              untilTick: session.tick + focusHoldTicks(project.global.tempo),
+              untilMs: Date.now() + FOCUS_HOLD_MS,
+            }
+          : focus,
       },
     };
   }
@@ -262,6 +285,9 @@ function touchEncoder(session: Session, index: number, press: boolean): Session 
   const sameKnob = session.ui.detent?.path === binding.path;
   const ui = {
     ...session.ui,
+    heldEncoders: session.ui.heldEncoders | bit,
+    macroGesture: rememberMacro(session.ui.macroGesture, binding),
+    macroReturns: [],
     focus: focusFor(session, binding, true),
     detent: session.ui.shiftHeld || !sameKnob ? null : session.ui.detent,
   };
@@ -273,13 +299,25 @@ function turnEncoder(session: Session, index: number, value: number): Session {
   const delta = relDelta(value);
   const binding = currentBinding(session, index);
   if (!binding || !delta) return session;
-  const held = session.ui.focus?.held ?? false;
+  const fingers = session.ui.heldEncoders !== 0;
+  const coasting = session.ui.macroReturns.some((item) => item.path === binding.path);
   const turned = writeControl(session.project, session.ui.context, binding, delta, session.ui.detent);
   return {
     ...session,
     project: turned.project,
-    ui: { ...session.ui, detent: turned.hold, focus: focusFor(session, binding, held) },
+    ui: {
+      ...session.ui,
+      macroGesture: fingers ? rememberMacro(session.ui.macroGesture, binding) : session.ui.macroGesture,
+      macroReturns: coasting ? session.ui.macroReturns.filter((item) => item.path !== binding.path) : session.ui.macroReturns,
+      detent: turned.hold,
+      focus: focusFor(session, binding, fingers || (session.ui.focus?.held ?? false)),
+    },
   };
+}
+
+function rememberMacro(gesture: readonly string[], binding: { path: string; store: string }): string[] {
+  if (binding.store !== "macro" || gesture.includes(binding.path)) return gesture.slice();
+  return [...gesture, binding.path];
 }
 
 function focusFor(session: Session, binding: { path: string; label: string }, held: boolean) {
