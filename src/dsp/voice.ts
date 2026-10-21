@@ -16,6 +16,12 @@ const WT_CYCLE = 256;
 const WT_MIPS = 7;
 const WT_HARM = 64;
 const WT_ANCHOR = [0, 0.22, 0.42, 0.62, 0.82, 1];
+/** Shared loudness. A peak-normalized sine was as hot as a saw and a block slammed soft(). */
+const WT_RMS = 1 / Math.sqrt(2);
+/** One voice used to sit at 0.38. A block of tones needs room under the bus soft clip. */
+const NOTE_LEVEL = 0.22;
+const UNI_CENTS = 25;
+const UNI_PAN = 0.35;
 
 const P_NONE = 0;
 const P_FREQ = 1;
@@ -145,10 +151,10 @@ interface DrumVoice {
 
 interface NoteVoice {
   on: boolean;
-  phase: number;
-  phase2: number;
-  slave: number;
-  slave2: number;
+  /** Master phase of the center reader and the two unison sides. */
+  phase: number[];
+  /** Hard-sync reader, one per unison copy. */
+  slave: number[];
   env: number;
   age: number;
   left: number;
@@ -597,15 +603,15 @@ function armDrum(drum: DrumVoice, event: BlockEvent | LoopEvent, pitch: number, 
 
 function armNote(engine: Engine, note: NoteVoice, event: BlockEvent | LoopEvent, samples: number, loop: number): void {
   note.on = true;
-  note.phase = 0;
-  note.phase2 = 0;
-  note.slave = 0;
-  note.slave2 = 0;
   note.env = 0;
   note.age = 0;
   note.left = samples;
   note.lane = LANES.indexOf(event.lane);
   note.pitch = event.note;
+  for (let copy = 0; copy < 3; copy++) {
+    note.phase[copy] = unisonPhase(event.note, note.lane, engine.clock | 0, copy);
+    note.slave[copy] = 0;
+  }
   note.loop = loop;
   clearHaas(note);
   note.freq = 440 * 2 ** ((event.note - 69) / 12);
@@ -664,28 +670,46 @@ function hatPan(pos: number): [number, number] {
   return [left, right];
 }
 
-function noteSample(_engine: Engine, note: NoteVoice): [number, number] {
-  const inc = (TWO_PI * note.freq) / SAMPLE_RATE;
-  const primary = advanceOsc(note, "phase", "slave", inc, note.sync, note.bend, note.wave);
-  let mix = primary;
-  let side = 0;
-  if (note.wide > 1e-4) {
-    const ratio = 2 ** ((note.wide * 15) / 1200);
-    const second = advanceOsc(note, "phase2", "slave2", inc * ratio, note.sync, note.bend, note.wave);
-    const w = note.wide;
-    mix = primary * (1 - w * 0.5) + second * (w * 0.5);
-    side = (primary - second) * w * 0.5;
+function shapeNote(sample: number, fold: number, drive: number): number {
+  let mix = sample;
+  if (fold > 1e-4) {
+    const folded = Math.sin(mix * (1 + fold * fold * 4));
+    mix += (folded - mix) * fold;
   }
-  if (note.fold > 1e-4) {
-    const folded = Math.sin(mix * (1 + note.fold * note.fold * 4));
-    mix += (folded - mix) * note.fold;
-  }
-  if (note.drive > 1e-4) {
-    const amount = note.drive * note.drive * 5;
+  if (drive > 1e-4) {
+    const amount = drive * drive * 5;
     const driven = mix * (1 + amount);
     mix = driven / (1 + amount * Math.abs(mix));
   }
-  const resonated = filterSample(note, mix, note.cutoff, note.resonance);
+  return mix;
+}
+
+/**
+ * Wide 0 is the center reader alone. Above that, two side readers grow in
+ * with the square of the knob and sit symmetrically around the note. Full wide
+ * is three equal copies. The weights are power-normalized so the chord does not get louder.
+ */
+function noteSample(_engine: Engine, note: NoteVoice): [number, number] {
+  const inc = (TWO_PI * note.freq) / SAMPLE_RATE;
+  const open = note.wide > 1e-4;
+  const indexes = open ? [0, 1, 2] : [1];
+  let power = 0;
+  for (const index of indexes) power += unisonWeight(note.wide, index) ** 2;
+  const norm = 1 / Math.sqrt(power);
+  let mid = 0;
+  let side = 0;
+  for (const index of indexes) {
+    const weight = unisonWeight(note.wide, index);
+    const cents = unisonCents(note.wide, index);
+    const ratio = cents === 0 ? 1 : 2 ** (cents / 1200);
+    const shaped = shapeNote(advanceOsc(note, index, inc * ratio, note.sync, note.bend, note.wave), note.fold, note.drive);
+    const scaled = shaped * weight;
+    mid += scaled;
+    side += scaled * unisonPan(note.wide, index);
+  }
+  mid *= norm;
+  side *= norm;
+  const resonated = filterSample(note, mid, note.cutoff, note.resonance);
   const attackSamples = 1 + note.attack * 0.2 * SAMPLE_RATE;
   // Hold full level for the whole note. Release is the tail after that length, not a decay from the attack.
   if (note.left > 0 && note.age < attackSamples) note.env = (note.age + 1) / attackSamples;
@@ -694,8 +718,8 @@ function noteSample(_engine: Engine, note: NoteVoice): [number, number] {
   note.age += 1;
   if (note.left > 0) note.left -= 1;
   if (note.left <= 0 && note.age >= attackSamples && note.env < 0.0008) note.on = false;
-  const gain = resonated * note.env * note.gain * 0.38;
-  const sided = side * note.env * note.gain * 0.38;
+  const gain = resonated * note.env * note.gain * NOTE_LEVEL;
+  const sided = side * note.env * note.gain * NOTE_LEVEL;
   return [gain + sided, gain - sided];
 }
 
@@ -704,9 +728,9 @@ function gauss(k: number, center: number, sigma: number): number {
   return Math.exp(-d * d);
 }
 
-/** Integer partial at one spectral anchor. Kind 0..5 is sine, triangle, saw, square, pulse, vowel. */
+/** Integer partial at one spectral anchor. Kind 0..5 is dark, triangle, saw, square, pulse, vowel. */
 function anchorAmp(kind: number, k: number): number {
-  if (kind === 0) return k === 1 ? 1 : 0;
+  if (kind === 0) return 1 / (k * k);
   if (kind === 1) {
     if (k % 2 === 0) return 0;
     return (k % 4 === 1 ? 1 : -1) / (k * k);
@@ -735,18 +759,18 @@ function buildWaveTable(): Float32Array {
     for (let frame = 0; frame < WT_FRAMES; frame++) {
       const p = frame / (WT_FRAMES - 1);
       for (let k = 1; k <= maxH; k++) amp[k] = ampAt(p, k);
-      let peak = 0;
+      let energy = 0;
       const base = (mip * WT_FRAMES + frame) * WT_CYCLE;
       for (let n = 0; n < WT_CYCLE; n++) {
         const theta = (TWO_PI * n) / WT_CYCLE;
         let sum = 0;
         for (let k = 1; k <= maxH; k++) sum += amp[k] * Math.sin(k * theta);
         table[base + n] = sum;
-        const abs = Math.abs(sum);
-        if (abs > peak) peak = abs;
+        energy += sum * sum;
       }
-      if (peak > 1e-8) {
-        const norm = 1 / peak;
+      const rms = Math.sqrt(energy / WT_CYCLE);
+      if (rms > 1e-8) {
+        const norm = WT_RMS / rms;
         for (let n = 0; n < WT_CYCLE; n++) table[base + n] *= norm;
       }
     }
@@ -791,34 +815,66 @@ function bendUnit(u: number, bend: number): number {
   return u ** (1 + bend * bend * 3);
 }
 
+function unisonWeight(wide: number, index: number): number {
+  if (wide <= 1e-4 || index === 1) return 1;
+  return wide * wide;
+}
+
+function unisonCents(wide: number, index: number): number {
+  if (wide <= 1e-4 || index === 1) return 0;
+  return (index === 0 ? -wide : wide) * UNI_CENTS;
+}
+
+function unisonPan(wide: number, index: number): number {
+  if (wide <= 1e-4 || index === 1) return 0;
+  return (index === 0 ? -UNI_PAN : UNI_PAN);
+}
+
+/** Low 32 bits of a product. Matches uint32_t multiply in dsp/src/voice.c. */
+function u32mul(a: number, b: number): number {
+  const a0 = a & 0xffff;
+  const a1 = (a >>> 16) & 0xffff;
+  const b0 = b & 0xffff;
+  const b1 = (b >>> 16) & 0xffff;
+  return ((a0 * b0) + (((a0 * b1 + a1 * b0) & 0xffff) << 16)) >>> 0;
+}
+
+/** Note-on phase. Same integer mix as unison_phase in dsp/src/voice.c. */
+function unisonPhase(pitch: number, lane: number, sample: number, copy: number): number {
+  let h = (u32mul(pitch, 0x16566731) + u32mul(lane, 0x27d4eb2f) + u32mul(sample >>> 0, 0x85ebca77) + u32mul(copy, 0xc2b2ae35)) >>> 0;
+  h = u32mul(h ^ (h >>> 16), 0x7feb352d);
+  h = u32mul(h ^ (h >>> 15), 0x846ca68b);
+  h = (h ^ (h >>> 16)) >>> 0;
+  return (h / 4294967296) * TWO_PI;
+}
+
 function advanceOsc(
   note: NoteVoice,
-  phaseKey: "phase" | "phase2",
-  slaveKey: "slave" | "slave2",
+  index: number,
   inc: number,
   sync: number,
   bend: number,
   wave: number,
 ): number {
-  let phase = note[phaseKey] + inc;
+  let phase = note.phase[index] + inc;
   let wrapped = false;
   if (phase >= TWO_PI) {
     phase -= TWO_PI;
     if (phase >= TWO_PI) phase %= TWO_PI;
     wrapped = true;
   }
-  note[phaseKey] = phase;
+  note.phase[index] = phase;
   let u: number;
   let readFreq: number;
   if (sync > 1e-4) {
     const ratio = 1 + sync * sync * 4;
-    let slave = note[slaveKey];
+    let slave = note.slave[index];
     if (wrapped) slave = 0;
     else {
       slave += inc * ratio;
       if (slave >= TWO_PI) slave %= TWO_PI;
     }
-    note[slaveKey] = slave;
+    note.slave[index] = slave;
     u = slave / TWO_PI;
     readFreq = (inc * ratio * SAMPLE_RATE) / TWO_PI;
   } else {
@@ -1434,7 +1490,7 @@ function emptyDrum(): DrumVoice {
 
 function emptyNote(): NoteVoice {
   return {
-    on: false, phase: 0, phase2: 0, slave: 0, slave2: 0, env: 0, age: 0, left: 0, freq: 0,
+    on: false, phase: [0, 0, 0], slave: [0, 0, 0], env: 0, age: 0, left: 0, freq: 0,
     wave: 0.36, bend: 0, sync: 0, fold: 0, drive: 0, wide: 0,
     cutoff: 0.5, resonance: 0, reverb: 0, delay: 0, attack: 0, release: 0.4, gain: 0,
     low: 0, band: 0, lane: 0, pitch: 0, loop: 0, releaseK: 1,

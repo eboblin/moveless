@@ -2,6 +2,7 @@
  * ptnmove voice. One drum voice per lane and one shared note pool for
  * bass, lead and chords. Parameter ids match src/dsp/map.ts.
  * Own synth — libpo32 / Surge are not vendored; keys stay compatible with map.ts.
+ * Melody is a unison wavetable (frame, detune around the pitch, phase per voice).
  */
 
 #define _POSIX_C_SOURCE 200809L
@@ -83,7 +84,7 @@ typedef struct {
 
 typedef struct {
     int on;
-    float phase, phase2, slave, slave2, env, freq;
+    float phase[3], slave[3], env, freq;
     float wave, bend, sync, fold, drive, wide;
     float cutoff, resonance, reverb, delay, attack, release, gain, low, band;
     float release_k;
@@ -203,6 +204,10 @@ static float soft(float sample) {
 #define WT_CYCLE 256
 #define WT_MIPS 7
 #define WT_HARM 64
+#define WT_RMS 0.70710678118f
+#define NOTE_LEVEL 0.22f
+#define UNI_CENTS 25.0f
+#define UNI_PAN 0.35f
 static float wave_table[WT_MIPS * WT_FRAMES * WT_CYCLE];
 static int wave_ready = 0;
 static const float WT_ANCHOR[6] = {0.0f, 0.22f, 0.42f, 0.62f, 0.82f, 1.0f};
@@ -214,7 +219,7 @@ static float gauss_k(float k, float center, float sigma) {
 
 static float anchor_amp(int kind, int k) {
     float kf = (float)k;
-    if (kind == 0) return k == 1 ? 1.0f : 0.0f;
+    if (kind == 0) return 1.0f / (kf * kf);
     if (kind == 1) {
         if ((k & 1) == 0) return 0.0f;
         return ((k % 4) == 1 ? 1.0f : -1.0f) / (kf * kf);
@@ -245,7 +250,7 @@ static void ensure_wave_table(void) {
         for (frame = 0; frame < WT_FRAMES; frame++) {
             float p = (float)frame / (float)(WT_FRAMES - 1);
             float amp[WT_HARM + 1];
-            float peak = 0.0f;
+            double energy = 0.0;
             int base = (mip * WT_FRAMES + frame) * WT_CYCLE;
             for (k = 1; k <= max_h; k++) amp[k] = amp_at(p, k);
             for (n = 0; n < WT_CYCLE; n++) {
@@ -253,11 +258,14 @@ static void ensure_wave_table(void) {
                 float sum = 0.0f;
                 for (k = 1; k <= max_h; k++) sum += amp[k] * sinf((float)k * theta);
                 wave_table[base + n] = sum;
-                if (fabsf(sum) > peak) peak = fabsf(sum);
+                energy += (double)sum * (double)sum;
             }
-            if (peak > 1e-8f) {
-                float norm = 1.0f / peak;
-                for (n = 0; n < WT_CYCLE; n++) wave_table[base + n] *= norm;
+            {
+                double rms = sqrt(energy / (double)WT_CYCLE);
+                if (rms > 1e-8) {
+                    float norm = WT_RMS / (float)rms;
+                    for (n = 0; n < WT_CYCLE; n++) wave_table[base + n] *= norm;
+                }
             }
         }
     }
@@ -303,9 +311,38 @@ static float bend_unit(float u, float bend) {
     return powf(u, 1.0f + bend * bend * 3.0f);
 }
 
-static float advance_osc(Note *note, int wide, float inc, float sync, float bend, float wave) {
-    float *phase = wide ? &note->phase2 : &note->phase;
-    float *slave = wide ? &note->slave2 : &note->slave;
+/* Same integer mix as unisonPhase in src/dsp/voice.ts. */
+static float unison_phase(int pitch, int lane, int sample, int copy) {
+    uint32_t h = (uint32_t)pitch * 0x16566731u
+        + (uint32_t)lane * 0x27d4eb2fu
+        + (uint32_t)sample * 0x85ebca77u
+        + (uint32_t)copy * 0xc2b2ae35u;
+    h ^= h >> 16;
+    h *= 0x7feb352du;
+    h ^= h >> 15;
+    h *= 0x846ca68bu;
+    h ^= h >> 16;
+    return ((float)h / 4294967296.0f) * TWO_PI;
+}
+
+static float unison_weight(float wide, int index) {
+    if (wide <= 1e-4f || index == 1) return 1.0f;
+    return wide * wide;
+}
+
+static float unison_cents(float wide, int index) {
+    if (wide <= 1e-4f || index == 1) return 0.0f;
+    return (index == 0 ? -wide : wide) * UNI_CENTS;
+}
+
+static float unison_pan(float wide, int index) {
+    if (wide <= 1e-4f || index == 1) return 0.0f;
+    return (index == 0 ? -UNI_PAN : UNI_PAN);
+}
+
+static float advance_osc(Note *note, int index, float inc, float sync, float bend, float wave) {
+    float *phase = &note->phase[index];
+    float *slave = &note->slave[index];
     float next = *phase + inc;
     int wrapped = 0;
     float u, read_freq;
@@ -822,15 +859,15 @@ static Note *arm_note(Engine *engine, int note_num, int velocity, int ticks, con
     int samples = (int)((ticks * SR * 60.0f) / (tempo * 192.0f));
     if (samples < 1) samples = 1;
     note->on = 1;
-    note->phase = 0;
-    note->phase2 = 0;
-    note->slave = 0;
-    note->slave2 = 0;
     note->env = 0;
     note->age = 0;
     note->left = samples;
     note->lane = lane;
     note->pitch = note_num;
+    for (int copy = 0; copy < 3; copy++) {
+        note->phase[copy] = unison_phase(note_num, lane, engine->clock, copy);
+        note->slave[copy] = 0.0f;
+    }
     note->loop = loop;
     note->haas_i = 0;
     memset(note->haas, 0, sizeof note->haas);
@@ -1147,30 +1184,55 @@ static void drum_sample(Engine *engine, Drum *drum, float *left, float *right) {
     *right = filtered - side;
 }
 
-static void note_sample(Engine *engine, Note *note, float *left, float *right) {
-    float inc = (TWO_PI * note->freq) / SR;
-    float primary, mix, side = 0.0f, resonated, attack_samples, gain, sided;
-    (void)engine;
-    ensure_wave_table();
-    primary = advance_osc(note, 0, inc, note->sync, note->bend, note->wave);
-    mix = primary;
-    if (note->wide > 1e-4f) {
-        float ratio = powf(2.0f, (note->wide * 15.0f) / 1200.0f);
-        float second = advance_osc(note, 1, inc * ratio, note->sync, note->bend, note->wave);
-        float w = note->wide;
-        mix = primary * (1.0f - w * 0.5f) + second * (w * 0.5f);
-        side = (primary - second) * w * 0.5f;
+static float shape_note(float sample, float fold, float drive) {
+    float mix = sample;
+    if (fold > 1e-4f) {
+        float folded = sinf(mix * (1.0f + fold * fold * 4.0f));
+        mix += (folded - mix) * fold;
     }
-    if (note->fold > 1e-4f) {
-        float folded = sinf(mix * (1.0f + note->fold * note->fold * 4.0f));
-        mix += (folded - mix) * note->fold;
-    }
-    if (note->drive > 1e-4f) {
-        float amount = note->drive * note->drive * 5.0f;
+    if (drive > 1e-4f) {
+        float amount = drive * drive * 5.0f;
         float driven = mix * (1.0f + amount);
         mix = driven / (1.0f + amount * fabsf(mix));
     }
-    resonated = filter_sample(&note->low, &note->band, mix, note->cutoff, note->resonance);
+    return mix;
+}
+
+static void note_sample(Engine *engine, Note *note, float *left, float *right) {
+    float inc = (TWO_PI * note->freq) / SR;
+    int open = note->wide > 1e-4f;
+    int indexes[3];
+    int count, i;
+    float power = 0.0f, norm, mid = 0.0f, side = 0.0f, resonated, attack_samples, gain, sided;
+    (void)engine;
+    ensure_wave_table();
+    if (open) {
+        indexes[0] = 0;
+        indexes[1] = 1;
+        indexes[2] = 2;
+        count = 3;
+    } else {
+        indexes[0] = 1;
+        count = 1;
+    }
+    for (i = 0; i < count; i++) {
+        float weight = unison_weight(note->wide, indexes[i]);
+        power += weight * weight;
+    }
+    norm = 1.0f / sqrtf(power);
+    for (i = 0; i < count; i++) {
+        int index = indexes[i];
+        float weight = unison_weight(note->wide, index);
+        float cents = unison_cents(note->wide, index);
+        float ratio = cents == 0.0f ? 1.0f : powf(2.0f, cents / 1200.0f);
+        float shaped = shape_note(advance_osc(note, index, inc * ratio, note->sync, note->bend, note->wave), note->fold, note->drive);
+        float scaled = shaped * weight;
+        mid += scaled;
+        side += scaled * unison_pan(note->wide, index);
+    }
+    mid *= norm;
+    side *= norm;
+    resonated = filter_sample(&note->low, &note->band, mid, note->cutoff, note->resonance);
     attack_samples = 1.0f + note->attack * 0.2f * SR;
     /* Hold full level for the whole note. Release is the tail after that length. */
     if (note->left > 0 && (float)note->age < attack_samples) note->env = ((float)note->age + 1.0f) / attack_samples;
@@ -1180,8 +1242,8 @@ static void note_sample(Engine *engine, Note *note, float *left, float *right) {
     if (note->left > 0) note->left -= 1;
     /* Slow attacks start below 0.0008; only silence once the gate is over and the tail is quiet. */
     if (note->left <= 0 && (float)note->age >= attack_samples && note->env < 0.0008f) note->on = 0;
-    gain = resonated * note->env * note->gain * 0.38f;
-    sided = side * note->env * note->gain * 0.38f;
+    gain = resonated * note->env * note->gain * NOTE_LEVEL;
+    sided = side * note->env * note->gain * NOTE_LEVEL;
     *left += gain + sided;
     *right += gain - sided;
 }

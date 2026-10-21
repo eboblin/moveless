@@ -615,7 +615,7 @@ describe("dsp adapter", () => {
     assert.equal(project.working.chords.sound.release.value, 0);
   });
 
-  it("puts more edge on a saw and on sync than on a sine", () => {
+  it("puts more edge on a saw and on sync than on the dark frame", () => {
     const edge = (wave: number, sync: number) => {
       const audio = renderBlock(createEngine(), [{
         sampleOffset: 0, lane: "lead", note: 69, velocity: 110, lengthTicks: 192,
@@ -631,9 +631,9 @@ describe("dsp adapter", () => {
       }
       return energy;
     };
-    const sine = edge(0, 0);
-    assert.ok(edge(0.42, 0) > sine * 2);
-    assert.ok(edge(0, 1) > sine * 2);
+    const dark = edge(0, 0);
+    assert.ok(edge(0.42, 0) > dark * 2);
+    assert.ok(edge(0, 1) > dark * 2);
     const hot = renderBlock(createEngine(), [{
       sampleOffset: 0, lane: "lead", note: 76, velocity: 120, lengthTicks: 192,
       params: [
@@ -645,6 +645,47 @@ describe("dsp adapter", () => {
       assert.ok(Number.isFinite(sample));
       assert.ok(Math.abs(sample) < 4);
     }
+  });
+
+  it("keeps a block from pumping louder than one note of the same wave", () => {
+    const frames = 44100;
+    const window = 4410;
+    const chord = (notes: number[], wide: number, wave: number, bend = 0, drive = 0) => renderBlock(createEngine(), notes.map((note) => ({
+      sampleOffset: 0,
+      lane: "chords" as const,
+      note,
+      velocity: 100,
+      lengthTicks: 800,
+      params: [
+        ...mapSound("chords", { wave, bend, sync: 0, fold: 0, drive, wide, attack: 0, release: 0.4 }),
+        ...mapFilter({ cutoff: 0.5, resonance: 0 }),
+      ],
+    })), 120, frames);
+    const floor = (audio: Float32Array) => {
+      let min = Infinity;
+      let sum = 0;
+      let count = 0;
+      const n = audio.length / 2;
+      for (let start = 0; start + window <= n; start += window) {
+        let energy = 0;
+        for (let i = start; i < start + window; i++) {
+          const mid = (audio[i * 2] + audio[i * 2 + 1]) * 0.5;
+          energy += mid * mid;
+        }
+        const level = Math.sqrt(energy / window);
+        if (level < min) min = level;
+        sum += level;
+        count += 1;
+      }
+      return min / (sum / count);
+    };
+    const single = floor(chord([60], 0, 0));
+    const block = floor(chord([48, 52, 55], 0, 0));
+    const factory = floor(chord([48, 52, 55], 0.4, 0.24, 0.04, 0.06));
+    assert.ok(single > 0.92, `single ${single}`);
+    assert.ok(block > single - 0.08, `block ${block} single ${single}`);
+    assert.ok(factory > single - 0.12, `factory ${factory} single ${single}`);
+    assert.deepEqual(chord([48, 52, 55], 0, 0), chord([48, 52, 55], 0, 0));
   });
 
   it("leaves the mix alone when every bus knob is zero", () => {
