@@ -21,6 +21,7 @@ import {
   WIDTH,
   VIZ_H,
   cellTextX,
+  loadWidth,
   renderScreen,
 } from "../ui/screen.ts";
 import { defaultUi, focusVisible, peekKind, rememberPage, settleWheel, type UiState } from "../ui/state.ts";
@@ -87,18 +88,33 @@ let voiceStep = -1;
 let voiceMorph = false;
 let projectDirty = false;
 let dirtySinceMs = 0;
-/** Last audio-frame load read from dsp.so, 0..99. */
+/** Last audio-frame load drawn, after the glide toward the dsp.so reading. */
 let audioLoad = 0;
 let audioLoadAt = 0;
+let targetLoad = 0;
+let shownLoad = 0;
+let shownAt = 0;
+let shownWidth = -1;
+/** Glide so a new reading moves the line instead of jumping it. */
+const LOAD_TAU_MS = 450;
 
 function pollAudioLoad(now: number): void {
-  if (now - audioLoadAt < 100) return;
-  audioLoadAt = now;
-  const host = globalThis as HostGlobals;
-  const raw = host.host_module_get_param?.("cpu") ?? host.shadow_get_param?.(0, "overtake_dsp:cpu");
-  if (typeof raw !== "string") return;
-  const n = Number.parseInt(raw, 10);
-  if (Number.isInteger(n) && n >= 0 && n <= 99) audioLoad = n;
+  if (now - audioLoadAt >= 100) {
+    audioLoadAt = now;
+    const host = globalThis as HostGlobals;
+    const raw = host.host_module_get_param?.("cpu") ?? host.shadow_get_param?.(0, "overtake_dsp:cpu");
+    if (typeof raw === "string") {
+      const n = Number.parseInt(raw, 10);
+      if (Number.isInteger(n) && n >= 0 && n <= 99) targetLoad = n;
+    }
+  }
+  const dt = shownAt === 0 ? 0 : Math.max(0, Math.min(50, now - shownAt));
+  shownAt = now;
+  if (dt > 0) shownLoad += (targetLoad - shownLoad) * (1 - Math.exp(-dt / LOAD_TAU_MS));
+  const width = loadWidth(shownLoad);
+  if (width === shownWidth) return;
+  shownWidth = width;
+  audioLoad = shownLoad;
 }
 
 function markDirty(before: Project): void {

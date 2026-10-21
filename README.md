@@ -8,8 +8,8 @@ ptnmove is a Schwung overtake module. It starts in Play.
 
 The display is three bands:
 
-- **Header** — current lane and page. A one-pixel bar under that line shows how full the audio callback is: empty at rest, the full width when the voice has filled it. Touch a knob and this line shows that parameter’s full name.
-- **Pager** — the one-pixel line under the header. The current page is a solid segment. The others are dotted.
+- **Header** — current lane and page. The one-pixel line under it is a dotted rule with the audio load drawn solid on top, from the left. It is empty dots at rest and solid across when the voice has filled the callback. Touch a knob and the title shows that parameter’s full name.
+- **Pager** — that same line, only while a finger is on the jog. The current page is a solid segment. The others are dotted.
 - **Phrase** — time runs left to right. Height is pitch, including drums. A note’s height is its velocity, and never more than half the band. The playhead inverts the pixels it crosses.
 - **Parameters** — the knobs on this page. Touch a knob and its label plus value invert.
 
@@ -33,7 +33,7 @@ The step buttons select a lane. A short press switches to it. The selected step 
 
 Hold a lane button to peek at it. The top pad rows become page buttons and stay that way until you release the lane button. Pressing a page pad changes the page and does not end the hold. A long hold with no page pad returns to the lane you were on.
 
-The jog wheel moves one page at a time. Touching the wheel does not change the screen. While your finger is on it, the pads are a shortcut layer:
+The jog wheel moves one page at a time. While a finger is on it, the load line becomes the page rule and the pads are a shortcut layer:
 
 - Top row — pages 1–8
 - Next row down — pages 9–10 when the lane has them

@@ -143,10 +143,9 @@ typedef struct {
     PhraseEv phrase[PHRASE_CAP];
     Drum drums[DRUMS];
     Note notes[NOTES];
-    /* Peak render share of the callback slack, 0..99, over the open window. */
+    /* Smoothed render share of the callback slack, 0..99. */
     int cpu_pct;
-    int cpu_peak;
-    int64_t cpu_window_ns;
+    int cpu_avg;
 } Engine;
 
 typedef struct {
@@ -1759,9 +1758,12 @@ static void on_midi(void *instance, const uint8_t *msg, int len, int source) {
 
 /* Slack after the SPI transfer, per 128-frame block. The sample period is
  * ~2902 us; the transfer takes ~389 us and the measured remainder the
- * callback may spend is ~2370 us. 99 means this render filled that slack. */
+ * callback may spend is ~2370 us. 99 means this render filled that slack.
+ * cpu_avg is that share in 1/256 percent. Dividing the error by 256 each
+ * block is about a 0.7 s glide, so a single heavy block does not twitch
+ * the line. */
 #define CPU_SLACK_NS_128 2370000LL
-#define CPU_WINDOW_NS 100000000LL
+#define CPU_SMOOTH_SHIFT 8
 
 static int64_t mono_ns(void) {
     struct timespec ts;
@@ -1775,13 +1777,14 @@ static void account_cpu(Engine *engine, int64_t spent_ns, int frames) {
     if (budget <= 0) return;
     if (spent_ns < 0) spent_ns = 0;
     int pct = (int)((spent_ns * 100 + budget / 2) / budget);
+    if (pct < 0) pct = 0;
     if (pct > 99) pct = 99;
-    if (pct > engine->cpu_peak) engine->cpu_peak = pct;
-    engine->cpu_pct = engine->cpu_peak;
-    engine->cpu_window_ns += (int64_t)frames * 1000000000LL / 44100;
-    if (engine->cpu_window_ns < CPU_WINDOW_NS) return;
-    engine->cpu_peak = 0;
-    engine->cpu_window_ns = 0;
+    int sample = pct << 8;
+    engine->cpu_avg += (sample - engine->cpu_avg) >> CPU_SMOOTH_SHIFT;
+    int shown = (engine->cpu_avg + 128) >> 8;
+    if (shown < 0) shown = 0;
+    if (shown > 99) shown = 99;
+    engine->cpu_pct = shown;
 }
 
 static int cpu_key(const char *key) {

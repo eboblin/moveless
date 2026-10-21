@@ -17,10 +17,9 @@ export const CHAR_W = 5;
 export const FONT_H = 5;
 export const PARAM_COLS = 8;
 export const PARAM_COL_W = WIDTH / PARAM_COLS;
-/** Header: title, 1 px load bar, 1 px gap, pager, 1 px gap, then viz. */
+/** Header: title, 1 px gap, the rule, 1 px gap, then viz. */
 export const TITLE_Y = 1;
-export const LOAD_Y = TITLE_Y + FONT_H;
-export const PAGER_Y = LOAD_Y + 2;
+export const PAGER_Y = TITLE_Y + FONT_H + 1;
 export const HEADER_H = PAGER_Y + 2;
 /** Bottom strip: big digits → 2 px → name → 1 px pad (no meter). */
 export const NAME_Y = HEIGHT - FONT_H - 1;
@@ -98,9 +97,11 @@ export function renderScreen(
   const bars = !notice && !mixer && page?.id === "prog";
   const viz = notice ? "notice" : mixer ? "mixer" : generator ? "generator" : vizLane || bars ? "phrase" : "none";
   pixels.fill(0);
-  drawLoad(pixels, cpu);
   const laneMark = (LANES as readonly ContextId[]).indexOf(context);
-  drawPager(pixels, mixer ? laneMark : Math.min(pageIndex, Math.max(0, pages.length - 1)), mixer ? MIX_CHANNELS.length : pages.length);
+  const pageMark = mixer ? laneMark : Math.min(pageIndex, Math.max(0, pages.length - 1));
+  const pageCount = mixer ? MIX_CHANNELS.length : pages.length;
+  if (ui.wheelTouch) drawPager(pixels, pageMark, pageCount);
+  else drawLoad(pixels, cpu);
   if (!mixer) drawParamSeparator(pixels);
   const chordRoll = vizLane === "chords";
   const showPhrase = !notice && !mixer && (vizLane !== null || bars);
@@ -327,10 +328,12 @@ function drawPager(pixels: Uint8Array, index: number, count: number): void {
   }
 }
 
-/** One-pixel rule under the title. Length is the voice's share of the callback. */
+/** Dotted rule, with the load drawn solid on top from the left. */
 function drawLoad(pixels: Uint8Array, load: number): void {
   const width = loadWidth(load);
-  for (let x = 0; x < width; x++) set(pixels, x, LOAD_Y, 1);
+  for (let x = 0; x < WIDTH; x++) {
+    if (x < width || x % 2 === 0) set(pixels, x, PAGER_Y, 1);
+  }
 }
 
 /** Solid rule above the knob parameter strip. */
