@@ -32,7 +32,7 @@ export interface Binding {
   integer: boolean;
   store: KnobStore;
   morph: MorphKind;
-  /** Capture cost of one full-scale step toward home. */
+  /** Randomize cost of one full-scale step toward home. */
   weight: number;
   display: KnobDisplay;
   /** Macro keys that add into this knob. Absent when the knob is not shifted. */
@@ -627,7 +627,7 @@ export function pageCount(context: ContextId): number {
   return pagesFor(context).length;
 }
 
-/** Knob paths on one page, in column order. Capture spends these, not a second list. */
+/** Knob paths on one page, in column order. Randomize spends these, not a second list. */
 export function bindingPaths(page: Page): string[] {
   const paths: string[] = [];
   for (const binding of page.bindings) if (binding) paths.push(binding.path);

@@ -222,26 +222,28 @@ export interface GlobalSettings {
 export type TransitionId = "now" | "fast" | "medium" | "slow";
 export type WanderId = "fast" | "medium" | "slow" | "glacial";
 /** Clear restores the factory values in scope. Soft/medium/hard step off the current value toward that factory. */
-export type CaptureIntensity = "clear" | "soft" | "medium" | "hard";
-export const CAPTURE_INTENSITIES: readonly CaptureIntensity[] = ["clear", "soft", "medium", "hard"];
-/** Capture overlay: whole lane, the page's group, or only the page's knobs. */
-export type CaptureScope = "lane" | "group" | "page";
-export const CAPTURE_SCOPES: readonly CaptureScope[] = ["lane", "group", "page"];
+export type RandomizeIntensity = "clear" | "soft" | "medium" | "hard";
+export const RANDOMIZE_INTENSITIES: readonly RandomizeIntensity[] = ["clear", "soft", "medium", "hard"];
+/** Randomize overlay: whole lane, the page's group, or only the page's knobs. */
+export type RandomizeScope = "lane" | "group" | "page";
+export const RANDOMIZE_SCOPES: readonly RandomizeScope[] = ["lane", "group", "page"];
 /** `all` moves everything. `generators` only pattern/cycle/amount of a VPCA. `values` is every other knob, including plain ones. */
-export type CaptureDepth = "all" | "generators" | "values";
-export const CAPTURE_DEPTHS: readonly CaptureDepth[] = ["all", "generators", "values"];
+export type RandomizeDepth = "all" | "generators" | "values";
+export const RANDOMIZE_DEPTHS: readonly RandomizeDepth[] = ["all", "generators", "values"];
 
 export const TRANSITIONS: readonly TransitionId[] = ["now", "fast", "medium", "slow"];
 export const WANDERS: readonly WanderId[] = ["fast", "medium", "slow", "glacial"];
 /** Menu button under the jog wheel. */
 export const MENU_CC = 50;
+/** Jog wheel click. Latches the randomize pads. */
+export const JOG_CLICK_CC = 3;
 /** Transport play. The button LED has one color: bright while running, dark when stopped. */
 export const PLAY_CC = 85;
 /** Mute peek. White button, bright while the peek is held or latched. */
 export const MUTE_CC = 88;
 /** Capture peek. White button, bright while the peek is held or latched. */
 export const CAPTURE_CC = 52;
-/** Loop. Runs one Capture pass with the stored depth, scope and intensity. */
+/** Loop. Runs one randomize pass with the stored depth, scope and intensity. */
 export const LOOP_CC = 58;
 /** White up/down buttons. Journal pages or sets, bright only when that neighbor exists. */
 export const UP_CC = 55;
@@ -309,13 +311,13 @@ export interface Project {
   morph: MorphState | null;
   /** Scenes marked for insertion into a set, in the order they were picked. */
   clipboardSceneIds: string[];
-  captureNonce: number;
-  /** Capture overlay + plain Capture: clear modulation or soft/medium/hard reroll. */
-  captureIntensity: CaptureIntensity;
-  /** What a bare Capture release rerolls. Survives the hold. */
-  captureScope: CaptureScope;
-  /** Whether that reroll also moves numeric values. */
-  captureDepth: CaptureDepth;
+  randomizeNonce: number;
+  /** Clear restores the factory values. Soft, medium and hard step toward that factory. */
+  randomizeIntensity: RandomizeIntensity;
+  /** What Loop rerolls: the whole lane, the page's group, or only the page. */
+  randomizeScope: RandomizeScope;
+  /** Whether that reroll moves generators, values, or both. */
+  randomizeDepth: RandomizeDepth;
 }
 
 export interface HarmonicEvent {

@@ -31,14 +31,13 @@ export {
   wanderCandidates,
 } from "./journal.ts";
 export {
-  captureGenerator,
-  captureLane,
-  capturePaths,
-  captureSurface,
-  setCaptureDepth,
-  setCaptureIntensity,
-  setCaptureScope,
-} from "./capture.ts";
+  randomizeLane,
+  randomizePaths,
+  randomizeSurface,
+  setRandomizeDepth,
+  setRandomizeIntensity,
+  setRandomizeScope,
+} from "./randomize.ts";
 import { LANES, type LaneId, type Project } from "./types.ts";
 import { laneHeard } from "./journal.ts";
 

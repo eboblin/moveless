@@ -1,8 +1,7 @@
 import {
-  captureLane,
-  captureGenerator,
-  capturePaths,
-  captureSurface,
+  randomizeLane,
+  randomizePaths,
+  randomizeSurface,
   clampJournalPage,
   cycleSet,
   deleteSet,
@@ -14,19 +13,19 @@ import {
   removeSceneFromJournal,
   removeSceneFromSet,
   journalPadIds,
-  setCaptureDepth,
-  setCaptureIntensity,
-  setCaptureScope,
+  setRandomizeDepth,
+  setRandomizeIntensity,
+  setRandomizeScope,
   setPadIds,
   setWander,
   toggleSolo,
   toggleLock,
   toggleMute,
 } from "../core/performance.ts";
-import { CAPTURE_CC, CAPTURE_DEPTHS, CAPTURE_SCOPES, contextAtStep, DOWN_CC, isLane, LANES, LOOP_CC, MENU_CC, MUTE_CC, PLAY_CC, TRANSITIONS, UP_CC, WANDERS, type ContextId, type PatternId, type Project } from "../core/types.ts";
+import { CAPTURE_CC, contextAtStep, DOWN_CC, isLane, JOG_CLICK_CC, LANES, LOOP_CC, MENU_CC, MUTE_CC, PLAY_CC, RANDOMIZE_DEPTHS, RANDOMIZE_SCOPES, TRANSITIONS, UP_CC, WANDERS, type ContextId, type PatternId, type Project } from "../core/types.ts";
 import { resetControl, writeControl } from "./controls.ts";
-import { bindingFor, bindingPaths, mixerPage, pageCount, pageGroup, pagesFor } from "../core/pages.ts";
-import { applyBookmark, FOCUS_HOLD_MS, focusHoldTicks, HOLD_MS, HOLD_TICKS, holdIsShort, mutePeekOpen, peekKind, rememberPage, settleWheel, type Notice, type UiState } from "./state.ts";
+import { bindingPaths, mixerPage, pageCount, pageGroup, pagesFor } from "../core/pages.ts";
+import { applyBookmark, FOCUS_HOLD_MS, focusHoldTicks, HOLD_MS, HOLD_TICKS, holdIsShort, mutePeekOpen, peekKind, RANDOMIZE_HINT_MS, rememberPage, settleWheel, type Notice, type RandomizeLine, type UiState } from "./state.ts";
 import { journalPageCount } from "../core/journal.ts";
 
 export interface MidiMsg {
@@ -72,7 +71,10 @@ function onCc(session: Session, cc: number, value: number, press: boolean): Sess
   if (cc === 60) return onCopy(session, press);
   if (cc === 119) return { ...session, ui: { ...session.ui, deleteHeld: press } };
   if (cc === CAPTURE_CC) return onCapture(session, press);
-  if (cc === LOOP_CC && press) return applyCapture(session);
+  if (cc === JOG_CLICK_CC && press) {
+    return { ...session, ui: { ...session.ui, randomizeLatched: !session.ui.randomizeLatched } };
+  }
+  if (cc === LOOP_CC && press) return applyRandomize(session);
   if (cc === 118 && press) return { ...session, project: recordInto(session.project, session.ui.mode === "set") };
   if (cc === PLAY_CC && press) return { ...session, playing: !session.playing };
   if (cc >= 71 && cc <= 78) return turnEncoder(session, cc - 71, value);
@@ -116,7 +118,6 @@ function onPad(session: Session, index: number, press: boolean): Session {
   const col = index % 8;
   const top = row === 3;
   const second = row === 2;
-  const bottom = row === 0;
   if (kind === "capture") return onCapturePad(session, row, col);
   if (session.ui.heldContext && (top || second)) {
     const page = top ? col : 8 + col;
@@ -124,28 +125,8 @@ function onPad(session: Session, index: number, press: boolean): Session {
     if (page >= pageCount(held)) return session;
     return { ...session, ui: { ...rememberPage(session.ui, held, page), heldContext: held, heldPage: page } };
   }
-  if (session.ui.wheelTouch && top) {
-    return selectPage(session, col);
-  }
-  if (session.ui.wheelTouch && second) {
-    return selectPage(session, 8 + col);
-  }
-  if (session.ui.wheelTouch && bottom) {
-    if (col < 4) {
-      const transition = TRANSITIONS[col];
-      return {
-        ...session,
-        project: { ...session.project, transition },
-        ui: { ...session.ui, notice: modeNotice("TRANSITION", transition.toUpperCase()) },
-      };
-    }
-    const project = setWander(session.project, WANDERS[col - 4], session.tick);
-    return {
-      ...session,
-      project,
-      ui: { ...session.ui, notice: modeNotice("WANDER", project.wander ? project.wander.toUpperCase() : "OFF") },
-    };
-  }
+  const randomize = session.ui.wheelTouch || session.ui.randomizeLatched;
+  if (randomize) return onRandomizePad(session, row, col);
   const pads = session.ui.mode === "set"
     ? setPadIds(session.project)
     : journalPadIds(session.project, session.ui.journalPage);
@@ -173,7 +154,7 @@ function onPad(session: Session, index: number, press: boolean): Session {
   return { ...session, project: launchScene(session.project, sceneId, session.tick) };
 }
 
-/** Capture overlay. Top two rows pick a page. The next row is depth, then scope. The bottom row is intensity. */
+/** Capture overlay. Top two rows pick a page. The bottom row is transition, then wander. */
 function onCapturePad(session: Session, row: number, col: number): Session {
   if (row === 3 || row === 2) {
     const page = row === 3 ? col : 8 + col;
@@ -184,22 +165,52 @@ function onCapturePad(session: Session, row: number, col: number): Session {
     }
     return selectPage(session, page);
   }
-  if (row === 1 && col < CAPTURE_DEPTHS.length) {
-    return markCapture(session, setCaptureDepth(session.project, CAPTURE_DEPTHS[col]));
+  if (row !== 0) return session;
+  if (col < TRANSITIONS.length) {
+    const transition = TRANSITIONS[col];
+    return {
+      ...session,
+      project: { ...session.project, transition },
+      ui: { ...session.ui, notice: modeNotice("TRANSITION", transition.toUpperCase()) },
+    };
   }
-  if (row === 1 && col >= 4 && col < 4 + CAPTURE_SCOPES.length) {
-    return markCapture(session, setCaptureScope(session.project, CAPTURE_SCOPES[col - 4]));
-  }
-  if (row === 0 && col === 0) return markCapture(session, setCaptureIntensity(session.project, "clear"));
-  if (row === 0 && col >= 1 && col <= 3) {
-    const level = (["soft", "medium", "hard"] as const)[col - 1];
-    return markCapture(session, setCaptureIntensity(session.project, level));
+  if (col >= 4 && col < 4 + WANDERS.length) {
+    const project = setWander(session.project, WANDERS[col - 4], session.tick);
+    return {
+      ...session,
+      project,
+      ui: { ...session.ui, notice: modeNotice("WANDER", project.wander ? project.wander.toUpperCase() : "OFF") },
+    };
   }
   return session;
 }
 
-function markCapture(session: Session, project: Project): Session {
-  return { ...session, project, ui: { ...session.ui, captureAction: true } };
+/** Randomize overlay. Top two rows pick a page. The next row is depth, then scope. The bottom row is intensity. */
+function onRandomizePad(session: Session, row: number, col: number): Session {
+  if (row === 3 || row === 2) {
+    const page = row === 3 ? col : 8 + col;
+    return selectPage(session, page);
+  }
+  if (row === 1 && col < RANDOMIZE_DEPTHS.length) {
+    return showRandomizeLine(session, setRandomizeDepth(session.project, RANDOMIZE_DEPTHS[col]), "depth");
+  }
+  if (row === 1 && col >= 4 && col < 4 + RANDOMIZE_SCOPES.length) {
+    return showRandomizeLine(session, setRandomizeScope(session.project, RANDOMIZE_SCOPES[col - 4]), "scope");
+  }
+  if (row === 0 && col === 0) return showRandomizeLine(session, setRandomizeIntensity(session.project, "clear"), "intensity");
+  if (row === 0 && col >= 1 && col <= 3) {
+    const level = (["soft", "medium", "hard"] as const)[col - 1];
+    return showRandomizeLine(session, setRandomizeIntensity(session.project, level), "intensity");
+  }
+  return session;
+}
+
+function showRandomizeLine(session: Session, project: Project, line: RandomizeLine): Session {
+  return {
+    ...session,
+    project,
+    ui: { ...session.ui, randomizeHint: { line, untilMs: Date.now() + RANDOMIZE_HINT_MS } },
+  };
 }
 
 const NOTICE_MS = 500;
@@ -252,10 +263,6 @@ function touchEncoder(session: Session, index: number, press: boolean): Session 
   }
   const binding = currentBinding(session, index);
   if (!binding) return session;
-  if (session.ui.captureHeld) {
-    const captured = captureFromEncoder(session, binding.path, true);
-    if (captured) return captured;
-  }
   const sameKnob = session.ui.detent?.path === binding.path;
   const ui = {
     ...session.ui,
@@ -271,67 +278,11 @@ function turnEncoder(session: Session, index: number, value: number): Session {
   const binding = currentBinding(session, index);
   if (!binding || !delta) return session;
   const held = session.ui.focus?.held ?? false;
-  if (session.ui.captureHeld) {
-    const captured = captureFromEncoder(session, binding.path, held);
-    if (captured) return captured;
-  }
   const turned = writeControl(session.project, session.ui.context, binding, delta, session.ui.detent);
   return {
     ...session,
     project: turned.project,
     ui: { ...session.ui, detent: turned.hold, focus: focusFor(session, binding, held) },
-  };
-}
-
-/** Reroll one generator as soon as its encoder is touched or turned while Capture is held. */
-function captureFromEncoder(session: Session, path: string, held: boolean): Session | null {
-  if (mutePeekOpen(session.ui)) {
-    if (surfaceKind(path) !== "mix") return null;
-    const focusBinding = bindingFor(path) ?? { path, label: path };
-    return {
-      ...session,
-      project: captureSurface(session.project, "mix", [path]),
-      ui: { ...session.ui, captureGenerator: path, focus: focusFor(session, focusBinding, held) },
-    };
-  }
-  const context = session.ui.heldContext ?? session.ui.context;
-  if (context === "aux") {
-    const kind = surfaceKind(path);
-    if (!kind) return null;
-    const focusBinding = bindingFor(path) ?? { path, label: path };
-    return {
-      ...session,
-      project: captureSurface(session.project, kind, [path]),
-      ui: {
-        ...session.ui,
-        captureGenerator: path,
-        focus: focusFor(session, focusBinding, held),
-      },
-    };
-  }
-  const target = generatorTarget(path);
-  if (!target) {
-    if (context !== "fx") return null;
-    const focusBinding = bindingFor(path) ?? { path, label: path };
-    return {
-      ...session,
-      project: capturePaths(session.project, context, [path]),
-      ui: {
-        ...session.ui,
-        captureGenerator: path,
-        focus: focusFor(session, focusBinding, held),
-      },
-    };
-  }
-  const focusBinding = bindingFor(path) ?? { path, label: target };
-  return {
-    ...session,
-    project: captureGenerator(session.project, context, target),
-    ui: {
-      ...session.ui,
-      captureGenerator: target,
-      focus: focusFor(session, focusBinding, held),
-    },
   };
 }
 
@@ -351,12 +302,6 @@ export function modulatedBase(path: string): string | null {
   const suffixes = [".value", ".pattern", ".cycle", ".amount"];
   const suffix = suffixes.find((item) => path.endsWith(item));
   return suffix ? path.slice(0, -suffix.length) : null;
-}
-
-export function generatorTarget(path: string): string | null {
-  const euclid = /^(gen[12])\.(length|hits|rotate|probability)$/.exec(path);
-  if (euclid) return euclid[1];
-  return modulatedBase(path);
 }
 
 function currentBinding(session: Session, index: number) {
@@ -422,8 +367,6 @@ function onCapture(session: Session, press: boolean): Session {
         captureWasLatched: session.ui.captureLatched,
         captureDownTick: session.tick,
         captureDownMs: Date.now(),
-        captureGenerator: null,
-        captureAction: false,
       },
     };
   }
@@ -439,40 +382,31 @@ function onCapture(session: Session, press: boolean): Session {
       muteLatched: latched ? false : session.ui.muteLatched,
       captureDownTick: null,
       captureDownMs: null,
-      captureGenerator: null,
-      captureAction: false,
     },
   };
 }
 
-/** One Capture pass. Loop runs this from any screen and leaves the peek where it is. */
-function applyCapture(session: Session): Session {
-  const { context, page } = captureTarget(session);
+/** One randomize pass. Loop runs this from any screen and leaves the peek where it is. */
+function applyRandomize(session: Session): Session {
+  const { context, page } = randomizeTarget(session);
   let project = session.project;
-  if (mutePeekOpen(session.ui)) project = captureSurface(project, "mix", bindingPaths(mixerPage()));
+  if (mutePeekOpen(session.ui)) project = randomizeSurface(project, "mix", bindingPaths(mixerPage()));
   else if (context === "aux") {
-    const surface = auxSurface(project.captureScope, page);
-    if (surface) project = captureSurface(project, surface.kind, surface.paths);
-  } else if (isLane(context)) project = rerollCapture(project, context, page);
+    const surface = auxSurface(project.randomizeScope, page);
+    if (surface) project = randomizeSurface(project, surface.kind, surface.paths);
+  } else if (isLane(context)) project = rerollLane(project, context, page);
   return { ...session, project };
 }
 
-function captureTarget(session: Session): { context: ContextId; page: number } {
+function randomizeTarget(session: Session): { context: ContextId; page: number } {
   const context = session.ui.heldContext ?? session.ui.context;
   const rawPage = session.ui.heldContext ? session.ui.heldPage ?? session.ui.page : session.ui.page;
   const page = Math.min(rawPage, Math.max(0, pageCount(context) - 1));
   return { context, page };
 }
 
-function surfaceKind(path: string): "mix" | "perf" | null {
-  const store = bindingFor(path)?.store;
-  if (store === "macro") return "perf";
-  if (store === "mixer") return "mix";
-  return null;
-}
-
 /** Mixer and macro pages of the section button. Progression and global stay put. */
-function auxSurface(scope: Project["captureScope"], page: number): { kind: "mix" | "perf"; paths: string[] } | null {
+function auxSurface(scope: Project["randomizeScope"], page: number): { kind: "mix" | "perf"; paths: string[] } | null {
   const pages = pagesFor("aux");
   const current = pages[Math.min(page, Math.max(0, pages.length - 1))];
   if (!current || (current.group !== "mix" && current.group !== "macro")) return null;
@@ -481,16 +415,16 @@ function auxSurface(scope: Project["captureScope"], page: number): { kind: "mix"
   return { kind, paths: chosen.flatMap((item) => bindingPaths(item)) };
 }
 
-function rerollCapture(project: Project, lane: PatternId, page: number): Project {
-  if (project.captureScope === "lane") return captureLane(project, lane, "all");
-  if (project.captureScope === "page") {
+function rerollLane(project: Project, lane: PatternId, page: number): Project {
+  if (project.randomizeScope === "lane") return randomizeLane(project, lane, "all");
+  if (project.randomizeScope === "page") {
     const pages = pagesFor(lane);
     const current = pages[Math.min(page, Math.max(0, pages.length - 1))];
-    return capturePaths(project, lane, current ? bindingPaths(current) : []);
+    return randomizePaths(project, lane, current ? bindingPaths(current) : []);
   }
   const scope = pageGroup(lane, page);
   const group = scope === "sound" || scope === "notes" || scope === "fx" ? scope : "pattern";
-  return captureLane(project, lane, group);
+  return randomizeLane(project, lane, group);
 }
 
 function onArrow(session: Session, direction: -1 | 1): Session {

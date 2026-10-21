@@ -2,43 +2,41 @@ import { clone } from "./clone.ts";
 import { defaultProject } from "./defaults.ts";
 import { nodeAt, setPath } from "./fields.ts";
 import { hash01 } from "./hash.ts";
-import { bindingFor, laneScopePaths, modulatorPaths } from "./pages.ts";
+import { bindingFor, laneScopePaths } from "./pages.ts";
 import {
   LANES,
   laneFamily,
-  type CaptureDepth,
-  type CaptureIntensity,
-  type CaptureScope,
-  type EuclidGen,
+  type RandomizeDepth,
+  type RandomizeIntensity,
+  type RandomizeScope,
   type Lanes,
-  type Modulated,
   type PatternId,
   type Project,
 } from "./types.ts";
 
-type LaneCapture = "pattern" | "notes" | "sound" | "fx" | "all";
+type LaneScope = "pattern" | "notes" | "sound" | "fx" | "all";
 
-export function setCaptureIntensity(project: Project, intensity: CaptureIntensity): Project {
-  return { ...project, captureIntensity: intensity };
+export function setRandomizeIntensity(project: Project, intensity: RandomizeIntensity): Project {
+  return { ...project, randomizeIntensity: intensity };
 }
 
-export function setCaptureScope(project: Project, scope: CaptureScope): Project {
-  return { ...project, captureScope: scope };
+export function setRandomizeScope(project: Project, scope: RandomizeScope): Project {
+  return { ...project, randomizeScope: scope };
 }
 
-export function setCaptureDepth(project: Project, depth: CaptureDepth): Project {
-  return { ...project, captureDepth: depth };
+export function setRandomizeDepth(project: Project, depth: RandomizeDepth): Project {
+  return { ...project, randomizeDepth: depth };
 }
 
 /** One full-scale step toward home costs `weight`. A step away costs three times that. */
-const PAGE_BUDGET: Record<Exclude<CaptureIntensity, "clear">, number> = {
+const PAGE_BUDGET: Record<Exclude<RandomizeIntensity, "clear">, number> = {
   soft: 1,
   medium: 2.5,
   hard: 6,
 };
 
 /** Largest share of the page budget a single knob may spend. */
-const BUDGET_CAP: Record<Exclude<CaptureIntensity, "clear">, number> = {
+const BUDGET_CAP: Record<Exclude<RandomizeIntensity, "clear">, number> = {
   soft: 1,
   medium: 0.5,
   hard: 1 / 3,
@@ -51,7 +49,7 @@ function isGeneratorPath(path: string): boolean {
   return path.endsWith(".pattern") || path.endsWith(".cycle") || path.endsWith(".amount");
 }
 
-function depthAllows(path: string, depth: CaptureDepth): boolean {
+function depthAllows(path: string, depth: RandomizeDepth): boolean {
   const shape = isGeneratorPath(path);
   if (depth === "generators") return shape;
   if (depth === "values") return !shape;
@@ -72,12 +70,8 @@ function knobSpec(path: string): KnobSpec | null {
   return { min: binding.min, max: binding.max, step: binding.step, integer: binding.integer, weight: binding.weight };
 }
 
-function scopePages(lane: PatternId, scope: LaneCapture): string[][] {
+function scopePages(lane: PatternId, scope: LaneScope): string[][] {
   return laneScopePaths(lane, scope);
-}
-
-function generatorFields(target: string, lane: PatternId): string[] {
-  return modulatorPaths(lane, target);
 }
 
 let factoryLanes: Lanes | null = null;
@@ -87,17 +81,17 @@ function factoryLane(lane: PatternId): Lanes[PatternId] {
   return factoryLanes[lane];
 }
 function spendPage(project: Project, lane: PatternId, paths: string[], tag: string): Project {
-  const depth = project.captureDepth;
-  const intensity = project.captureIntensity;
+  const depth = project.randomizeDepth;
+  const intensity = project.randomizeIntensity;
   if (intensity === "clear") return project;
   const eligible = paths.filter((path) => depthAllows(path, depth) && knobSpec(path));
   if (!eligible.length) return project;
-  const nonce = project.captureNonce + 1;
+  const nonce = project.randomizeNonce + 1;
   const working = clone(project.working);
   const roll = (...parts: (string | number)[]) =>
     hash01(project.global.seed, "capture", nonce, lane, tag, intensity, depth, ...parts);
   applySplitBudget(working[lane], factoryLane(lane), eligible, roll, intensity);
-  return { ...project, working, captureNonce: nonce };
+  return { ...project, working, randomizeNonce: nonce };
 }
 
 /** Generators and values each receive the full page budget. They do not compete. */
@@ -106,7 +100,7 @@ function applySplitBudget(
   homes: unknown,
   paths: string[],
   roll: (...parts: (string | number)[]) => number,
-  intensity: Exclude<CaptureIntensity, "clear">,
+  intensity: Exclude<RandomizeIntensity, "clear">,
 ): void {
   const budget = PAGE_BUDGET[intensity];
   const cap = BUDGET_CAP[intensity];
@@ -193,10 +187,10 @@ function readNumber(root: unknown, path: string): number | null {
 }
 
 /** Reroll one page group, or the whole lane when scope is `all`. Each page spends its own budget. */
-export function captureLane(project: Project, lane: PatternId, scope: LaneCapture = "pattern"): Project {
+export function randomizeLane(project: Project, lane: PatternId, scope: LaneScope = "pattern"): Project {
   if (project.lock[lane]) return project;
   if (scope === "notes" && lane !== "fx" && laneFamily(lane) === "drum") return project;
-  if (project.captureIntensity === "clear") return clearLane(project, lane, scope);
+  if (project.randomizeIntensity === "clear") return clearLane(project, lane, scope);
   let next = project;
   scopePages(lane, scope).forEach((paths, index) => {
     next = spendPage(next, lane, paths, `${scope}:${index}`);
@@ -204,15 +198,15 @@ export function captureLane(project: Project, lane: PatternId, scope: LaneCaptur
   return next;
 }
 
-function clearLane(project: Project, lane: PatternId, scope: LaneCapture): Project {
+function clearLane(project: Project, lane: PatternId, scope: LaneScope): Project {
   const working = clone(project.working);
   const home = factoryLane(lane);
-  for (const paths of scopePages(lane, scope)) restoreFactory(working[lane], home, paths, project.captureDepth);
-  return { ...project, working, captureNonce: project.captureNonce + 1 };
+  for (const paths of scopePages(lane, scope)) restoreFactory(working[lane], home, paths, project.randomizeDepth);
+  return { ...project, working, randomizeNonce: project.randomizeNonce + 1 };
 }
 
 /** Write factory numbers for the paths this depth is allowed to touch. */
-function restoreFactory(root: unknown, homes: unknown, paths: string[], depth: CaptureDepth): void {
+function restoreFactory(root: unknown, homes: unknown, paths: string[], depth: RandomizeDepth): void {
   for (const path of paths) {
     if (!depthAllows(path, depth)) continue;
     const home = readNumber(homes, path);
@@ -222,25 +216,25 @@ function restoreFactory(root: unknown, homes: unknown, paths: string[], depth: C
 }
 
 /** Reroll mixer faders or perf macros. Homes: mixer channel 1 (shown as 100), macro 0. */
-export function captureSurface(project: Project, kind: "mix" | "perf", paths: string[]): Project {
-  const depth = project.captureDepth;
+export function randomizeSurface(project: Project, kind: "mix" | "perf", paths: string[]): Project {
+  const depth = project.randomizeDepth;
   const eligible = [...new Set(paths)].filter((path) => depthAllows(path, depth) && knobSpec(path));
   if (!eligible.length) return project;
-  const intensity = project.captureIntensity;
-  const nonce = project.captureNonce + 1;
+  const intensity = project.randomizeIntensity;
+  const nonce = project.randomizeNonce + 1;
   if (intensity === "clear") {
     if (kind === "mix") {
       const mixer = { ...project.mixer };
       const homes: Record<string, number> = {};
       for (const id of [...LANES, "master"] as const) homes[id] = 1;
       restoreFactory(mixer, homes, eligible, "all");
-      return { ...project, mixer, captureNonce: nonce };
+      return { ...project, mixer, randomizeNonce: nonce };
     }
     const macros = { ...project.macros };
     const homes = { macro: {} as Record<string, number> };
     for (const path of eligible) homes.macro[path.slice("macro.".length)] = 0;
     restoreFactory({ macro: macros }, homes, eligible, "all");
-    return { ...project, macros, captureNonce: nonce };
+    return { ...project, macros, randomizeNonce: nonce };
   }
   const roll = (...parts: (string | number)[]) =>
     hash01(project.global.seed, "capture", nonce, kind, intensity, depth, ...parts);
@@ -249,7 +243,7 @@ export function captureSurface(project: Project, kind: "mix" | "perf", paths: st
     const homes: Record<string, number> = {};
     for (const id of [...LANES, "master"] as const) homes[id] = 1;
     applySplitBudget(mixer, homes, eligible, roll, intensity);
-    return { ...project, mixer, captureNonce: nonce };
+    return { ...project, mixer, randomizeNonce: nonce };
   }
   const macros = { ...project.macros };
   const homes = { macro: {} as Record<string, number> };
@@ -259,35 +253,15 @@ export function captureSurface(project: Project, kind: "mix" | "perf", paths: st
     homes.macro[key] = 0;
   }
   applySplitBudget({ macro: macros }, homes, eligible, roll, intensity);
-  return { ...project, macros, captureNonce: nonce };
-}
-
-/** Reroll one euclid (`gen1`), its velocity, or another 4-param modulator. */
-export function captureGenerator(project: Project, lane: PatternId, target: string): Project {
-  if (project.lock[lane]) return project;
-  const node = nodeAt(project.working[lane], target);
-  if (!isEuclidGen(node) && !isModulated(node)) return project;
-  const paths = generatorFields(target, lane);
-  if (project.captureIntensity !== "clear") return spendPage(project, lane, paths, target);
-  const working = clone(project.working);
-  restoreFactory(working[lane], factoryLane(lane), paths, project.captureDepth);
-  return { ...project, working, captureNonce: project.captureNonce + 1 };
+  return { ...project, macros, randomizeNonce: nonce };
 }
 
 /** Reroll only the parameters listed on one page. Non-clear spends a generators budget and a values budget. Clear restores those targets. */
-export function capturePaths(project: Project, lane: PatternId, paths: string[]): Project {
+export function randomizePaths(project: Project, lane: PatternId, paths: string[]): Project {
   if (project.lock[lane]) return project;
   if (!paths.length) return project;
-  if (project.captureIntensity !== "clear") return spendPage(project, lane, paths, paths.join(","));
+  if (project.randomizeIntensity !== "clear") return spendPage(project, lane, paths, paths.join(","));
   const working = clone(project.working);
-  restoreFactory(working[lane], factoryLane(lane), paths, project.captureDepth);
-  return { ...project, working, captureNonce: project.captureNonce + 1 };
-}
-
-function isEuclidGen(value: unknown): value is EuclidGen {
-  return !!value && typeof value === "object" && "hits" in value && "length" in value && "rotate" in value && "probability" in value && "velocity" in value;
-}
-
-function isModulated(value: unknown): value is Modulated {
-  return !!value && typeof value === "object" && "amount" in value && "pattern" in value && "cycle" in value && "value" in value;
+  restoreFactory(working[lane], factoryLane(lane), paths, project.randomizeDepth);
+  return { ...project, working, randomizeNonce: project.randomizeNonce + 1 };
 }

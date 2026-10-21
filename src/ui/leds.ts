@@ -1,8 +1,8 @@
 import { morphProgress } from "../core/morph.ts";
 import { sceneColor, journalPadIds, laneHeard, setPadIds } from "../core/performance.ts";
 import {
-  CAPTURE_DEPTHS,
-  CAPTURE_SCOPES,
+  RANDOMIZE_DEPTHS,
+  RANDOMIZE_SCOPES,
   isDrum,
   isLane,
   LANES,
@@ -121,6 +121,7 @@ export function trackLeds(project: Project, context: ContextId, page: number): L
 
 export interface PadSurface {
   wheelTouch?: boolean;
+  randomizeLatched?: boolean;
   captureHeld?: boolean;
   captureLatched?: boolean;
   captureDownMs?: number | null;
@@ -140,7 +141,7 @@ export interface PadSurface {
 /**
  * Playing and morph-target pads share one pulse. Target also shades
  * dark→dim→bright by morph progress. An empty journal/set still shows pad 0 as the
- * current working scene. Capture-hold and wheel-touch replace the grid with overlays.
+ * current working scene. Capture-hold and the randomize layer replace the grid with overlays.
  */
 export function padLeds(project: Project, mode: "journal" | "set", surface?: PadSurface, tick = 0): Led[] {
   const context = surface?.context ?? "kick";
@@ -148,7 +149,7 @@ export function padLeds(project: Project, mode: "journal" | "set", surface?: Pad
   const kind = peekKind(surface ?? {});
   if (kind === "mute") return mutePeekLeds(project);
   if (kind === "capture") return capturePadLeds(project, surface ?? {});
-  if (surface?.wheelTouch) return wheelPadLeds(project, context, page);
+  if (surface?.wheelTouch || surface?.randomizeLatched) return randomizePadLeds(project, context, page);
   const scenes = scenePadLeds(project, mode, tick, surface?.journalPage ?? 0, surface?.copyHeld ?? false);
   if (surface?.heldContext) {
     const shown = surface.heldPage ?? surface.lanePages?.[surface.heldContext] ?? (surface.heldContext === context ? page : -1);
@@ -180,22 +181,18 @@ function mutePeekLeds(project: Project): Led[] {
   return out;
 }
 
-/** Top two rows are the lane's pages. The next row is depth then scope. The bottom row is intensity. */
+/** Top two rows are the lane's pages. The bottom row is transition, then wander. */
 function capturePadLeds(project: Project, surface: PadSurface): Led[] {
   const context = surface.heldContext ?? surface.context ?? "kick";
   const rawPage = surface.heldContext ? surface.heldPage ?? surface.page ?? 0 : surface.page ?? 0;
   const page = Math.min(rawPage, Math.max(0, pageCount(context) - 1));
   const out = Array.from({ length: 32 }, () => led("off", false));
-  paintCapturePages(out, project, context, page);
-  CAPTURE_DEPTHS.forEach((id, col) => {
-    out[8 + col] = choiceLed("purple", LED.purple, project.captureDepth === id);
+  paintRandomizePages(out, project, context, page);
+  TRANSITIONS.forEach((id, col) => {
+    out[col] = choiceLed("yellow", LED.yellow, project.transition === id);
   });
-  CAPTURE_SCOPES.forEach((id, col) => {
-    out[12 + col] = choiceLed("yellow", 3, project.captureScope === id);
-  });
-  out[0] = choiceLed("red", LED.red, project.captureIntensity === "clear");
-  (["soft", "medium", "hard"] as const).forEach((id, index) => {
-    out[1 + index] = choiceLed("yellow", LED.yellow, project.captureIntensity === id);
+  WANDERS.forEach((id, col) => {
+    out[4 + col] = choiceLed("purple", LED.purple, project.wander === id);
   });
   return out;
 }
@@ -207,13 +204,13 @@ function choiceLed(family: LedFamily, color: number, selected: boolean): Led {
 }
 
 /** Top two rows: pages Loop will rewrite. In the zone they are bright, or red when Delete is selected. Outside it they keep a dark partner of their colour. */
-function paintCapturePages(out: Led[], project: Project, context: ContextId, page: number): void {
+function paintRandomizePages(out: Led[], project: Project, context: ContextId, page: number): void {
   const count = pageCount(context);
-  const clear = project.captureIntensity === "clear";
+  const clear = project.randomizeIntensity === "clear";
   for (let index = 0; index < count && index < 16; index++) {
     const slot = index < 8 ? 24 + index : 16 + (index - 8);
     const color = pageGroupColor(context, index);
-    const zone = captureTouchesPage(project, context, index, page);
+    const zone = randomizeTouchesPage(project, context, index, page);
     const current = index === page;
     const shown = zone ? (clear ? LED.red : color) : offColor(color);
     const second = clear && zone ? DIM_RED : offColor(color);
@@ -227,18 +224,18 @@ function paintCapturePages(out: Led[], project: Project, context: ContextId, pag
 }
 
 /** Pages Loop will rewrite. Aux leaves progression and global alone. */
-function captureTouchesPage(project: Project, context: ContextId, index: number, page: number): boolean {
+function randomizeTouchesPage(project: Project, context: ContextId, index: number, page: number): boolean {
   const pages = pagesFor(context);
   const item = pages[index];
   if (!item) return false;
   if (context === "aux") {
     const current = pages[page];
     if (!current || current.group !== "macro") return false;
-    if (project.captureScope === "page") return index === page;
+    if (project.randomizeScope === "page") return index === page;
     return item.group === current.group;
   }
-  if (project.captureScope === "lane") return true;
-  if (project.captureScope === "page") return index === page;
+  if (project.randomizeScope === "lane") return true;
+  if (project.randomizeScope === "page") return index === page;
   const group = pageGroup(context, page);
   const scope = group === "sound" || group === "notes" || group === "fx" ? group : "pattern";
   return item.group === scope;
@@ -290,14 +287,19 @@ function scenePadLeds(project: Project, mode: "journal" | "set", tick: number, j
   });
 }
 
-function wheelPadLeds(project: Project, context: ContextId, page: number): Led[] {
+/** Top two rows are pages. The next row is depth then scope. The bottom row is intensity. */
+function randomizePadLeds(project: Project, context: ContextId, page: number): Led[] {
   const out = Array.from({ length: 32 }, () => led("off", false));
-  paintCapturePages(out, project, context, page);
-  TRANSITIONS.forEach((id, col) => {
-    out[col] = choiceLed("yellow", LED.yellow, project.transition === id);
+  paintRandomizePages(out, project, context, page);
+  RANDOMIZE_DEPTHS.forEach((id, col) => {
+    out[8 + col] = choiceLed("purple", LED.purple, project.randomizeDepth === id);
   });
-  WANDERS.forEach((id, col) => {
-    out[4 + col] = choiceLed("purple", LED.purple, project.wander === id);
+  RANDOMIZE_SCOPES.forEach((id, col) => {
+    out[12 + col] = choiceLed("yellow", 3, project.randomizeScope === id);
+  });
+  out[0] = choiceLed("red", LED.red, project.randomizeIntensity === "clear");
+  (["soft", "medium", "hard"] as const).forEach((id, index) => {
+    out[1 + index] = choiceLed("yellow", LED.yellow, project.randomizeIntensity === id);
   });
   return out;
 }

@@ -75,8 +75,9 @@ A locked lane is left as it is. A knob turned during the morph keeps the value y
 ## Other controls
 
 - **Mute** plus a lane button toggles mute. Muted drums and notes go silent. Muted chords still feed Bass and Lead.
-- **Loop** plus a lane button locks that lane. Morph, Wander, Capture, and macros leave it alone.
-- **Capture** rerolls on release. On a pattern page it rerolls that lane’s pattern. On a notes page it rerolls the note generators. On a sound page it rerolls the sound. **Shift + Capture** rerolls the whole selected lane (pattern, notes, and sound). Hold Capture and touch or turn any knob of one generator — including LENGTH / HITS / ROTATE / PROBABILITY on GEN pages — to reroll that generator immediately. The last generator you touch wins.
+- **Loop** plus a lane button locks that lane. Morph, Wander, Randomize, and macros leave it alone.
+- **Loop** alone rerolls with the stored depth, scope and intensity. Touch the jog for those pads. Click the jog to leave the pads up; click again for the scene pads. Pressing a pad in one row writes that row over the lane picture for a second.
+- **Capture** shows Transition and Wander on the bottom pad row. A short press leaves that page up.
 - **Track** buttons 1–4 are bookmarks. A short press jumps to the stored lane and page. Hold one to store the page you are on. A stored button lights in that page group's colour and changes colour when you overwrite it. An empty button stays off. The bookmark you are currently on blinks.
 
 Leave the module with **Shift + volume touch + jog click**.

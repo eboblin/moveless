@@ -2,18 +2,18 @@ import { defaultProject } from "./defaults.ts";
 import { clone } from "./clone.ts";
 import { ensureTrailingEmpty } from "./journal.ts";
 import {
-  CAPTURE_DEPTHS,
-  CAPTURE_INTENSITIES,
-  CAPTURE_SCOPES,
+  RANDOMIZE_DEPTHS,
+  RANDOMIZE_INTENSITIES,
+  RANDOMIZE_SCOPES,
   PATTERN_LANES,
   PROGRESSION_KEYS,
   SCALE_IDS,
   STEPS,
   TRANSITIONS,
   WANDERS,
-  type CaptureDepth,
-  type CaptureIntensity,
-  type CaptureScope,
+  type RandomizeDepth,
+  type RandomizeIntensity,
+  type RandomizeScope,
   type ContextId,
   type Lanes,
   type Progression,
@@ -143,10 +143,10 @@ function mergeProject(raw: Record<string, unknown>): Project {
         : base.activeSceneId,
     morph: null,
     clipboardSceneIds: acceptClipboard(raw, acceptJournal(journal)),
-    captureNonce: Math.max(0, asInt(raw.captureNonce, base.captureNonce)),
-    captureIntensity: asIntensity(raw.captureIntensity) ?? base.captureIntensity,
-    captureScope: asScope(raw.captureScope) ?? base.captureScope,
-    captureDepth: asDepth(raw.captureDepth) ?? base.captureDepth,
+    randomizeNonce: Math.max(0, asInt(raw.randomizeNonce ?? raw.captureNonce, base.randomizeNonce)),
+    randomizeIntensity: asIntensity(raw.randomizeIntensity) ?? asIntensity(raw.captureIntensity) ?? base.randomizeIntensity,
+    randomizeScope: asScope(raw.randomizeScope) ?? asScope(raw.captureScope) ?? base.randomizeScope,
+    randomizeDepth: asDepth(raw.randomizeDepth) ?? asDepth(raw.captureDepth) ?? base.randomizeDepth,
   });
 }
 
@@ -288,16 +288,16 @@ function asWander(value: unknown): WanderId | null {
   return typeof value === "string" && (WANDERS as readonly string[]).includes(value) ? (value as WanderId) : null;
 }
 
-function asIntensity(value: unknown): CaptureIntensity | null {
-  return typeof value === "string" && (CAPTURE_INTENSITIES as readonly string[]).includes(value)
-    ? (value as CaptureIntensity)
+function asIntensity(value: unknown): RandomizeIntensity | null {
+  return typeof value === "string" && (RANDOMIZE_INTENSITIES as readonly string[]).includes(value)
+    ? (value as RandomizeIntensity)
     : null;
 }
 
-function asScope(value: unknown): CaptureScope | null {
-  return typeof value === "string" && (CAPTURE_SCOPES as readonly string[]).includes(value) ? (value as CaptureScope) : null;
+function asScope(value: unknown): RandomizeScope | null {
+  return typeof value === "string" && (RANDOMIZE_SCOPES as readonly string[]).includes(value) ? (value as RandomizeScope) : null;
 }
 
-function asDepth(value: unknown): CaptureDepth | null {
-  return typeof value === "string" && (CAPTURE_DEPTHS as readonly string[]).includes(value) ? (value as CaptureDepth) : null;
+function asDepth(value: unknown): RandomizeDepth | null {
+  return typeof value === "string" && (RANDOMIZE_DEPTHS as readonly string[]).includes(value) ? (value as RandomizeDepth) : null;
 }

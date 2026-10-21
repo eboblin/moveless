@@ -5,11 +5,11 @@ import { phraseStepsOf } from "../core/events.ts";
 import { chordSymbol, degreeNumeral, pitchClassName, scaleShort, scaleTitle } from "../core/harmony.ts";
 import { chordFigure, endpointLanes, endpointPhrases, generatePhrase, laneSteps, octaveNumber, restingChordToneLabel, restingPitchLabel, restingSliceLabel } from "../core/phrase.ts";
 import { evalModulated } from "../core/modulate.ts";
-import { CAPTURE_DEPTHS, CAPTURE_INTENSITIES, CAPTURE_SCOPES, isPitched, isVoice, LANES, LANE_CODE, type CaptureDepth, type CaptureIntensity, type CaptureScope, type ContextId, type HarmonicEvent, type LaneId, type Phrase, type Project, type TimedEvent } from "../core/types.ts";
+import { RANDOMIZE_DEPTHS, RANDOMIZE_INTENSITIES, RANDOMIZE_SCOPES, isPitched, isVoice, LANES, LANE_CODE, type RandomizeDepth, type RandomizeIntensity, type RandomizeScope, type ContextId, type HarmonicEvent, type LaneId, type Phrase, type Project, type TimedEvent } from "../core/types.ts";
 import { DIGIT_H, displayAmount, type BigAmount, type DisplayAmount } from "./digits.ts";
 import { readControl } from "./controls.ts";
 import { bindingFor, pagesFor, type Binding, type Page } from "../core/pages.ts";
-import { focusVisible, peekKind, type UiState } from "./state.ts";
+import { focusVisible, peekKind, type RandomizeLine, type UiState } from "./state.ts";
 
 export const WIDTH = 128;
 export const HEIGHT = 64;
@@ -72,12 +72,12 @@ export function renderScreen(
   const pages = pagesFor(context);
   const page = pages[Math.min(pageIndex, pages.length - 1)];
   const kind = peekKind(ui);
-  const capture = kind === "capture";
-  const notice = !capture && ui.notice && now < ui.notice.untilMs ? ui.notice : null;
-  const focusState = !notice && !capture && focusVisible(ui.focus, tick, now) ? ui.focus : null;
+  const notice = ui.notice && now < ui.notice.untilMs ? ui.notice : null;
+  const hint = ui.randomizeHint && now < ui.randomizeHint.untilMs ? ui.randomizeHint : null;
+  const focusState = !notice && focusVisible(ui.focus, tick, now) ? ui.focus : null;
   const focus = focusState?.label ?? null;
   const focusBinding = focusState ? bindingFor(focusState.path) : null;
-  const mixer = !notice && !capture && kind === "mute";
+  const mixer = !notice && kind === "mute";
   const header = mixer
     ? (focusBinding?.title ?? focus ?? "MIXER")
     : (focusBinding ? figureHeader(project, context, focusBinding) : null) ??
@@ -85,14 +85,14 @@ export function renderScreen(
       (focus ? focus : laneHeader(project, context, page));
   const vizLane: LaneId | null = isVoice(context) ? context : null;
   const generator = vizLane && focusState?.generator ? focusState.generator : null;
-  const bars = !notice && !capture && !mixer && page?.id === "prog";
-  const viz = capture ? "capture" : notice ? "notice" : mixer ? "mixer" : generator ? "generator" : vizLane || bars ? "phrase" : "none";
+  const bars = !notice && !mixer && page?.id === "prog";
+  const viz = notice ? "notice" : mixer ? "mixer" : generator ? "generator" : vizLane || bars ? "phrase" : "none";
   pixels.fill(0);
   const laneMark = (LANES as readonly ContextId[]).indexOf(context);
   drawPager(pixels, mixer ? laneMark : Math.min(pageIndex, Math.max(0, pages.length - 1)), mixer ? MIX_CHANNELS.length : pages.length);
   if (!mixer) drawParamSeparator(pixels);
-  const chordRoll = vizLane === "chords" && !capture;
-  const showPhrase = !notice && !mixer && !capture && (vizLane !== null || bars);
+  const chordRoll = vizLane === "chords";
+  const showPhrase = !notice && !mixer && (vizLane !== null || bars);
   const phrase = showPhrase ? generatePhrase(project) : null;
   const playhead = playing ? stepAt(project, tick) : -1;
   if (notice) fillViz(pixels);
@@ -110,7 +110,11 @@ export function renderScreen(
     : drawLabels(project, context, page, focus, header);
   if (phrase && bars) labels.push(...chordNameLabels(project, phrase));
   if (notice) labels.push(...noticeLabels(notice.title, notice.value));
-  if (capture) labels.push(...captureMenuLabels(project));
+  if (hint && !notice && !mixer) {
+    const menu = randomizeLineLabels(project, hint.line);
+    clearLinePlate(pixels, menu);
+    labels.push(...menu);
+  }
   const digits = mixer || !page ? [] : paramDigits(project, context, page, focus);
   return { header, viz, pixels, labels, digits };
 }
@@ -203,18 +207,34 @@ function mixerChannelLabels(project: Project, focus: string | null): Label[] {
   return labels;
 }
 
-const DEPTH_WORD: Record<CaptureDepth, string> = { all: "ALL", generators: "GENERATORS", values: "VALUES" };
-const SCOPE_WORD: Record<CaptureScope, string> = { lane: "LANE", group: "GROUP", page: "PAGE" };
-const INTENSITY_WORD: Record<CaptureIntensity, string> = { clear: "DELETE", soft: "LOW", medium: "MED", hard: "HIGH" };
+const DEPTH_WORD: Record<RandomizeDepth, string> = { all: "ALL", generators: "GENS", values: "VALUES" };
+const SCOPE_WORD: Record<RandomizeScope, string> = { lane: "LANE", group: "GROUP", page: "PAGE" };
+const INTENSITY_WORD: Record<RandomizeIntensity, string> = { clear: "DELETE", soft: "LOW", medium: "MED", hard: "HIGH" };
 
-function captureMenuLabels(project: Project): Label[] {
-  const step = FONT_H + 4;
-  const y0 = HEADER_H + 4;
-  return [
-    ...menuLine(CAPTURE_DEPTHS.map((id) => DEPTH_WORD[id]), DEPTH_WORD[project.captureDepth], y0),
-    ...menuLine(CAPTURE_SCOPES.map((id) => SCOPE_WORD[id]), SCOPE_WORD[project.captureScope], y0 + step),
-    ...menuLine(CAPTURE_INTENSITIES.map((id) => INTENSITY_WORD[id]), INTENSITY_WORD[project.captureIntensity], y0 + step * 2),
-  ];
+function randomizeLineLabels(project: Project, line: RandomizeLine): Label[] {
+  const y = HEADER_H + Math.floor((VIZ_H - 1 - FONT_H) / 2);
+  if (line === "depth") return menuLine(RANDOMIZE_DEPTHS.map((id) => DEPTH_WORD[id]), DEPTH_WORD[project.randomizeDepth], y);
+  if (line === "scope") return menuLine(RANDOMIZE_SCOPES.map((id) => SCOPE_WORD[id]), SCOPE_WORD[project.randomizeScope], y);
+  return menuLine(RANDOMIZE_INTENSITIES.map((id) => INTENSITY_WORD[id]), INTENSITY_WORD[project.randomizeIntensity], y);
+}
+
+/** Black plate one character outside the whole line, not around each word. */
+function clearLinePlate(pixels: Uint8Array, labels: Label[]): void {
+  if (!labels.length) return;
+  const y = labels[0].y;
+  let left = labels[0].x;
+  let right = left;
+  for (const label of labels) {
+    left = Math.min(left, label.x);
+    right = Math.max(right, label.x + label.text.length * CHAR_W);
+  }
+  const x0 = Math.max(0, left - CHAR_W);
+  const x1 = Math.min(WIDTH, right + CHAR_W);
+  const y0 = Math.max(0, y - FONT_H);
+  const y1 = Math.min(HEIGHT, y + FONT_H + FONT_H);
+  for (let py = y0; py < y1; py++) {
+    for (let px = x0; px < x1; px++) set(pixels, px, py, 0);
+  }
 }
 
 function menuLine(words: string[], current: string, y: number): Label[] {

@@ -300,9 +300,9 @@ export function defaultProject(): Project {
     activeSceneId: null,
     morph: null,
     clipboardSceneIds: [],
-    captureNonce: 0,
-    captureIntensity: "medium",
-    captureScope: "group",
-    captureDepth: "all",
+    randomizeNonce: 0,
+    randomizeIntensity: "medium",
+    randomizeScope: "group",
+    randomizeDepth: "all",
   };
 }

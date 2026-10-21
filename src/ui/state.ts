@@ -20,6 +20,14 @@ export interface Notice {
   untilMs: number;
 }
 
+export type RandomizeLine = "depth" | "scope" | "intensity";
+
+/** One randomize row, shown over the lane picture after its pad is pressed. */
+export interface RandomizeHint {
+  line: RandomizeLine;
+  untilMs: number;
+}
+
 export interface DetentHold {
   path: string;
   dir: -1 | 1;
@@ -38,6 +46,10 @@ export interface UiState {
   wheelTouch: boolean;
   /** Release is pending until this time, so a contact bounce does not drop the wheel layer. */
   wheelReleaseMs: number | null;
+  /** Jog click leaves the randomize pads up after the touch ends. */
+  randomizeLatched: boolean;
+  /** The randomize row last pressed, until its caption times out. */
+  randomizeHint: RandomizeHint | null;
   muteHeld: boolean;
   /** Peek stays up after a short Mute tap. */
   muteLatched: boolean;
@@ -65,9 +77,6 @@ export interface UiState {
   captureWasLatched: boolean;
   captureDownTick: number | null;
   captureDownMs: number | null;
-  captureGenerator: string | null;
-  /** True after a page-pad capture during hold — release must not also group-reroll. */
-  captureAction: boolean;
   heldContext: ContextId | null;
   heldPage: number | null;
   focus: Focus | null;
@@ -80,6 +89,8 @@ export interface UiState {
 
 /** How long a jog release must stay up before the page layer drops. */
 export const WHEEL_RELEASE_MS = 80;
+/** How long a randomize row stays written over the lane picture. */
+export const RANDOMIZE_HINT_MS = 1000;
 
 export const HOLD_TICKS = 80;
 /** Wall-clock hold, so a bookmark can be stored while the transport is stopped. */
@@ -171,6 +182,8 @@ export function defaultUi(): UiState {
     mode: "journal",
     wheelTouch: false,
     wheelReleaseMs: null,
+    randomizeLatched: false,
+    randomizeHint: null,
     muteHeld: false,
     muteLatched: false,
     muteWasLatched: false,
@@ -189,8 +202,6 @@ export function defaultUi(): UiState {
     captureWasLatched: false,
     captureDownTick: null,
     captureDownMs: null,
-    captureGenerator: null,
-    captureAction: false,
     heldContext: null,
     heldPage: null,
     focus: null,

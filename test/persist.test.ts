@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { defaultFx, defaultProject } from "../src/core/defaults.ts";
-import { record, setCaptureDepth, setCaptureIntensity, setCaptureScope } from "../src/core/performance.ts";
+import { record, setRandomizeDepth, setRandomizeIntensity, setRandomizeScope } from "../src/core/performance.ts";
 import {
   PROJECT_PATH,
   loadStoredProject,
@@ -29,7 +29,7 @@ describe("project persist", () => {
   it("round-trips journal, sets, working and capture intensity", () => {
     let project = defaultProject();
     project = record(project);
-    project = setCaptureDepth(setCaptureScope(setCaptureIntensity(project, "hard"), "lane"), "generators");
+    project = setRandomizeDepth(setRandomizeScope(setRandomizeIntensity(project, "hard"), "lane"), "generators");
     project.working.kick.gen1.hits = 7;
     project = { ...project, sets: [{ id: "set-1", name: "A", sceneIds: ["001"] }], activeSetId: "set-1" };
     const ui = { context: "bass" as const, page: 2, mode: "set" as const, playing: false };
@@ -40,9 +40,9 @@ describe("project persist", () => {
     assert.equal(parsed.project.journal[0].id, "001");
     assert.equal(parsed.project.sets[0].sceneIds[0], "001");
     assert.equal(parsed.project.working.kick.gen1.hits, 7);
-    assert.equal(parsed.project.captureIntensity, "hard");
-    assert.equal(parsed.project.captureScope, "lane");
-    assert.equal(parsed.project.captureDepth, "generators");
+    assert.equal(parsed.project.randomizeIntensity, "hard");
+    assert.equal(parsed.project.randomizeScope, "lane");
+    assert.equal(parsed.project.randomizeDepth, "generators");
     assert.equal(parsed.ui.context, "bass");
     assert.equal(parsed.ui.page, 2);
     assert.equal(parsed.ui.mode, "set");
@@ -118,20 +118,32 @@ describe("project persist", () => {
     assert.equal(parseStored("{}"), null);
     const partial = JSON.stringify({
       version: 1,
-      project: { captureIntensity: "soft", global: { tempo: 99 } },
+      project: { randomizeIntensity: "soft", global: { tempo: 99 } },
       ui: { context: "snare", page: 99, mode: "journal" },
     });
     const parsed = parseStored(partial);
     assert.ok(parsed);
-    assert.equal(parsed.project.captureIntensity, "soft");
-    assert.equal(parsed.project.captureScope, "group");
-    assert.equal(parsed.project.captureDepth, "all");
+    assert.equal(parsed.project.randomizeIntensity, "soft");
+    assert.equal(parsed.project.randomizeScope, "group");
+    assert.equal(parsed.project.randomizeDepth, "all");
     assert.equal(parsed.project.global.tempo, 99);
     assert.equal(parsed.project.global.bar, defaultProject().global.bar);
     assert.ok(parsed.project.working.kick);
     assert.equal(parsed.ui.context, "snare");
     assert.equal(parsed.ui.page, 8);
     assert.equal(parsed.ui.playing, true);
+  });
+
+  it("reads randomize settings saved under the old capture keys", () => {
+    const parsed = parseStored(JSON.stringify({
+      version: 1,
+      project: { captureNonce: 4, captureIntensity: "hard", captureScope: "lane", captureDepth: "values" },
+    }));
+    assert.ok(parsed);
+    assert.equal(parsed.project.randomizeNonce, 4);
+    assert.equal(parsed.project.randomizeIntensity, "hard");
+    assert.equal(parsed.project.randomizeScope, "lane");
+    assert.equal(parsed.project.randomizeDepth, "values");
   });
 
   it("replaces an old chord lane with defaults", () => {
@@ -236,13 +248,13 @@ describe("project persist", () => {
 
   it("loads and saves through host file bindings", () => {
     const files = memoryFiles();
-    const project = setCaptureIntensity(defaultProject(), "clear");
+    const project = setRandomizeIntensity(defaultProject(), "clear");
     const ui = { context: "hat" as const, page: 1, mode: "journal" as const, playing: true };
     assert.equal(saveStoredProject(project, ui, files), true);
     assert.ok(PROJECT_PATH in files.store);
     const loaded = loadStoredProject(files);
     assert.ok(loaded);
-    assert.equal(loaded.project.captureIntensity, "clear");
+    assert.equal(loaded.project.randomizeIntensity, "clear");
     assert.equal(loaded.ui.context, "hat");
     assert.equal(loaded.ui.page, 1);
     assert.equal(loadStoredProject({}), null);
