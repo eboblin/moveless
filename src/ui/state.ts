@@ -144,7 +144,7 @@ export interface PeekFlags {
   captureDownMs?: number | null;
 }
 
-/** The peek on screen. A held button beats the other button's latch. */
+/** The peek on screen. A held button beats either latch. A latched mixer covers a latched Capture. */
 export function peekKind(ui: PeekFlags): PeekKind | null {
   const captureHeld = ui.captureHeld ?? false;
   const muteHeld = ui.muteHeld ?? false;
@@ -153,8 +153,8 @@ export function peekKind(ui: PeekFlags): PeekKind | null {
   }
   if (captureHeld) return "capture";
   if (muteHeld) return "mute";
-  if (ui.captureLatched) return "capture";
   if (ui.muteLatched) return "mute";
+  if (ui.captureLatched) return "capture";
   return null;
 }
 

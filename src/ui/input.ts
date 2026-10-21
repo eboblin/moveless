@@ -367,7 +367,6 @@ function onMute(session: Session, press: boolean): Session {
       ...session.ui,
       muteHeld: false,
       muteLatched: latched,
-      captureLatched: latched ? false : session.ui.captureLatched,
       muteDownTick: null,
       muteDownMs: null,
     },
@@ -404,16 +403,15 @@ function onCapture(session: Session, press: boolean): Session {
       },
     };
   }
-  const latched = holdIsShort(session.ui.captureDownTick, session.ui.captureDownMs, session.tick)
-    ? !session.ui.captureWasLatched
-    : session.ui.captureWasLatched;
+  const short = holdIsShort(session.ui.captureDownTick, session.ui.captureDownMs, session.tick);
+  const latched = short ? !session.ui.captureWasLatched : session.ui.captureWasLatched;
   return {
     ...session,
     ui: {
       ...session.ui,
       captureHeld: false,
       captureLatched: latched,
-      muteLatched: latched ? false : session.ui.muteLatched,
+      muteLatched: short && latched ? false : session.ui.muteLatched,
       captureDownTick: null,
       captureDownMs: null,
     },

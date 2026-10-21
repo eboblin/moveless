@@ -1775,6 +1775,42 @@ describe("surface", () => {
     assert.equal(mute.ui.captureLatched, false);
     assert.equal(mute.ui.muteLatched, true);
     assert.equal(renderScreen(mute.project, mute.ui, 0).viz, "mixer");
+    mute = reduce(mute, { kind: "cc", data1: 52, data2: 127 });
+    mute = reduce(mute, { kind: "cc", data1: 52, data2: 0 });
+    assert.equal(mute.ui.captureLatched, true);
+    assert.equal(mute.ui.muteLatched, false);
+    assert.equal(renderScreen(mute.project, mute.ui, 0).viz, "phrase");
+  });
+
+  it("returns to Capture after a short Mixer visit", () => {
+    let state = session();
+    state = reduce(state, { kind: "cc", data1: 52, data2: 127 });
+    state = reduce(state, { kind: "cc", data1: 52, data2: 0 });
+    assert.equal(state.ui.captureLatched, true);
+    const capturePads = padLeds(state.project, state.ui.mode, state.ui);
+    assert.equal(capturePads[1].color, LED.yellow);
+    assert.equal(renderScreen(state.project, state.ui, 0).viz, "phrase");
+
+    state = reduce(state, { kind: "cc", data1: 88, data2: 127 });
+    state = reduce(state, { kind: "cc", data1: 88, data2: 0 });
+    assert.equal(state.ui.muteLatched, true);
+    assert.equal(state.ui.captureLatched, true);
+    assert.equal(renderScreen(state.project, state.ui, 0).viz, "mixer");
+    assert.notEqual(padLeds(state.project, state.ui.mode, state.ui)[24].color, 0);
+
+    state = reduce(state, { kind: "cc", data1: 52, data2: 127 });
+    assert.equal(renderScreen(state.project, state.ui, 0).viz, "phrase");
+    state = reduce({ ...state, tick: state.tick + HOLD_TICKS }, { kind: "cc", data1: 52, data2: 0 });
+    assert.equal(state.ui.captureLatched, true);
+    assert.equal(state.ui.muteLatched, true);
+    assert.equal(renderScreen(state.project, state.ui, 0).viz, "mixer");
+
+    state = reduce(state, { kind: "cc", data1: 88, data2: 127 });
+    state = reduce(state, { kind: "cc", data1: 88, data2: 0 });
+    assert.equal(state.ui.muteLatched, false);
+    assert.equal(state.ui.captureLatched, true);
+    assert.equal(renderScreen(state.project, state.ui, 0).viz, "phrase");
+    assert.deepEqual(padLeds(state.project, state.ui.mode, state.ui), capturePads);
   });
 
   it("restores the factory on the next bare Capture after Delete was chosen", () => {
