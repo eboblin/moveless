@@ -9,11 +9,9 @@ import {
   swungStepTick,
   tickToSample,
 } from "./clock.ts";
-import { blendPhrases } from "./blend.ts";
 import { euclidPattern, generateHits, keptVelocity, phraseStepsOf, rotatePattern } from "./events.ts";
-import { getPath, mixFieldValues } from "./fields.ts";
+import { mixFieldValues } from "./fields.ts";
 import { hash01 } from "./hash.ts";
-import { morphEndpoints } from "./morph.ts";
 import { applyFollowMidi, chordTonePitchClasses, degreeToMidi, generateHarmony, harmonyAt, pitchClassName, scaleOf } from "./harmony.ts";
 import { latchStamp } from "./latch.ts";
 import { bipolarFromUnit, evalModulated, soundMacro, withMacro } from "./modulate.ts";
@@ -39,27 +37,13 @@ import {
   type PitchedLane,
   type Progression,
   type Project,
-  type Scene,
   type TimedEvent,
 } from "./types.ts";
 
-interface EndSnap {
-  a: number;
-  b: number;
-  from: Lanes;
-  to: Lanes;
-  fromPhrase: Phrase;
-  toPhrase: Phrase;
-}
-
-let endCache: EndSnap | null = null;
 let idleProject: Project | null = null;
 let idleA = 0;
 let idleB = 0;
 let idlePhrase: Phrase | null = null;
-let blendSnap: EndSnap | null = null;
-let blendT = Number.NaN;
-let blendPhrase: Phrase | null = null;
 
 const floatBits = new Float32Array(1);
 const floatAsInt = new Int32Array(floatBits.buffer);
@@ -91,8 +75,8 @@ function stampPair(fill: (mix: (n: number) => void, text: (s: string) => void) =
   return [a, b];
 }
 
-function stampLanes(mix: (n: number) => void, lanes: Lanes, lane?: LaneId): void {
-  mixFieldValues(lanes, mix, lane);
+function stampLanes(mix: (n: number) => void, lanes: Lanes): void {
+  mixFieldValues(lanes, mix);
 }
 
 function stampGlobal(mix: (n: number) => void, text: (s: string) => void, project: Project): void {
@@ -120,64 +104,6 @@ function idleStamp(project: Project): [number, number] {
     stampLanes(mix, project.working);
     stampGlobal(mix, text, project);
   });
-}
-
-function endStamp(project: Project, target: Lanes): [number, number] {
-  const morph = project.morph;
-  const start = morph?.start ?? project.working;
-  return stampPair((mix, text) => {
-    stampLanes(mix, start);
-    stampLanes(mix, target);
-    stampGlobal(mix, text, project);
-    for (const lane of LANES) {
-      if (!project.lock[lane]) continue;
-      text(lane);
-      stampLanes(mix, project.working, lane);
-    }
-    for (const path of morph?.punched ?? []) {
-      text(path);
-      mix(getPath(project.working, path));
-    }
-  });
-}
-
-function ensureEnds(project: Project, target: Lanes): EndSnap {
-  const [a, b] = endStamp(project, target);
-  if (endCache && endCache.a === a && endCache.b === b) return endCache;
-  const ends = morphEndpoints(project, target);
-  endCache = {
-    a,
-    b,
-    from: ends.from,
-    to: ends.to,
-    fromPhrase: phraseOf(project, ends.from),
-    toPhrase: phraseOf(project, ends.to),
-  };
-  return endCache;
-}
-
-/** Lane trees for the live morph, cloned only when the endpoint stamp misses. */
-export function endpointLanes(project: Project): { from: Lanes; to: Lanes } | null {
-  const snap = endSnap(project);
-  return snap ? { from: snap.from, to: snap.to } : null;
-}
-
-/** Phrases of the two morph ends, at each lane's own length. */
-export function endpointPhrases(project: Project): { from: Phrase; to: Phrase } | null {
-  const snap = endSnap(project);
-  return snap ? { from: snap.fromPhrase, to: snap.toPhrase } : null;
-}
-
-function endSnap(project: Project): EndSnap | null {
-  const target = morphTarget(project);
-  if (!target) return null;
-  return ensureEnds(project, target.lanes);
-}
-
-function morphTarget(project: Project): Scene | undefined {
-  const morph = project.morph;
-  if (!morph) return undefined;
-  return project.journal.find((scene) => scene.id === morph.targetId);
 }
 
 const BASS_OCTAVE = 3;
@@ -267,24 +193,14 @@ function chordToneMidi(
 }
 
 export function generatePhrase(project: Project): Phrase {
-  const target = morphTarget(project);
-  if (!project.morph || !target) {
-    const [a, b] = idleStamp(project);
-    if (project === idleProject && a === idleA && b === idleB && idlePhrase) return idlePhrase;
-    const phrase = phraseOf(project, project.working);
-    idleProject = project;
-    idleA = a;
-    idleB = b;
-    idlePhrase = phrase;
-    return phrase;
-  }
-  const snap = ensureEnds(project, target.lanes);
-  const t = project.morph.t;
-  if (blendPhrase && blendSnap === snap && blendT === t) return blendPhrase;
-  blendSnap = snap;
-  blendT = t;
-  blendPhrase = blendPhrases(snap.fromPhrase, snap.toPhrase, snap.from, snap.to, project, t);
-  return blendPhrase;
+  const [a, b] = idleStamp(project);
+  if (project === idleProject && a === idleA && b === idleB && idlePhrase) return idlePhrase;
+  const phrase = phraseOf(project, project.working);
+  idleProject = project;
+  idleA = a;
+  idleB = b;
+  idlePhrase = phrase;
+  return phrase;
 }
 
 function phraseOf(project: Project, working: Lanes): Phrase {

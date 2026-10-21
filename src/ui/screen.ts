@@ -1,9 +1,8 @@
-import { morphBarSide } from "../core/blend.ts";
 import { laneHeard } from "../core/journal.ts";
 import { SIXTEENTH_TICKS } from "../core/clock.ts";
 import { phraseStepsOf } from "../core/events.ts";
 import { chordSymbol, degreeNumeral, pitchClassName, scaleShort, scaleTitle } from "../core/harmony.ts";
-import { chordFigure, endpointLanes, endpointPhrases, generatePhrase, laneSteps, octaveNumber, restingChordToneLabel, restingPitchLabel, restingSliceLabel } from "../core/phrase.ts";
+import { chordFigure, generatePhrase, laneSteps, octaveNumber, restingChordToneLabel, restingPitchLabel, restingSliceLabel } from "../core/phrase.ts";
 import { evalModulated } from "../core/modulate.ts";
 import { RANDOMIZE_DEPTHS, RANDOMIZE_INTENSITIES, RANDOMIZE_SCOPES, TRANSITIONS, WANDERS, isPitched, isVoice, LANES, LANE_CODE, type RandomizeDepth, type RandomizeIntensity, type RandomizeScope, type ContextId, type HarmonicEvent, type LaneId, type Phrase, type Project, type TimedEvent } from "../core/types.ts";
 import { DIGIT_H, displayAmount, type BigAmount, type DisplayAmount } from "./digits.ts";
@@ -521,26 +520,12 @@ function drawPhrase(pixels: Uint8Array, project: Project, phrase: Phrase, lane: 
   if (view.playhead >= 0) paintPlayhead(pixels, wrapStep(view.playhead, steps), steps, yTop, yBottom);
 }
 
-/**
- * The page shows the mixed phrase at the length of the side that owns the
- * downbeat. While the morph window is longer than that phrase, the picture
- * advances one phrase per cursor pass. When the downbeat crosses, the length
- * becomes the other side's phrase. A pattern longer than the voice window is
- * drawn from that side's own phrase, at its own length.
- */
+/** During a morph the picture is one loop of the live lane, not the chord phrase it rides on. */
 function lanePicture(project: Project, phrase: Phrase, lane: LaneId, playhead: number): { steps: number; events: TimedEvent[]; playhead: number } {
   const full = Math.max(1, phrase.steps[lane]);
   const width = patternSteps(project, lane);
-  if (width == null) return { steps: full, events: phrase.lanes[lane], playhead };
-  if (width > full) {
-    const cursor = phraseCursor(project, playhead, width);
-    return { steps: width, events: sideEvents(project, lane, width), playhead: playhead < 0 ? -1 : cursor };
-  }
-  if (width === full) {
-    const cursor = phraseCursor(project, playhead, width);
-    return { steps: width, events: phrase.lanes[lane], playhead: playhead < 0 ? -1 : cursor };
-  }
-  const cursor = phraseCursor(project, playhead, full);
+  if (width == null || width >= full) return { steps: full, events: phrase.lanes[lane], playhead };
+  const cursor = playhead < 0 ? 0 : ((playhead % full) + full) % full;
   const origin = Math.floor(cursor / width) * width;
   const originTick = origin * SIXTEENTH_TICKS;
   const endTick = (origin + width) * SIXTEENTH_TICKS;
@@ -552,34 +537,12 @@ function lanePicture(project: Project, phrase: Phrase, lane: LaneId, playhead: n
   return { steps: width, events: sliced, playhead: playhead < 0 ? -1 : cursor - origin };
 }
 
-/** Phrase length of the side that owns the downbeat. Chords stay on the shared phrase. */
+/** Pattern length of the live lane. Chords stay on the shared phrase. */
 function patternSteps(project: Project, lane: LaneId): number | null {
   if (!project.morph || lane === "chords") return null;
-  const trees = endpointLanes(project);
-  if (!trees) return null;
-  const useSource = project.lock[lane] || morphBarSide(project) === "src";
-  const tree = (useSource ? trees.from : trees.to)[lane];
+  const tree = project.working[lane];
   if (!("gen1" in tree)) return null;
   return Math.max(1, phraseStepsOf(tree.gen1, tree.gen2));
-}
-
-/** Endpoint events for a pattern the voice window had to crop. */
-function sideEvents(project: Project, lane: LaneId, steps: number): TimedEvent[] {
-  const phrases = endpointPhrases(project);
-  if (!phrases) return [];
-  const useSource = project.lock[lane] || morphBarSide(project) === "src";
-  const endTick = steps * SIXTEENTH_TICKS;
-  return (useSource ? phrases.from : phrases.to).lanes[lane].filter((event) => event.tick < endTick);
-}
-
-function phraseCursor(project: Project, playhead: number, steps: number): number {
-  const morph = project.morph;
-  const raw = playhead >= 0
-    ? playhead
-    : morph
-      ? Math.floor((morph.originTick + morph.t * Math.max(0, morph.durationTicks)) / SIXTEENTH_TICKS)
-      : 0;
-  return ((raw % steps) + steps) % steps;
 }
 
 function paintPlayhead(pixels: Uint8Array, pos: number, steps: number, yTop: number, yBottom: number): void {

@@ -160,7 +160,6 @@ interface LaneMotion {
   value: number;
   cycle: number;
   amount: number;
-  blend: { value: number; pattern: number; cycle: number; amount: number; t: number } | null;
 }
 
 interface LaneBox {
@@ -245,9 +244,7 @@ export function packPhraseBody(events: LoopEvent[], motions: Motion[] = [], fx =
   const tail = motions.map((motion) => {
     const lane = LANES.indexOf(motion.lane);
     const head = `${lane}:${motion.id}:${motion.value.toFixed(4)}:${Math.round(motion.pattern)}:${Math.round(motion.cycle)}:${motion.amount.toFixed(4)}:${motion.loop}`;
-    if (!motion.blend) return head;
-    const blend = motion.blend;
-    return `${head}:${blend.value.toFixed(4)}:${Math.round(blend.pattern)}:${Math.round(blend.cycle)}:${blend.amount.toFixed(4)}:${blend.t.toFixed(4)}`;
+    return head;
   }).join(";");
   const packed = `${body}#${tail}`;
   return fx ? `${packed}@${fx}` : packed;
@@ -835,16 +832,12 @@ export function filterSample(state: { low: number; band: number }, input: number
 }
 
 function evalMotion(motion: LaneMotion, step: number): number {
-  const a = evalModulated({
+  return evalModulated({
     value: motion.value,
     pattern: motion.pattern,
     cycle: motion.cycle,
     amount: motion.amount,
   }, step);
-  if (!motion.blend) return a;
-  const b = evalModulated(motion.blend, step);
-  const t = Math.max(0, Math.min(1, motion.blend.t));
-  return Math.max(0, Math.min(1, (1 - t) * a + t * b));
 }
 
 function bucketMotions(engine: Engine, motions: Motion[]): void {
@@ -854,8 +847,7 @@ function bucketMotions(engine: Engine, motions: Motion[]): void {
     const param = paramOf(motion.id);
     if (lane < 0 || lane >= LANE_COUNT || param === P_NONE || param === P_FREQ) continue;
     const box = engine.lanes[lane];
-    const blend = motion.blend ?? null;
-    const live = motion.amount !== 0 || (blend !== null && blend.amount !== 0);
+    const live = motion.amount !== 0;
     const list = live ? box.live : box.still;
     if (list.length >= LANE_MOTION_CAP) continue;
     list.push({
@@ -864,7 +856,6 @@ function bucketMotions(engine: Engine, motions: Motion[]): void {
       value: motion.value,
       cycle: motion.cycle,
       amount: motion.amount,
-      blend: live ? blend : null,
     });
   }
 }

@@ -1,6 +1,6 @@
-import { clamp01, FRAMES_PER_BLOCK, SIXTEENTH_TICKS, tickToSample } from "../core/clock.ts";
+import { FRAMES_PER_BLOCK, SIXTEENTH_TICKS, tickToSample } from "../core/clock.ts";
 import { soundMacro, withMacro } from "../core/modulate.ts";
-import { generatePhrase, laneSteps, endpointLanes } from "../core/phrase.ts";
+import { generatePhrase } from "../core/phrase.ts";
 import { laneHeard } from "../core/journal.ts";
 import { LANES, type LaneId, type LaneSend, type Modulated, type Phrase, type Project } from "../core/types.ts";
 import { mapFilter, mapSend, mapSound, type EngineParam } from "./map.ts";
@@ -34,8 +34,6 @@ export interface Motion {
   cycle: number;
   amount: number;
   loop: number;
-  /** Second modulator while a morph is blending this sound. */
-  blend?: { value: number; pattern: number; cycle: number; amount: number; t: number };
 }
 
 /** The whole phrase, once around. Each lane repeats on its own length. */
@@ -64,123 +62,53 @@ export function phraseLoop(project: Project, phrase: Phrase = generatePhrase(pro
   return out;
 }
 
-/** Sound parameters follow their generator for the whole note. Note pitch stays at note on. During a morph the same generators glide from one scene's timbre to the other's. */
+/** Sound parameters follow their generator for the whole note. Note pitch stays at note on. */
 export function soundMotions(project: Project, phrase?: Phrase): Motion[] {
   const tempo = project.global.tempo;
-  const morph = project.morph;
-  const ready = phrase ?? (morph ? generatePhrase(project) : undefined);
-  const ends = morph ? endpointLanes(project) : null;
-  const t = morph?.t ?? 0;
+  const ready = phrase ?? generatePhrase(project);
   const out: Motion[] = [];
   for (const lane of LANES) {
     if (!laneHeard(project, lane)) continue;
-    const steps = Math.max(1, ready ? ready.steps[lane] : laneSteps(project.working, lane, project.global));
+    const steps = Math.max(1, ready.steps[lane]);
     const loop = Math.max(1, tickToSample(steps * SIXTEENTH_TICKS, tempo));
-    const sound = ends ? ends.from[lane].sound : project.working[lane].sound;
-    const other = ends ? ends.to[lane].sound : null;
     const macros = project.lock[lane] ? {} : project.macros;
+    const sound = project.working[lane].sound;
     for (const id of Object.keys(sound)) {
       if (id === "pitch") continue;
-      const heard = withMacro(sound[id], soundMacro(id, macros));
       const mapped = mapSound(lane, { [id]: 0 })[0];
       if (!mapped) continue;
-      const motion: Motion = {
-        lane,
-        id: mapped.id,
-        value: heard.value,
-        pattern: Math.round(heard.pattern),
-        cycle: heard.cycle,
-        amount: heard.amount,
-        loop,
-      };
-      if (other?.[id]) {
-        const toward = withMacro(other[id], soundMacro(id, macros));
-        if (heard.amount === 0 && toward.amount === 0) {
-          motion.value = clamp01((1 - t) * heard.value + t * toward.value);
-        } else {
-          motion.blend = {
-            value: toward.value,
-            pattern: Math.round(toward.pattern),
-            cycle: toward.cycle,
-            amount: toward.amount,
-            t,
-          };
-        }
-      }
-      out.push(motion);
+      pushMotion(out, lane, mapped.id, withMacro(sound[id], soundMacro(id, macros)), loop);
     }
-    const filter = ends ? ends.from[lane].filter : project.working[lane].filter;
-    const otherFilter = ends ? ends.to[lane].filter : null;
+    const filter = project.working[lane].filter;
     for (const id of ["cutoff", "resonance"] as const) {
-      const heard = withMacro(filter[id], macros[id] ?? 0);
-      const motion: Motion = {
-        lane,
-        id,
-        value: heard.value,
-        pattern: Math.round(heard.pattern),
-        cycle: heard.cycle,
-        amount: heard.amount,
-        loop,
-      };
-      if (otherFilter) {
-        const toward = withMacro(otherFilter[id], macros[id] ?? 0);
-        if (heard.amount === 0 && toward.amount === 0) {
-          motion.value = clamp01((1 - t) * heard.value + t * toward.value);
-        } else {
-          motion.blend = {
-            value: toward.value,
-            pattern: Math.round(toward.pattern),
-            cycle: toward.cycle,
-            amount: toward.amount,
-            t,
-          };
-        }
-      }
-      out.push(motion);
+      pushMotion(out, lane, id, withMacro(filter[id], macros[id] ?? 0), loop);
     }
-    const sendFrom = ends ? ends.from[lane].send : project.working[lane].send;
-    const sendTo = ends ? ends.to[lane].send : null;
-    pushSend(out, lane, loop, t, macros, sendFrom, sendTo);
+    pushSend(out, lane, loop, macros, project.working[lane].send);
   }
   return out;
+}
+
+function pushMotion(out: Motion[], lane: LaneId, id: string, heard: Modulated, loop: number): void {
+  out.push({
+    lane,
+    id,
+    value: heard.value,
+    pattern: Math.round(heard.pattern),
+    cycle: heard.cycle,
+    amount: heard.amount,
+    loop,
+  });
 }
 
 function pushSend(
   out: Motion[],
   lane: LaneId,
   loop: number,
-  t: number,
   macros: Record<string, number>,
-  from: LaneSend,
-  to: LaneSend | null,
+  send: LaneSend,
 ): void {
   for (const id of ["reverb", "delay"] as const) {
-    const heard = withMacro(from[id], macros[id] ?? 0);
-    const motion: Motion = {
-      lane,
-      id,
-      value: heard.value,
-      pattern: Math.round(heard.pattern),
-      cycle: heard.cycle,
-      amount: heard.amount,
-      loop,
-    };
-    const other = to?.[id];
-    if (other) {
-      const toward = withMacro(other, macros[id] ?? 0);
-      if (heard.amount === 0 && toward.amount === 0) {
-        motion.value = clamp01((1 - t) * heard.value + t * toward.value);
-      } else {
-        motion.blend = {
-          value: toward.value,
-          pattern: Math.round(toward.pattern),
-          cycle: toward.cycle,
-          amount: toward.amount,
-          t,
-        };
-      }
-    }
-    out.push(motion);
+    pushMotion(out, lane, id, withMacro(send[id], macros[id] ?? 0), loop);
   }
 }
 

@@ -80,9 +80,3 @@ export function setPath(root: unknown, path: string, value: number): void {
   if (parent === null || typeof parent !== "object") throw new Error(`missing ${path}`);
   (parent as Record<string, number>)[key] = value;
 }
-
-export function morphValue(kind: MorphKind, from: number, to: number, t: number): number {
-  // Discrete fields stay put until the morph lands. The heard phrase blends the whole way.
-  if (kind === "switch") return t >= 1 ? to : from;
-  return from + (to - from) * t;
-}

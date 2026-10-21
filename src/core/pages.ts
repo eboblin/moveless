@@ -227,7 +227,7 @@ function powersOfTwo(min: number, max: number): number[] {
   return out;
 }
 
-/** Value and amount of timbre (sound, filter, send) glide. Every other slot switches. */
+/** Value and amount of timbre (sound, filter, send, fx) step. Every other slot switches. */
 function morphKind(group: PageGroup, slot: "value" | "amount" | "other"): MorphKind {
   if ((group === "sound" || group === "fx") && (slot === "value" || slot === "amount")) return "lerp";
   return "switch";

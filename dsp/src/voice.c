@@ -86,9 +86,6 @@ typedef struct {
     int param;
     int pattern;
     float value, cycle, amount;
-    int blend;
-    int pattern_b;
-    float value_b, cycle_b, amount_b, morph_t;
 } LaneMotion;
 
 typedef struct {
@@ -531,13 +528,7 @@ static float eval_one(float value, int pattern, float cycle, float amount, float
 }
 
 static float eval_lane(const LaneMotion *motion, float step) {
-    float a = eval_one(motion->value, motion->pattern, motion->cycle, motion->amount, step);
-    if (!motion->blend) return a;
-    float b = eval_one(motion->value_b, motion->pattern_b, motion->cycle_b, motion->amount_b, step);
-    float t = motion->morph_t;
-    if (t < 0.0f) t = 0.0f;
-    if (t > 1.0f) t = 1.0f;
-    return clampf01((1.0f - t) * a + t * b);
+    return eval_one(motion->value, motion->pattern, motion->cycle, motion->amount, step);
 }
 
 static void refresh_drum_env(Drum *drum) {
@@ -1176,11 +1167,10 @@ static void note_sample(Engine *engine, Note *note, float *left, float *right) {
     *right += gain - sided;
 }
 
-static void push_lane(Engine *engine, int lane, int param, float value, int pattern, float cycle, float amount,
-    int blend, float value_b, int pattern_b, float cycle_b, float amount_b, float morph_t) {
+static void push_lane(Engine *engine, int lane, int param, float value, int pattern, float cycle, float amount) {
     if (lane < 0 || lane >= LANE_COUNT || param == P_NONE || param == P_FREQ) return;
     LaneBox *box = &engine->lanes[lane];
-    int live = amount != 0.0f || (blend && amount_b != 0.0f);
+    int live = amount != 0.0f;
     int *count = live ? &box->live_count : &box->still_count;
     if (*count >= LANE_MOTION_CAP) return;
     LaneMotion *slot = live ? &box->live[*count] : &box->still[*count];
@@ -1189,12 +1179,6 @@ static void push_lane(Engine *engine, int lane, int param, float value, int patt
     slot->value = value;
     slot->cycle = cycle;
     slot->amount = amount;
-    slot->blend = live && blend;
-    slot->pattern_b = pattern_b;
-    slot->value_b = value_b;
-    slot->cycle_b = cycle_b;
-    slot->amount_b = amount_b;
-    slot->morph_t = morph_t;
     (*count)++;
 }
 
@@ -1536,16 +1520,13 @@ static void ingest_phrase(Engine *engine) {
         while (motion && *motion) {
             char *semi = strchr(motion, ';');
             if (semi) *semi = 0;
-            int lane = 0, pattern = 0, loop = 0, pattern_b = 0;
-            float value = 0, cycle = 0, amount = 0, value_b = 0, cycle_b = 0, amount_b = 0, morph_t = 0;
+            int lane = 0, pattern = 0, loop = 0;
+            float value = 0, cycle = 0, amount = 0;
             char id[24];
-            int fields = sscanf(motion, "%d:%23[^:]:%f:%d:%f:%f:%d:%f:%d:%f:%f:%f",
-                &lane, id, &value, &pattern, &cycle, &amount, &loop, &value_b, &pattern_b, &cycle_b, &amount_b, &morph_t);
-            if (fields == 12) {
-                push_lane(engine, lane, param_of(id), value, pattern, cycle, amount, 1, value_b, pattern_b, cycle_b, amount_b, morph_t);
-            } else if (fields == 7) {
-                push_lane(engine, lane, param_of(id), value, pattern, cycle, amount, 0, 0, 0, 0, 0, 0);
-            }
+            int fields = sscanf(motion, "%d:%23[^:]:%f:%d:%f:%f:%d",
+                &lane, id, &value, &pattern, &cycle, &amount, &loop);
+            if (fields == 7)
+                push_lane(engine, lane, param_of(id), value, pattern, cycle, amount);
             motion = semi ? semi + 1 : NULL;
         }
     }

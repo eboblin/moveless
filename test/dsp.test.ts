@@ -320,12 +320,11 @@ describe("dsp adapter", () => {
     assert.ok(engine.notes.some((note) => note.on || note.age > 100));
   });
 
-  it("blends live cutoff between two motifs", () => {
+  it("plays one live cutoff modulator", () => {
     const tempo = 120;
     const sixteenth = tickToSample(SIXTEENTH_TICKS, tempo);
     const loop = sixteenth * 8;
     const from = { value: 0.2, pattern: 0, cycle: 8, amount: 1 };
-    const to = { value: 0.8, pattern: 4, cycle: 4, amount: 1 };
     const engine = createEngine();
     loadPhrase(engine, [{
       sample: 0,
@@ -343,13 +342,10 @@ describe("dsp adapter", () => {
       cycle: from.cycle,
       amount: from.amount,
       loop,
-      blend: { ...to, t: 0.5 },
     }]);
     renderClock(engine);
     const step = 120 / sixteenth;
-    const mixed = 0.5 * evalModulated(from, step) + 0.5 * evalModulated(to, step);
-    assert.ok(Math.abs(engine.notes[0].cutoff - mixed) < 1e-6);
-    assert.ok(Math.abs(engine.notes[0].cutoff - evalModulated(from, step)) > 1e-3);
+    assert.ok(Math.abs(engine.notes[0].cutoff - evalModulated(from, step)) < 1e-6);
   });
 
   it("glides timbre during a morph and does not follow note pitch", () => {
@@ -366,7 +362,6 @@ describe("dsp adapter", () => {
     assert.equal(midMotions.some((motion) => motion.id.endsWith("freq")), false);
     const still = midMotions.find((motion) => motion.lane === "bass" && motion.id === "cutoff");
     assert.ok(still);
-    assert.equal(still.blend, undefined);
     assert.ok(Math.abs((still?.value ?? 0) - 0.5) < 1e-9);
 
     project = defaultProject();
@@ -382,9 +377,11 @@ describe("dsp adapter", () => {
     project.transition = "fast";
     project = launchScene(project, "002", 0);
     const live = soundMotions(applyMorph(project, (project.morph?.durationTicks ?? 0) / 2)).find((motion) => motion.lane === "bass" && motion.id === "cutoff");
-    assert.ok(live?.blend);
-    assert.equal(live.blend.t, 0.5);
-    assert.equal(live.blend.pattern, 4);
+    assert.ok(live);
+    assert.equal(live?.pattern, 4);
+    assert.equal(live?.cycle, 4);
+    assert.ok(Math.abs((live?.value ?? 0) - 0.575) < 1e-9);
+    assert.ok(Math.abs((live?.amount ?? 0) - 0.5) < 1e-9);
   });
 
   it("moves cutoff across a held note", () => {

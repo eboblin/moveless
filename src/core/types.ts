@@ -273,7 +273,7 @@ export interface MorphState {
   originTick: number;
   durationTicks: number;
   punched: string[];
-  /** 0 before originTick, then the morph clock. The heard phrase reads this. */
+  /** 0 before originTick, then the morph clock. Pad lamps read this. */
   t: number;
 }
 

@@ -678,6 +678,8 @@ describe("surface", () => {
     const still = renderScreen(project, ui, 20 * 48, false);
     assert.equal(litRuns(early), 1);
     assert.equal(runWidth(early), 7);
+    const stillSource = renderScreen(applyMorph(project, 16 * 48 - 1), ui, 0, false);
+    assert.equal(runWidth(stillSource), 7);
     assert.equal(playheadColumn(still, intoNextPass), Math.floor((4 * 128) / 16));
     const handed = renderScreen(applyMorph(project, (project.morph?.durationTicks ?? 0) * 0.95), ui, 0, false);
     assert.equal(litRuns(handed), 1);
