@@ -63,7 +63,7 @@ export const PAGE_GROUP_COLOR: Record<PageGroup, number> = {
   global: 8,
   macro: 22,
   mix: 120,
-  bus: 23,
+  bus: 16,
 };
 
 const TITLE_WORD: Record<string, string> = {
@@ -596,15 +596,11 @@ function busPage(): Page {
       store: "bus",
       ...(min >= 0 ? { detents: [0] } : {}),
     });
-  return page("bus", "BUS", ["MOVE", "ROOM"], "bus", [
+  return page("bus", "MIX", ["MIX", null], "bus", [
     knob("glue", "GLUE", 0, 1),
     knob("pump", "PMP", 0, 1),
-    null,
-    null,
     knob("wide", "WIDE", 0, 1),
     knob("tilt", "TLT", -1, 1),
-    null,
-    null,
   ]);
 }
 

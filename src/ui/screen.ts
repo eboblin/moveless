@@ -120,12 +120,14 @@ export function renderScreen(
   const labels = mixer
     ? [{ x: 1, y: TITLE_Y, text: header.slice(0, LINE_LIMIT) }, ...mixerChannelLabels(project, focus)]
     : drawLabels(project, context, page, focus, header);
-  if (phrase && bars) labels.push(...chordNameLabels(project, phrase));
+  const menu = hint && !notice && !mixer ? menuLineLabels(project, hint.line) : null;
+  if (phrase && bars) {
+    const names = chordNameLabels(project, phrase);
+    // Names are host labels, painted after the pixel plate. Drop any that would cover the row.
+    labels.push(...(menu ? names.filter((label) => !labelCoversPlate(label, menu)) : names));
+  }
   if (notice) labels.push(...noticeLabels(notice.title, notice.value));
-  if (hint && !notice && !mixer) {
-    const menu = hint.line === "transition" || hint.line === "wander"
-      ? captureLineLabels(project, hint.line)
-      : randomizeLineLabels(project, hint.line);
+  if (menu) {
     clearLinePlate(pixels, menu);
     labels.push(...menu);
   }
@@ -243,9 +245,21 @@ function captureLineLabels(project: Project, line: CaptureLine): Label[] {
   return menuLine(["WANDER", "OFF", ...WANDERS.map((id) => WANDER_WORD[id])], current, y);
 }
 
-/** Black plate one character outside the whole line, not around each word. */
-function clearLinePlate(pixels: Uint8Array, labels: Label[]): void {
-  if (!labels.length) return;
+function menuLineLabels(project: Project, line: RandomizeLine | CaptureLine): Label[] {
+  if (line === "transition" || line === "wander") return captureLineLabels(project, line);
+  return randomizeLineLabels(project, line);
+}
+
+interface Rect {
+  x0: number;
+  x1: number;
+  y0: number;
+  y1: number;
+}
+
+/** Black plate two pixels outside the whole line, not around each word. */
+function linePlate(labels: Label[]): Rect | null {
+  if (!labels.length) return null;
   const y = labels[0].y;
   let left = labels[0].x;
   let right = left;
@@ -253,13 +267,33 @@ function clearLinePlate(pixels: Uint8Array, labels: Label[]): void {
     left = Math.min(left, label.x);
     right = Math.max(right, label.x + label.text.length * CHAR_W);
   }
-  const x0 = Math.max(0, left - CHAR_W);
-  const x1 = Math.min(WIDTH, right + CHAR_W);
-  const y0 = Math.max(0, y - FONT_H);
-  const y1 = Math.min(HEIGHT, y + FONT_H + FONT_H);
-  for (let py = y0; py < y1; py++) {
-    for (let px = x0; px < x1; px++) set(pixels, px, py, 0);
+  return {
+    x0: Math.max(0, left - 2),
+    x1: Math.min(WIDTH, right + 2),
+    y0: Math.max(0, y - 2),
+    y1: Math.min(HEIGHT, y + FONT_H + 2),
+  };
+}
+
+function clearLinePlate(pixels: Uint8Array, labels: Label[]): void {
+  const plate = linePlate(labels);
+  if (!plate) return;
+  for (let py = plate.y0; py < plate.y1; py++) {
+    for (let px = plate.x0; px < plate.x1; px++) set(pixels, px, py, 0);
   }
+}
+
+/** Inverted host text is a box one pixel outside the glyphs. That box must not land on the plate. */
+function labelCoversPlate(label: Label, menu: Label[]): boolean {
+  const plate = linePlate(menu);
+  if (!plate) return false;
+  const box: Rect = {
+    x0: label.x - 1,
+    y0: label.y - 1,
+    x1: label.x + label.text.length * CHAR_W + 1,
+    y1: label.y + FONT_H + 1,
+  };
+  return box.x0 < plate.x1 && box.x1 > plate.x0 && box.y0 < plate.y1 && box.y1 > plate.y0;
 }
 
 function menuLine(words: string[], current: string, y: number): Label[] {

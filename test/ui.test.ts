@@ -109,32 +109,32 @@ describe("pages and leds", () => {
     assert.equal(pageGroup("aux", 2), "macro");
     assert.equal(pageGroup("aux", 3), "macro");
     assert.equal(pageGroupColor("aux", 3), 22);
-    assert.equal(aux[4].title, "BUS");
-    assert.deepEqual(aux[4].groups, ["MOVE", "ROOM"]);
+    assert.equal(aux[4].title, "MIX");
+    assert.deepEqual(aux[4].groups, ["MIX", null]);
     assert.equal(pageGroup("aux", 4), "bus");
-    assert.equal(pageGroupColor("aux", 4), 23);
+    assert.equal(pageGroupColor("aux", 4), 16);
     assert.equal(aux[4].bindings[0]?.label, "GLUE");
     assert.equal(aux[4].bindings[0]?.short, "GLU");
     assert.equal(aux[4].bindings[1]?.label, "PMP");
     assert.equal(aux[4].bindings[1]?.short, "PMP");
     assert.equal(aux[4].bindings[1]?.title, "PUMP");
-    assert.equal(aux[4].bindings[4]?.label, "WIDE");
-    assert.equal(aux[4].bindings[4]?.short, "WID");
-    assert.equal(aux[4].bindings[5]?.label, "TLT");
-    assert.equal(aux[4].bindings[5]?.short, "TLT");
-    assert.equal(aux[4].bindings[5]?.title, "TILT");
-    assert.equal(aux[4].bindings[2], null);
-    assert.equal(aux[4].bindings[3], null);
+    assert.equal(aux[4].bindings[2]?.label, "WIDE");
+    assert.equal(aux[4].bindings[2]?.short, "WID");
+    assert.equal(aux[4].bindings[3]?.label, "TLT");
+    assert.equal(aux[4].bindings[3]?.short, "TLT");
+    assert.equal(aux[4].bindings[3]?.title, "TILT");
+    assert.equal(aux[4].bindings[4], null);
+    assert.equal(aux[4].bindings[5], null);
     assert.equal(aux[4].bindings[6], null);
     assert.equal(aux[4].bindings[7], null);
     assert.equal(aux[4].bindings[0]?.store, "bus");
-    assert.equal(aux[4].bindings[5]?.min, -1);
+    assert.equal(aux[4].bindings[3]?.min, -1);
     assert.equal(scopeIncludesPage("lane", "aux", 4, 0), true);
     assert.equal(scopeIncludesPage("page", "aux", 4, 4), true);
     assert.equal(scopeIncludesPage("page", "aux", 4, 0), false);
     assert.equal(scopeIncludesPage("group", "aux", 4, 2), false);
     const busScreen = renderScreen(defaultProject(), { ...defaultUi(), context: "aux", page: 4 }, 0);
-    assert.equal(busScreen.header, "AUX MOVE ROOM");
+    assert.equal(busScreen.header, "AUX MIX");
     assert.ok(busScreen.labels.some((label) => label.text === "GLU"));
     assert.ok(busScreen.labels.some((label) => label.text === "TLT"));
     const glue = bindingFor("bus.glue");
@@ -568,7 +568,7 @@ describe("surface", () => {
     assert.equal(state.ui.heldContext, "aux");
     assert.equal(state.ui.context, "kick");
     const held = padLeds(state.project, "journal", state.ui);
-    assert.deepEqual(held.slice(24, 32).map((led) => led.color), [14, 8, 22, 22, 23, 0, 0, 0]);
+    assert.deepEqual(held.slice(24, 32).map((led) => led.color), [14, 8, 22, 22, 16, 0, 0, 0]);
     assert.equal(held[24].blink, true);
     state = reduce(state, { kind: "note", data1: 93, data2: 127 });
     assert.equal(state.ui.page, 1);
@@ -608,7 +608,7 @@ describe("surface", () => {
     assert.equal(lane[26].color, 22);
     assert.equal(lane[26].blink, false);
     assert.equal(lane[27].color, 22);
-    assert.equal(lane[28].color, 23);
+    assert.equal(lane[28].color, 16);
     assert.equal(lane[28].blink, false);
 
     const tone = { wheelTouch: true, context: "aux" as const, page: 3 };
@@ -1089,6 +1089,47 @@ describe("surface", () => {
       false,
     );
     assert.ok(pitchSpread(sound) > 1);
+  });
+
+  it("keeps chord names and degrees off the randomize row", () => {
+    const project = defaultProject();
+    project.progression.count = 4;
+    project.progression.length = 4;
+    project.progression.variation = 0;
+    const ui = {
+      ...defaultUi(),
+      context: "aux" as const,
+      page: 0,
+      randomizeHint: { line: "depth" as const, untilMs: 1_000 },
+    };
+    const plain = renderScreen(project, { ...ui, randomizeHint: null }, 0);
+    const shown = renderScreen(project, ui, 0, false, 0);
+    const line = shown.labels.filter((label) => ["ALL", "GENS", "VALUES"].includes(label.text));
+    assert.deepEqual(line.map((label) => label.text), ["ALL", "GENS", "VALUES"]);
+    const plate = {
+      x0: Math.min(...line.map((label) => label.x)) - 2,
+      x1: Math.max(...line.map((label) => label.x + label.text.length * CHAR_W)) + 2,
+      y0: line[0].y - 2,
+      y1: line[0].y + FONT_H + 2,
+    };
+    const covers = (label: { x: number; y: number; text: string }) => {
+      const box = {
+        x0: label.x - 1,
+        y0: label.y - 1,
+        x1: label.x + label.text.length * CHAR_W + 1,
+        y1: label.y + FONT_H + 1,
+      };
+      return box.x0 < plate.x1 && box.x1 > plate.x0 && box.y0 < plate.y1 && box.y1 > plate.y0;
+    };
+    const chords = plain.labels.filter((label) => label.y >= HEADER_H && label.y < HEADER_H + VIZ_H);
+    assert.ok(chords.some(covers));
+    for (const label of chords) {
+      const still = shown.labels.some((next) => next.text === label.text && next.x === label.x && next.y === label.y);
+      assert.equal(still, !covers(label));
+    }
+    for (let y = plate.y0; y < plate.y1; y++) {
+      for (let x = plate.x0; x < plate.x1; x++) assert.equal(pixel(shown, x, y), 0);
+    }
   });
 
   it("draws sliced blocks with a gap and keeps the roll while an euclid knob is held", () => {
@@ -1589,7 +1630,7 @@ describe("surface", () => {
     const left = Math.min(...line.map((label) => label.x));
     const right = Math.max(...line.map((label) => label.x + label.text.length * CHAR_W));
     const top = line[0].y;
-    const covered = (x: number, y: number) => x >= left - CHAR_W && x < right + CHAR_W && y >= top - FONT_H && y < top + FONT_H + FONT_H;
+    const covered = (x: number, y: number) => x >= left - 2 && x < right + 2 && y >= top - 2 && y < top + FONT_H + 2;
     let cleared = 0;
     for (let y = HEADER_H; y < HEADER_H + VIZ_H - 1; y++) {
       for (let x = 0; x < WIDTH; x++) {
