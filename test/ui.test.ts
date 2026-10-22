@@ -811,7 +811,44 @@ describe("surface", () => {
     assert.ok(columnSpan(screen, 8) > 0);
   });
 
-  it("collapses monophonic overlaps so one sixteenth draws one event", () => {
+  it("splits a ratchet burst so close hits do not share a column", () => {
+    const project = defaultProject();
+    project.working.kick.gen1 = { ...project.working.kick.gen1, length: 16, hits: 1, rotate: 0, probability: 1 };
+    project.working.kick.gen2.hits = 0;
+    project.working.kick.ratchet.count = modulated(1);
+    project.working.kick.ratchet.rate = modulated(1);
+    const screen = renderScreen(project, defaultUi(), 0, false);
+    assert.equal(litRuns(screen), 8);
+    assert.ok(columnSpan(screen, 0) > 0);
+    assert.equal(columnSpan(screen, 1), 0);
+    assert.ok(columnSpan(screen, 2) > 0);
+    assert.equal(columnSpan(screen, 15), 0);
+  });
+
+  it("opens a gap when swing parks a hit on the next sixteenth", () => {
+    const project = defaultProject();
+    project.global.swing = 1;
+    project.working.kick.gen1 = { ...project.working.kick.gen1, length: 16, hits: 16, rotate: 0, probability: 1 };
+    project.working.kick.gen2.hits = 0;
+    const screen = renderScreen(project, defaultUi(), 0, false);
+    assert.equal(litRuns(screen), 16);
+  });
+
+  it("leaves a one pixel gap when a bass note runs into the next attack", () => {
+    const project = defaultProject();
+    project.global.phrase = 1;
+    project.working.bass.gen1 = { ...project.working.bass.gen1, length: 16, hits: 8, rotate: 0, probability: 1 };
+    project.working.bass.gen2.hits = 0;
+    project.working.bass.follow = 0;
+    project.working.bass.length = modulated(1);
+    const screen = renderScreen(project, { ...defaultUi(), context: "bass" }, 0, false);
+    assert.ok(columnSpan(screen, 0) > 0);
+    assert.ok(columnSpan(screen, 14) > 0);
+    assert.equal(columnSpan(screen, 15), 0);
+    assert.ok(columnSpan(screen, 16) > 0);
+  });
+
+  it("collapses same-onset overlaps so stacked notes stay one event", () => {
     const project = defaultProject();
     project.working.bass.gen1 = { ...project.working.bass.gen1, length: 16, hits: 16, rotate: 0 };
     project.working.bass.gen2.hits = 0;

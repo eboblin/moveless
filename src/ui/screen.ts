@@ -487,30 +487,23 @@ function chordNameLabels(project: Project, phrase: Phrase): Label[] {
 /** Piano roll of the notes the chord figure actually plays. */
 function drawChordRoll(pixels: Uint8Array, phrase: Phrase, playhead: number): void {
   const steps = Math.max(1, phrase.steps.chords);
-  const events = phrase.lanes.chords;
+  const glyphs = layoutGlyphs(phrase.lanes.chords, steps, true, false);
   const yTop = HEADER_H;
   const yBottom = HEADER_H + VIZ_H - 2;
-  let minNote = events[0]?.note ?? 0;
+  let minNote = glyphs[0]?.event.note ?? 0;
   let maxNote = minNote;
-  for (const event of events) {
-    minNote = Math.min(minNote, event.note);
-    maxNote = Math.max(maxNote, event.note);
+  for (const glyph of glyphs) {
+    minNote = Math.min(minNote, glyph.event.note);
+    maxNote = Math.max(maxNote, glyph.event.note);
   }
   const yOf = (note: number) => {
     if (maxNote === minNote) return Math.floor((yTop + yBottom) / 2);
     const high = (note - minNote) / (maxNote - minNote);
     return yBottom - Math.round(high * (yBottom - yTop));
   };
-  for (const event of events) {
-    const y = yOf(event.note);
-    paintNoteLength(
-      pixels,
-      wrapStep(event.tick / SIXTEENTH_TICKS, steps),
-      event.lengthTicks / SIXTEENTH_TICKS,
-      steps,
-      y,
-      y,
-    );
+  for (const glyph of glyphs) {
+    const y = yOf(glyph.event.note);
+    paintBar(pixels, glyph.x0, glyph.x1, y, y);
   }
   if (playhead >= 0) paintPlayhead(pixels, wrapStep(playhead, steps), steps, yTop, yBottom);
 }
@@ -518,18 +511,18 @@ function drawChordRoll(pixels: Uint8Array, phrase: Phrase, playhead: number): vo
 function drawPhrase(pixels: Uint8Array, project: Project, phrase: Phrase, lane: LaneId, playhead: number): void {
   const view = lanePicture(project, phrase, lane, playhead);
   const steps = Math.max(1, view.steps);
-  const events = lane === "chords" ? view.events : collapseMono(view.events, steps);
+  const glyphs = layoutGlyphs(view.events, steps, isPitched(lane), lane !== "chords");
   const yTop = HEADER_H;
   const yBottom = HEADER_H + VIZ_H - 2;
   const maxEvent = Math.floor(VIZ_H / 2);
-  let minNote = events[0]?.note ?? 0;
+  let minNote = glyphs[0]?.event.note ?? 0;
   let maxNote = minNote;
-  for (const event of events) {
-    minNote = Math.min(minNote, event.note);
-    maxNote = Math.max(maxNote, event.note);
+  for (const glyph of glyphs) {
+    minNote = Math.min(minNote, glyph.event.note);
+    maxNote = Math.max(maxNote, glyph.event.note);
   }
-  const melodic = isPitched(lane);
-  for (const event of events) {
+  for (const glyph of glyphs) {
+    const event = glyph.event;
     const height = lineHeight(event.velocity, maxEvent);
     const center = pitchCenter(event.note, minNote, maxNote, yTop, yBottom, maxEvent);
     let y0 = Math.round(center - (height - 1) / 2);
@@ -544,15 +537,7 @@ function drawPhrase(pixels: Uint8Array, project: Project, phrase: Phrase, lane: 
     }
     y0 = Math.max(yTop, y0);
     y1 = Math.min(yBottom, y1);
-    if (melodic) {
-      paintNoteLength(pixels, wrapStep(event.tick / SIXTEENTH_TICKS, steps), event.lengthTicks / SIXTEENTH_TICKS, steps, y0, y1);
-      continue;
-    }
-    const [x0, x1] = bucket(wrapStep(event.tick / SIXTEENTH_TICKS, steps), steps, WIDTH);
-    const xEnd = x1 - x0 > 1 ? x1 - 1 : x1;
-    for (let x = x0; x < xEnd; x++) {
-      for (let y = y0; y <= y1; y++) set(pixels, x, y, 1);
-    }
+    paintBar(pixels, glyph.x0, glyph.x1, y0, y1);
   }
   if (view.playhead >= 0) paintPlayhead(pixels, wrapStep(view.playhead, steps), steps, yTop, yBottom);
 }
@@ -592,17 +577,169 @@ function wrapStep(step: number, steps: number): number {
   return ((step % steps) + steps) % steps;
 }
 
-/** Drums, bass and lead are monophonic: one drawn event per sixteenth. */
-function collapseMono(events: TimedEvent[], steps: number): TimedEvent[] {
+interface Glyph {
+  event: TimedEvent;
+  /** Onset in pixels, before integer snapping. */
+  at: number;
+  x0: number;
+  /** Lit pixels the event would take with nobody beside it. */
+  want: number;
+  /** Exclusive end. Past WIDTH the tail paints from the left. */
+  x1: number;
+}
+
+/**
+ * Place every onset on the 128px strip.
+ * Simultaneous notes stay on one column (a monophonic lane keeps the loudest).
+ * Anything closer than a gap gets pushed apart, borrowing empty columns nearby.
+ * A note that would run into the next attack stops one pixel short of it.
+ */
+function layoutGlyphs(events: TimedEvent[], steps: number, melodic: boolean, collapse: boolean): Glyph[] {
+  const source = collapse ? collapseSameOnset(events, steps) : events;
+  const glyphs: Glyph[] = source.map((event) => {
+    const step = wrapStep(event.tick / SIXTEENTH_TICKS, steps);
+    const at = (step / steps) * WIDTH;
+    const [x0, x1] = melodic ? noteBounds(step, event.lengthTicks / SIXTEENTH_TICKS, steps) : drumSpan(step, steps);
+    return { event, at, x0, want: Math.max(1, x1 - x0), x1 };
+  });
+  glyphs.sort((a, b) => a.at - b.at || a.x0 - b.x0 || a.event.tick - b.event.tick || a.event.note - b.event.note);
+  separateOnsets(glyphs, steps);
+  fitWidths(glyphs, melodic);
+  return glyphs;
+}
+
+/** One column per exact onset. The louder note wins; a later tick breaks a tie. */
+function collapseSameOnset(events: TimedEvent[], steps: number): TimedEvent[] {
   const best = new Map<number, TimedEvent>();
   for (const event of events) {
-    const key = Math.floor(wrapStep(event.tick / SIXTEENTH_TICKS, steps) + 1e-9);
+    const key = onsetKey(event, steps);
     const prev = best.get(key);
     if (!prev || event.velocity > prev.velocity || (event.velocity === prev.velocity && event.tick >= prev.tick)) {
       best.set(key, event);
     }
   }
   return [...best.values()];
+}
+
+function onsetKey(event: TimedEvent, steps: number): number {
+  const loop = steps * SIXTEENTH_TICKS;
+  return Math.round(((event.tick % loop) + loop) % loop);
+}
+
+/** Runs of onsets that landed on touching columns are opened up inside the free pixels around them. */
+function separateOnsets(glyphs: Glyph[], steps: number): void {
+  const groups: Array<{ s: number; e: number; x0: number }> = [];
+  for (let i = 0; i < glyphs.length;) {
+    const key = onsetKey(glyphs[i].event, steps);
+    let e = i;
+    while (e + 1 < glyphs.length && onsetKey(glyphs[e + 1].event, steps) === key) e++;
+    groups.push({ s: i, e, x0: glyphs[i].x0 });
+    i = e + 1;
+  }
+  let g = 0;
+  while (g < groups.length) {
+    let h = g;
+    while (h + 1 < groups.length && groups[h + 1].x0 - groups[h].x0 < 2) h++;
+    if (h > g) {
+      const starts: number[] = [];
+      for (let i = g; i <= h; i++) starts.push(groups[i].x0);
+      const lo = g > 0 ? groups[g - 1].x0 + 2 : 0;
+      const hi = h + 1 < groups.length ? groups[h + 1].x0 - 2 : WIDTH - 1;
+      if (lo <= hi) {
+        const placed = openGaps(starts, lo, hi);
+        for (let i = g; i <= h; i++) {
+          const x0 = placed[i - g];
+          for (let k = groups[i].s; k <= groups[i].e; k++) glyphs[k].x0 = x0;
+          groups[i].x0 = x0;
+        }
+      }
+    }
+    g = h + 1;
+  }
+}
+
+/**
+ * Prefer a 1px mark and a 1px gap. When the window is shorter than that,
+ * spend the spare columns as gaps spread across the burst, closest to where the hits were.
+ */
+function openGaps(starts: number[], lo: number, hi: number): number[] {
+  const k = starts.length;
+  if (k === 0) return [];
+  if (hi < lo) return starts.slice();
+  if (k === 1) return [Math.min(hi, Math.max(lo, starts[0]))];
+  const room = hi - lo + 1;
+  if (room >= (k - 1) * 2 + 1) return spreadStride(starts, 2, lo, hi);
+  if (room < k) {
+    const last = Math.max(0, room - 1);
+    return starts.map((_, i) => lo + Math.floor((i * last) / (k - 1)));
+  }
+  const gaps = Math.min(k - 1, room - k);
+  const block = k + gaps;
+  const origin = Math.max(lo, Math.min(starts[0], hi - block + 1));
+  const x = new Array<number>(k);
+  x[0] = origin;
+  for (let i = 0; i < k - 1; i++) {
+    const gap = Math.floor(((i + 1) * gaps) / (k - 1)) - Math.floor((i * gaps) / (k - 1));
+    x[i + 1] = x[i] + 1 + gap;
+  }
+  return x;
+}
+
+/** Push later hits right until each pair has `stride` columns. If that runs off the edge, pull the burst back. */
+function spreadStride(starts: number[], stride: number, lo: number, hi: number): number[] {
+  const n = starts.length;
+  const x = starts.map((value) => Math.min(hi, Math.max(lo, value)));
+  for (let i = 1; i < n; i++) {
+    const min = x[i - 1] + stride;
+    if (x[i] < min) x[i] = min;
+  }
+  if (x[n - 1] > hi) {
+    x[n - 1] = hi;
+    for (let i = n - 2; i >= 0; i--) {
+      const max = x[i + 1] - stride;
+      if (x[i] > max) x[i] = max;
+    }
+  }
+  if (x[0] < lo) {
+    x[0] = lo;
+    for (let i = 1; i < n; i++) {
+      const min = x[i - 1] + stride;
+      if (x[i] < min) x[i] = min;
+    }
+  }
+  return x;
+}
+
+/** Shorten a body that would touch the next attack. A lone onset keeps the width it was given. */
+function fitWidths(glyphs: Glyph[], melodic: boolean): void {
+  const n = glyphs.length;
+  if (n === 0) return;
+  let shared = true;
+  for (let i = 1; i < n; i++) {
+    if (glyphs[i].x0 !== glyphs[0].x0) {
+      shared = false;
+      break;
+    }
+  }
+  if (shared) {
+    for (const glyph of glyphs) glyph.x1 = glyph.x0 + glyph.want;
+    return;
+  }
+  for (let i = 0; i < n; i++) {
+    let next = i + 1;
+    while (next < n && glyphs[next].x0 === glyphs[i].x0) next++;
+    let prev = i - 1;
+    while (prev >= 0 && glyphs[prev].x0 === glyphs[i].x0) prev--;
+    let limit: number;
+    if (next < n) limit = glyphs[next].x0 - 1;
+    else if (glyphs[0].x0 === 0) limit = WIDTH;
+    else limit = WIDTH + glyphs[0].x0 - 1;
+    // A drum hit is a slot, not a sustain. Keep it as narrow as the gap behind it
+    // so the last tick of a burst does not swell into the empty bar.
+    if (!melodic && prev >= 0) limit = Math.min(limit, glyphs[i].x0 + (glyphs[i].x0 - glyphs[prev].x0) - 1);
+    const width = Math.max(1, Math.min(glyphs[i].want, limit - glyphs[i].x0));
+    glyphs[i].x1 = glyphs[i].x0 + width;
+  }
 }
 
 function pitchCenter(note: number, minNote: number, maxNote: number, yTop: number, yBottom: number, maxEvent: number): number {
@@ -620,8 +757,20 @@ function lineHeight(velocity: number, maxLine: number): number {
 }
 
 /** Bass and lead span their length. A tail past the loop wraps; a note wider than one pixel keeps a 1px gap at its end. */
-function paintNoteLength(pixels: Uint8Array, step: number, lengthSteps: number, steps: number, y0: number, y1: number): void {
+function noteBounds(step: number, lengthSteps: number, steps: number): [number, number] {
   const span = Math.max(lengthSteps, 1 / Math.max(1, steps));
+  if (span >= steps) return [0, WIDTH];
+  const x0 = (step / steps) * WIDTH;
+  let x1 = x0 + (span / steps) * WIDTH;
+  if (x1 < x0 + 1) x1 = x0 + 1;
+  if (x1 - x0 > 1) x1 -= 1;
+  const start = Math.floor(x0);
+  const end = Math.floor(x1);
+  if (end <= WIDTH) return [start, Math.max(start + 1, end)];
+  return [start, end];
+}
+
+function paintBar(pixels: Uint8Array, x0: number, x1: number, y0: number, y1: number): void {
   const paint = (from: number, to: number) => {
     const a = Math.max(0, from);
     const b = Math.min(WIDTH, to);
@@ -629,23 +778,20 @@ function paintNoteLength(pixels: Uint8Array, step: number, lengthSteps: number, 
       for (let y = y0; y <= y1; y++) set(pixels, x, y, 1);
     }
   };
-  if (span >= steps) {
-    paint(0, WIDTH);
+  if (x1 <= WIDTH) {
+    paint(x0, x1);
     return;
   }
-  const x0 = (step / steps) * WIDTH;
-  let x1 = x0 + (span / steps) * WIDTH;
-  if (x1 < x0 + 1) x1 = x0 + 1;
-  if (x1 - x0 > 1) x1 -= 1;
-  const start = Math.floor(x0);
-  const end = Math.floor(x1);
-  if (end <= WIDTH) {
-    paint(start, Math.max(start + 1, end));
-    return;
-  }
-  paint(start, WIDTH);
-  const tail = end - WIDTH;
+  paint(x0, WIDTH);
+  const tail = x1 - WIDTH;
   if (tail > 0) paint(0, tail);
+}
+
+/** A drum hit fills its sixteenth, minus a 1px gap when the slot is wider than a pixel. */
+function drumSpan(step: number, steps: number): [number, number] {
+  const [x0, x1] = bucket(step, steps, WIDTH);
+  const xEnd = x1 - x0 > 1 ? x1 - 1 : x1;
+  return [x0, xEnd];
 }
 
 function bucket(index: number, count: number, size: number): [number, number] {
