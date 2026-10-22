@@ -1,5 +1,5 @@
 import { laneHeard } from "../core/journal.ts";
-import { SIXTEENTH_TICKS } from "../core/clock.ts";
+import { SIXTEENTH_TICKS, countFromUnit, rateFromUnit } from "../core/clock.ts";
 import { phraseStepsOf } from "../core/events.ts";
 import { chordSymbol, degreeNumeral, pitchClassName, scaleShort, scaleTitle } from "../core/harmony.ts";
 import { chordFigure, generatePhrase, laneSteps, octaveNumber, restingChordToneLabel, restingPitchLabel, restingSliceLabel } from "../core/phrase.ts";
@@ -654,7 +654,7 @@ function bucket(index: number, count: number, size: number): [number, number] {
   return [Math.min(size - 1, start), Math.min(size, Math.max(start + 1, end))];
 }
 
-/** Pitch and octave show the resting note. Chord rate shows BLOCK or a division. */
+/** Pitch and octave show the resting note. Rate shows its division, count shows how many hits. */
 function figureHeader(project: Project, context: ContextId, binding: Binding): string | null {
   if (binding.store === "progression" && binding.path === "count" && Math.round(readControl(project, context, binding.path)) === 0) {
     return "MIDI";
@@ -673,9 +673,13 @@ function figureHeader(project: Project, context: ContextId, binding: Binding): s
     case "chordTone":
       if (context !== "chords") return null;
       return restingChordToneLabel(project.working.chords, project.progression, project.global);
-    case "division":
-      if (context !== "chords") return null;
-      return chordFigure(readControl(project, "chords", "rate.value")).label.slice(0, LINE_LIMIT);
+    case "division": {
+      const unit = readControl(project, context, binding.path);
+      const label = context === "chords" ? chordFigure(unit).label : rateFromUnit(unit).id;
+      return label.slice(0, LINE_LIMIT);
+    }
+    case "count":
+      return String(countFromUnit(readControl(project, context, binding.path)));
     case "slice":
       if (context !== "chords") return null;
       return restingSliceLabel(project.working.chords, project.global);
@@ -698,6 +702,8 @@ function knobAmount(project: Project, context: ContextId, binding: Binding, ui: 
       return { kind: "wide", text: pitchClassName(project.global.root), negative: false };
     case "scale":
       return { kind: "wide", text: scaleShort(project.global.scale), negative: false };
+    case "count":
+      return { kind: "big", n: countFromUnit(readControl(project, context, binding.path)), negative: false };
     default:
       break;
   }

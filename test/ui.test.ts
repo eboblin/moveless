@@ -1126,6 +1126,14 @@ describe("surface", () => {
     assert.equal(zone(0.01), "1/1");
     assert.equal(zone(0.25), "1/4");
     assert.match(zone(0.75), /^\d/);
+    const ratchet = (rate: number) => renderScreen(
+      { ...project, working: { ...project.working, kick: { ...project.working.kick, ratchet: { ...project.working.kick.ratchet, rate: modulated(rate) } } } },
+      { ...defaultUi(), context: "kick", page: 2, focus: { label: "RATE V", path: "ratchet.rate.value", generator: "ratchet.rate", showPattern: false, held: true, untilTick: 0, untilMs: 0 } },
+      0,
+    ).header;
+    assert.equal(ratchet(0), "1/8");
+    assert.equal(ratchet(unitForIndex(1, 6)), "1/16");
+    assert.equal(ratchet(1), "1/64");
     const roll = renderScreen(project, { ...defaultUi(), context: "chords", page: 3 }, 0);
     assert.equal(
       roll.labels.some((label) => label.y >= HEADER_H && label.y < HEADER_H + VIZ_H && /^[A-G]/.test(label.text)),
@@ -1229,6 +1237,32 @@ describe("surface", () => {
     assert.ok(columnSpan(wrapped, 112) >= 3);
   });
 
+  it("steps ratchet count through eight repeats", () => {
+    const count = bindingFor("ratchet.count.value");
+    assert.ok(count);
+    assert.equal(count.step, 1 / 8);
+    assert.equal(count.max, 7 / 8);
+    assert.equal(stepKnob(0, count, 1, null).value, 0.125);
+    assert.equal(stepKnob(0, count, 7, null).value, 0.875);
+    assert.equal(stepKnob(0.875, count, 1, null).value, 0.875);
+    const project = defaultProject();
+    const digit = (value: number) => {
+      project.working.kick.ratchet.count = modulated(value);
+      const screen = renderScreen(project, { ...defaultUi(), page: 2 }, 0);
+      return screen.digits.find((item) => item.cell === 0)?.amount;
+    };
+    assert.deepEqual(digit(0), { kind: "big", n: 1, negative: false });
+    assert.deepEqual(digit(0.4), { kind: "big", n: 4, negative: false });
+    assert.deepEqual(digit(1), { kind: "big", n: 8, negative: false });
+    project.working.kick.ratchet.count = modulated(0.5);
+    const held = renderScreen(project, {
+      ...defaultUi(),
+      page: 2,
+      focus: { label: "COUNT V", path: "ratchet.count.value", generator: "ratchet.count", showPattern: false, held: true, untilTick: 0, untilMs: 0 },
+    }, 0);
+    assert.equal(held.header, "5");
+  });
+
   it("keeps big digits for 0..99 and uses small 3+ digit text past that", () => {
     const small = { min: 0, max: 64, path: "x", label: "X", step: 1, integer: true };
     assert.deepEqual(displayAmount(0, small), { kind: "big", n: 0, negative: false });
@@ -1306,7 +1340,7 @@ describe("surface", () => {
     const frozen = state.tick;
     const waiting = renderScreen(state.project, state.ui, frozen, false, untilMs - 1);
     assert.equal(waiting.viz, "generator");
-    assert.equal(waiting.header, "COUNT VALUE");
+    assert.equal(waiting.header, "1");
     const back = renderScreen(state.project, state.ui, frozen, false, untilMs);
     assert.equal(back.viz, "phrase");
     assert.equal(back.header, "KCK COUNT RATE");

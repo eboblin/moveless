@@ -17,7 +17,7 @@ import {
 export type MorphKind = "lerp" | "switch";
 export type KnobStore = "lane" | "progression" | "global" | "mixer" | "macro" | "bus";
 /** How the screen draws a knob. `number` is the plain 0..99 cell. */
-export type KnobDisplay = "number" | "pitch" | "octave" | "note" | "scale" | "division" | "chordTone" | "slice";
+export type KnobDisplay = "number" | "pitch" | "octave" | "note" | "scale" | "division" | "chordTone" | "slice" | "count";
 
 export interface Binding {
   path: string;
@@ -102,6 +102,9 @@ interface FieldSpec {
   display?: KnobDisplay;
   /** Hold on the value slot. Omitted when a second use of the id needs a different hold. */
   detent?: readonly number[];
+  /** Value-slot travel. Omitted slots keep the 0..1 hundredth. */
+  step?: number;
+  max?: number;
   /** Macro keys that feed the field. Defaults to the field's own name. */
   macro?: readonly string[];
 }
@@ -141,7 +144,8 @@ const FIELD = {
   body: spec("BODY", 2),
   metal: spec("METAL", 2),
   material: spec("MATERIAL", 2),
-  count: spec("COUNT", 8, { macro: ["count", "repeat"] }),
+  /** Eight repeats. One click is one repeat; the cell shows 1..8, not 0..100. */
+  count: spec("COUNT", 8, { macro: ["count", "repeat"], display: "count", step: 1 / 8, max: 7 / 8 }),
   repeat: spec("REPEAT", 8),
   rate: spec("RATE", 8, { display: "division" }),
   bendTime: spec("B TIME", 1),
@@ -281,8 +285,8 @@ function vpca(path: string, field: FieldSpec, group: PageGroup, label = field.la
       path: `${path}.value`,
       label: `${label} ${SLOT.value.suffix}`,
       min: SLOT.value.min,
-      max: SLOT.value.max,
-      step: SLOT.value.step,
+      max: field.max ?? SLOT.value.max,
+      step: field.step ?? SLOT.value.step,
       weight: field.weight,
       display: field.display,
       detents: field.detent,
