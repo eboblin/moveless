@@ -141,7 +141,7 @@ export interface PadSurface {
  * dark→dim→bright by morph progress. An empty journal/set still shows pad 0 as the
  * current working scene. Capture adds Transition and Wander on the bottom row of that list.
  * Jog touch or a latched jog click shows randomize instead, so the Capture row stays hidden.
- * The purple lane ignores both: its pads stay the page face.
+ * On the purple lane the jog still draws the page row, and the randomize rows stay off.
  */
 export function padLeds(project: Project, mode: "journal" | "set", surface?: PadSurface, tick = 0): Led[] {
   const context = surface?.context ?? "kick";
@@ -156,9 +156,9 @@ export function padLeds(project: Project, mode: "journal" | "set", surface?: Pad
     return pageOverlay(scenes, surface.heldContext, shown);
   }
   const id = pageId(context, page);
-  if (id === "mixer") return mutePeekLeds(project);
-  if (id === "deck") return deckPadLeds(scenes, project.deck);
-  return scenes;
+  const face = id === "mixer" ? mutePeekLeds(project) : id === "deck" ? deckPadLeds(scenes, project.deck) : scenes;
+  if (context === "aux" && surface?.wheelTouch) return pageOverlay(face, "aux", page, 1);
+  return face;
 }
 
 /** Mixer and DJ pads for the purple page under the finger. Other pages keep the scene grid. */

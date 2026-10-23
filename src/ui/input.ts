@@ -138,6 +138,10 @@ function onPad(session: Session, index: number, press: boolean): Session {
   if (randomize) return onRandomizePad(session, row, col);
   if (peekKind(session.ui) === "capture") return onCapturePad(session, row, col);
   const holdingAux = session.ui.heldContext === "aux";
+  if (!session.ui.heldContext && session.ui.context === "aux" && session.ui.wheelTouch && top) {
+    if (col >= pageCount("aux")) return session;
+    return { ...session, ui: settleRandomize(rememberPage(session.ui, "aux", col)) };
+  }
   if (session.ui.heldContext && (holdingAux ? top : top || second)) {
     const page = top ? col : 8 + col;
     const held = session.ui.heldContext;

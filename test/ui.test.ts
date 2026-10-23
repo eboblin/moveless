@@ -659,23 +659,34 @@ describe("surface", () => {
     state = reduce(state, { kind: "note", data1: 9, data2: 127 });
     const wheel = padLeds(state.project, "journal", state.ui);
     assert.equal(state.ui.wheelTouch, true);
-    assert.deepEqual(wheel, face);
+    assert.deepEqual(wheel.slice(24, 32).map((led) => led.color), [14, 8, 22, 16, 18, 11, 0, 0]);
+    assert.equal(wheel[25].blink, true);
+    assert.equal(wheel[0].color, face[0].color);
     assert.notEqual(wheel[8].color, LED.purple);
   });
 
-  it("keeps the purple page face when the jog is touched", () => {
+  it("keeps the purple page face under the jog page row", () => {
     const project = defaultProject();
     const settings = { context: "aux" as const, page: 1 };
-    assert.deepEqual(padLeds(project, "journal", { ...settings, wheelTouch: true }), padLeds(project, "journal", settings));
+    const settingsFace = padLeds(project, "journal", settings);
+    const settingsWheel = padLeds(project, "journal", { ...settings, wheelTouch: true });
+    assert.deepEqual(settingsWheel.slice(24, 32).map((led) => led.color), [14, 8, 22, 16, 18, 11, 0, 0]);
+    assert.equal(settingsWheel[25].blink, true);
+    assert.equal(settingsWheel[8].color, settingsFace[8].color);
+    assert.notEqual(settingsWheel[8].color, LED.purple);
     const mixer = { context: "aux" as const, page: auxIndex("mixer") };
+    const mixFace = padLeds(project, "journal", mixer);
     const mix = padLeds(project, "journal", { ...mixer, wheelTouch: true });
-    assert.deepEqual(mix, padLeds(project, "journal", mixer));
-    assert.equal(mix[24].color, 5);
+    assert.equal(mix[28].color, 18);
+    assert.equal(mix[28].blink, true);
+    assert.equal(mix[16].color, mixFace[16].color);
     assert.notEqual(mix[8].color, LED.purple);
     const deck = { context: "aux" as const, page: auxIndex("deck") };
+    const deckFace = padLeds(project, "journal", deck);
     const deckLeds = padLeds(project, "journal", { ...deck, wheelTouch: true });
-    assert.deepEqual(deckLeds, padLeds(project, "journal", deck));
-    assert.equal(deckLeds[24].color, 3);
+    assert.equal(deckLeds[29].color, 11);
+    assert.equal(deckLeds[29].blink, true);
+    assert.equal(deckLeds[16].color, deckFace[16].color);
 
     let held = reduce(session(), { kind: "note", data1: 31, data2: 127 });
     held = reduce(held, { kind: "note", data1: 9, data2: 127 });
@@ -689,6 +700,10 @@ describe("surface", () => {
     assert.equal(state.project.randomizeDepth, "all");
     assert.equal(state.project.lock.kick, true);
     assert.equal(state.ui.context, "aux");
+    state = reduce(state, { kind: "note", data1: 92, data2: 127 });
+    assert.equal(state.ui.page, 0);
+    assert.equal(state.project.mute.kick, false);
+    assert.equal(state.project.randomizeScope, "group");
   });
 
   it("zeros a knob on shift plus tap and leaves a plain tap alone", () => {
