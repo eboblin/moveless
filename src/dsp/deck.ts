@@ -19,6 +19,8 @@ export interface DeckRuntime {
   gesture: DeckGesture | null;
   /** Gesture last requested. Distinct from `gesture` so the fade is not restarted. */
   command: DeckGesture | null;
+  /** Pad press that started `command`. A new press of the same cell still retriggers. */
+  press: number;
   down: number;
   up: number | null;
   warm: boolean;
@@ -43,6 +45,7 @@ export function createDeckRuntime(): DeckRuntime {
     knobs: defaultDeck(),
     gesture: null,
     command: null,
+    press: 0,
     down: 0,
     up: null,
     warm: false,
@@ -64,9 +67,10 @@ export function deckTargetLead(tempo: number, barBeats: number): number {
 }
 
 /** Remember a command. A new gesture grabs the clock; letting go only arms the fade. */
-export function commandDeck(deck: DeckRuntime, gesture: DeckGesture | null, clock: number): void {
-  if (gesture === deck.command) return;
+export function commandDeck(deck: DeckRuntime, gesture: DeckGesture | null, clock: number, press = 0): void {
+  if (gesture === deck.command && press === deck.press) return;
   deck.command = gesture;
+  deck.press = press;
   if (gesture) {
     deck.gesture = gesture;
     deck.down = clock;

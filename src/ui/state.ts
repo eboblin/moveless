@@ -1,4 +1,4 @@
-import type { DeckGesture } from "../core/deck.ts";
+import type { DeckGroup } from "../core/deck.ts";
 import { pageCount } from "../core/pages.ts";
 import { STEPS, type ContextId, type PageRef } from "../core/types.ts";
 
@@ -101,14 +101,18 @@ export interface UiState {
   deckWasLatched: boolean;
   deckDownTick: number | null;
   deckDownMs: number | null;
-  /** Pad currently under a finger. */
-  deckGesture: DeckGesture | null;
+  /** Group currently under a finger. */
+  deckGesture: DeckGroup | null;
   /** Transport tick when that finger went down. The picture counts the gesture from here. */
   deckGestureTick: number | null;
-  /** Shift+pad keeps the gesture after the finger lifts. */
-  deckLatchedGesture: DeckGesture | null;
+  /** Shift+pad keeps the group after the finger lifts. */
+  deckLatchedGesture: DeckGroup | null;
   /** Transport tick when the latch was taken. */
   deckLatchTick: number | null;
+  /** How many pad presses have started a deck gesture. The voice uses it as a new entry. */
+  deckPress: number;
+  /** Bits of deck pads still held. Sound stays until the last one lifts. */
+  deckPads: number;
   heldContext: ContextId | null;
   heldPage: number | null;
   focus: Focus | null;
@@ -267,6 +271,8 @@ export function defaultUi(): UiState {
     deckGestureTick: null,
     deckLatchedGesture: null,
     deckLatchTick: null,
+    deckPress: 0,
+    deckPads: 0,
     heldContext: null,
     heldPage: null,
     focus: null,

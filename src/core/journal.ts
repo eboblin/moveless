@@ -1,3 +1,4 @@
+import { writeDeckKnob } from "./deck.ts";
 import { clamp01, ticksPerBar } from "./clock.ts";
 import { clone } from "./clone.ts";
 import { defaultProject } from "./defaults.ts";
@@ -331,7 +332,8 @@ export function commitMacro(project: Project, key: string): Project {
 }
 
 export function setDeck(project: Project, id: keyof Project["deck"], value: number): Project {
-  return { ...project, deck: { ...project.deck, [id]: value } };
+  if (id === "cells" || id === "focus") return project;
+  return { ...project, deck: writeDeckKnob(project.deck, id, value, project.global.bar) };
 }
 
 export function setBus(project: Project, id: keyof Bus, value: number): Project {

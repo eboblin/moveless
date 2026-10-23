@@ -2345,7 +2345,7 @@ describe("deck screen", () => {
     assert.equal(reduce(late, { kind: "cc", data1: 118, data2: 0 }).ui.deckLatched, false);
   });
 
-  it("takes the top pads for a gesture and leaves scenes on the bottom", () => {
+  it("takes every pad for a gesture and does not launch a scene", () => {
     let state = session();
     state = { ...state, project: record(record(state.project)) };
     const first = state.project.journal[0]?.id;
@@ -2354,19 +2354,24 @@ describe("deck screen", () => {
     assert.equal(state.project.morph?.targetId, first);
     state = openDeck(state);
     const top = reduce(state, { kind: "note", data1: 92, data2: 127 });
-    assert.equal(top.ui.deckGesture, "roll");
+    assert.equal(top.ui.deckGesture, "rpt");
     assert.equal(top.ui.deckGestureTick, top.tick);
     assert.equal(top.project.morph?.targetId, first);
     assert.equal(renderScreen(top.project, top.ui, 0).header, "BEAT REPEAT");
     const idle = padLeds(top.project, "journal", { ...top.ui, deckGesture: null });
     const lit = padLeds(top.project, "journal", top.ui);
-    assert.equal(idle[24]?.color, offColor(11));
-    assert.equal(lit[24]?.color, 11);
+    assert.equal(lit[24]?.color, 3);
+    assert.equal(lit[16]?.color, offColor(9));
+    assert.equal(lit[4]?.blink, true);
+    assert.equal(idle[4]?.blink, false);
+    assert.equal(idle[24]?.color, 3);
     const up = reduce(top, { kind: "note", data1: 92, data2: 0 });
     assert.equal(up.ui.deckGesture, null);
     assert.equal(up.ui.deckGestureTick, null);
     const bottom = reduce(up, { kind: "note", data1: 69, data2: 127 });
-    assert.equal(bottom.project.morph?.targetId, second);
+    assert.equal(bottom.ui.deckGesture, "thr");
+    assert.equal(bottom.project.morph?.targetId, first);
+    assert.notEqual(bottom.project.morph?.targetId, second);
     const turned = reduce(openDeck(session()), { kind: "cc", data1: 71, data2: 1 });
     assert.equal(turned.project.deck.div, 3);
   });
@@ -2375,17 +2380,21 @@ describe("deck screen", () => {
     const open = openDeck(session());
     const idle = renderScreen(open.project, open.ui, 0);
     assert.deepEqual(idle.dim, []);
-    assert.equal(idle.labels.some((label) => label.text === "SCR"), true);
+    assert.equal(idle.labels.some((label) => label.text === "VAR"), true);
     const names = (state: Session) =>
       renderScreen(state.project, state.ui, 0).labels.filter((label) => label.y === NAME_Y).map((label) => label.text);
     const roll = reduce(open, { kind: "note", data1: 92, data2: 127 });
     const rolled = renderScreen(roll.project, roll.ui, 0);
-    assert.deepEqual(names(roll), ["DIV", "LEN", "DEP", "BRK", "SCR", "QNT", "TRN", "HLX"]);
+    assert.deepEqual(names(roll), ["DIV", "LEN", "DEP", "TIM", "VAR", "QNT", "DUT", "BND"]);
     assert.deepEqual(rolled.dim, [1, 3, 4, 6, 7]);
-    const scratch = reduce(open, { kind: "note", data1: 89, data2: 127 });
-    assert.deepEqual(renderScreen(scratch.project, scratch.ui, 0).dim, [0, 3, 6, 7]);
+    const scratch = reduce(open, { kind: "note", data1: 68, data2: 127 });
+    assert.deepEqual(renderScreen(scratch.project, scratch.ui, 0).dim, [0]);
     const still = reduce(roll, { kind: "cc", data1: 75, data2: 1 });
-    assert.equal(still.project.deck.shape, 1);
+    assert.ok(still.project.deck.vary > 0);
+    const field = padLeds(scratch.project, "journal", scratch.ui);
+    assert.equal(field[31]?.color, 1);
+    assert.equal(field[2]?.color, offColor(1));
+    assert.equal(field[24]?.color, offColor(3));
   });
 
   it("walks the recorded master under a fixed stylus", () => {
@@ -2439,7 +2448,7 @@ describe("deck screen", () => {
     assert.deepEqual(mute, { kind: "cc", data1: 88, data2: 127 });
     const open = reduce(reduce(session(), { kind: "cc", data1: 118, data2: 127 }), { kind: "cc", data1: 118, data2: 0 });
     const pad = reduce(open, note ?? { kind: "note", data1: 88, data2: 127 });
-    assert.equal(pad.ui.deckGesture, "back");
+    assert.equal(pad.ui.deckGesture, "rpt");
     assert.equal(pad.ui.muteHeld, false);
     assert.equal(pad.ui.muteLatched, false);
     const mixed = reduce(session(), mute ?? { kind: "cc", data1: 88, data2: 127 });
@@ -2452,7 +2461,7 @@ describe("deck screen", () => {
     state = reduce(state, { kind: "note", data1: 92, data2: 127 });
     state = reduce(state, { kind: "note", data1: 92, data2: 0 });
     state = reduce(state, { kind: "cc", data1: 49, data2: 0 });
-    assert.equal(state.ui.deckLatchedGesture, "roll");
+    assert.equal(state.ui.deckLatchedGesture, "rpt");
     assert.equal(state.ui.deckLatchTick, state.tick);
     assert.equal(state.ui.deckGesture, null);
     assert.equal(state.ui.deckGestureTick, null);
@@ -2465,7 +2474,7 @@ describe("deck screen", () => {
     assert.equal(pad.project.mute.kick, true);
     const wheeled = reduce({ ...state, ui: { ...state.ui, wheelTouch: true } }, { kind: "note", data1: 92, data2: 127 });
     assert.equal(wheeled.ui.deckGesture, null);
-    assert.equal(wheeled.ui.deckLatchedGesture, "roll");
+    assert.equal(wheeled.ui.deckLatchedGesture, "rpt");
   });
 });
 

@@ -538,14 +538,14 @@ export function deckPage(): Page {
   const knob = (path: string, label: string, min: number, max: number, step: number, integer = false) =>
     plain(`deck.${path}`, label, min, max, step, integer, "deck");
   return page("deck", "DECK", ["TIME", "DECK"], "bus", [
-    knob("div", "DIV", 0, 6, 1, true),
+    knob("div", "DIV", 0, 5, 1, true),
     knob("len", "LEN", 0, 1, 0.01),
     knob("depth", "DEP", 0, 1, 0.01),
-    knob("brake", "BRK", 0, 3, 1, true),
-    knob("shape", "SCR", 0, 3, 1, true),
+    knob("brake", "TIM", 0, 5, 1, true),
+    knob("vary", "VAR", 0, 1, 0.01),
     knob("quant", "QNT", 0, 3, 1, true),
-    knob("duty", "TRN", 0, 1, 0.01),
-    knob("ramp", "HLX", 0, 1, 0.01),
+    knob("duty", "DUT", 0, 1, 0.01),
+    knob("ramp", "BND", 0, 1, 0.01),
   ]);
 }
 

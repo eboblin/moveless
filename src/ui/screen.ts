@@ -1,4 +1,4 @@
-import { DECK_PAD, DIV_LABEL, BRAKE_LABEL, SHAPE_LABEL, QUANT_LABEL, deckKnobsFor, deckPicture, lenLabel, type DeckKnobId, type DeckPicture } from "../core/deck.ts";
+import { GROUP_PAD, DIV_LABEL, BRAKE_LABEL, QUANT_LABEL, assembleDeck, behaviorOf, deckKnobsFor, deckPicture, isDeckGroup, lenLabel, type DeckKnobId, type DeckPicture } from "../core/deck.ts";
 import { laneHeard } from "../core/journal.ts";
 import { SIXTEENTH_TICKS, countFromUnit, rateFromUnit, tickToSample } from "../core/clock.ts";
 import { phraseStepsOf } from "../core/events.ts";
@@ -94,7 +94,7 @@ export function renderScreen(
   const mixer = !notice && kind === "mute";
   const decking = !notice && kind === "deck";
   const heard = ui.deckGesture ?? ui.deckLatchedGesture;
-  const deckTitle = DECK_PAD.find((pad) => pad.id === heard)?.title ?? "DECK";
+  const deckTitle = GROUP_PAD.find((pad) => pad.id === heard)?.title ?? "DECK";
   const header = mixer
     ? (focusBinding?.title ?? focus ?? "MIXER")
     : decking
@@ -216,7 +216,7 @@ function drawMixer(pixels: Uint8Array, project: Project, focus: string | null): 
 /** Columns a sounding gesture does not read. Empty when every knob is in play. */
 function deckDimCells(project: Project, ui: UiState): number[] {
   const heard = ui.deckGesture ?? ui.deckLatchedGesture;
-  const keys = deckKnobsFor(heard, project.deck);
+  const keys = deckKnobsFor(heard && isDeckGroup(heard) ? heard : null, project.deck);
   if (!keys) return [];
   const allow = new Set<string>(keys);
   const dim: number[] = [];
@@ -238,17 +238,18 @@ function deckHeardTick(ui: UiState): number | null {
 export function deckFrame(project: Project, ui: UiState, tick: number): DeckPicture {
   const tempo = Math.max(1, project.global.tempo);
   const heard = ui.deckGesture ?? ui.deckLatchedGesture;
+  const group = heard && isDeckGroup(heard) ? heard : null;
   const motion = deckHeardTick(ui);
   const now = tickToSample(Math.max(0, tick), tempo);
   const down = motion == null ? now : tickToSample(Math.max(0, motion), tempo);
   return deckPicture({
-    gesture: heard,
+    gesture: group ? behaviorOf(project.deck, group) : null,
     down,
     up: null,
     now,
     tempo,
     barBeats: project.global.bar,
-    knobs: project.deck,
+    knobs: group ? assembleDeck(project.deck, group, project.global.bar) : project.deck,
     ahead: 0,
     seed: project.global.seed,
   });
@@ -947,8 +948,6 @@ function deckKnobText(project: Project, path: string): string | null {
       return lenLabel(deck, project.global.bar);
     case "deck.brake":
       return BRAKE_LABEL[deck.brake] ?? null;
-    case "deck.shape":
-      return SHAPE_LABEL[deck.shape] ?? null;
     case "deck.quant":
       return QUANT_LABEL[deck.quant] ?? null;
     default:

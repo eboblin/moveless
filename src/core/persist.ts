@@ -1,4 +1,4 @@
-import { defaultDeck } from "./deck.ts";
+import { defaultDeck, groupIndex, migrateDeckIndex, type DeckCell } from "./deck.ts";
 import { defaultProject } from "./defaults.ts";
 import { clone } from "./clone.ts";
 import { ensureTrailingEmpty } from "./journal.ts";
@@ -196,18 +196,35 @@ function mergeProgression(base: Progression, raw: unknown): Progression {
   return merged;
 }
 
+function mergeCells(raw: unknown, home: DeckCell[]): DeckCell[] {
+  if (!Array.isArray(raw) || raw.length !== 8) return home.map((cell) => ({ ...cell }));
+  return raw.map((item, index) => {
+    const cell = isRecord(item) ? item : {};
+    const fallback = home[index] ?? { x: 0, y: 0 };
+    return {
+      x: clamp(asInt(cell.x, fallback.x), 0, 5),
+      y: clamp(asInt(cell.y, fallback.y), 0, 3),
+    };
+  });
+}
+
 function mergeDeck(base: Project["deck"], raw: unknown): Project["deck"] {
-  if (!isRecord(raw)) return { ...base };
+  if (!isRecord(raw)) return { ...base, cells: base.cells.map((cell) => ({ ...cell })) };
   const home = defaultDeck();
+  const legacy = !Array.isArray(raw.cells);
+  const cells = mergeCells(raw.cells, home.cells);
+  if (legacy && raw.shape !== undefined) cells[groupIndex("scr")].y = clamp(asInt(raw.shape, 0), 0, 3);
   return {
-    div: clamp(asInt(raw.div, home.div), 0, 6),
+    div: clamp(legacy ? migrateDeckIndex("div", asInt(raw.div, 2)) : asInt(raw.div, home.div), 0, 5),
     len: clamp(asNumber(raw.len, home.len), 0, 1),
     depth: clamp(asNumber(raw.depth, home.depth), 0, 1),
-    brake: clamp(asInt(raw.brake, home.brake), 0, 3),
-    shape: clamp(asInt(raw.shape, home.shape), 0, 3),
+    brake: clamp(legacy ? migrateDeckIndex("brake", asInt(raw.brake, 2)) : asInt(raw.brake, home.brake), 0, 5),
+    vary: clamp(asNumber(raw.vary, 0), 0, 1),
     quant: clamp(asInt(raw.quant, home.quant), 0, 3),
     duty: clamp(asNumber(raw.duty, home.duty), 0, 1),
     ramp: clamp(asNumber(raw.ramp, home.ramp), 0, 1),
+    cells,
+    focus: clamp(asInt(raw.focus, home.focus), 0, 7),
   };
 }
 

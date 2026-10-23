@@ -17,7 +17,7 @@ import {
 } from "../core/types.ts";
 import { pageCount, pageGroupColor, pagesFor, scopeIncludesPage } from "../core/pages.ts";
 import { depthTouchesPath } from "../core/randomize.ts";
-import { DECK_PAD, DECK_PAD_INDEX } from "../core/deck.ts";
+import { DECK_GROUPS, GROUP_PAD, fieldAt, groupAt, type DeckKnobs } from "../core/deck.ts";
 import { peekKind } from "./state.ts";
 
 export const LED = {
@@ -163,20 +163,33 @@ export function padLeds(project: Project, mode: "journal" | "set", surface?: Pad
     const shown = surface.heldPage ?? surface.lanePages?.[surface.heldContext] ?? (surface.heldContext === context ? page : -1);
     return pageOverlay(scenes, surface.heldContext, shown);
   }
-  if (kind === "deck") return deckPadLeds(scenes, surface ?? {});
+  if (kind === "deck") return deckPadLeds(scenes, surface ?? {}, project.deck);
   return scenes;
 }
 
-const DECK_HUE = 11;
-
-function deckPadLeds(scenes: Led[], surface: PadSurface): Led[] {
+function deckPadLeds(scenes: Led[], surface: PadSurface, deck: DeckKnobs): Led[] {
   const heard = surface.deckGesture ?? surface.deckLatchedGesture ?? null;
-  DECK_PAD.forEach((pad, index) => {
-    const at = DECK_PAD_INDEX[index];
-    if (at === undefined) return;
-    const on = heard === pad.id;
-    scenes[at] = { family: "yellow", color: on ? DECK_HUE : offColor(DECK_HUE), blink: false };
-  });
+  const focus = DECK_GROUPS[deck.focus] ?? "rpt";
+  const hue = GROUP_PAD.find((pad) => pad.id === focus)?.hue ?? 3;
+  const cell = deck.cells[DECK_GROUPS.indexOf(focus)] ?? { x: 0, y: 0 };
+  for (let index = 0; index < 32; index++) {
+    const group = groupAt(index);
+    if (group) {
+      const color = GROUP_PAD.find((pad) => pad.id === group)?.hue ?? hue;
+      scenes[index] = { family: "yellow", color: group === focus ? color : offColor(color), blink: false };
+      continue;
+    }
+    const field = fieldAt(index);
+    if (!field) continue;
+    const amount = 0.05 + 0.95 * (field.x / 5 + field.y / 3) / 2;
+    const playing = heard === focus && field.x === cell.x && field.y === cell.y;
+    scenes[index] = {
+      family: "yellow",
+      color: shadeColor(hue, amount),
+      blink: playing,
+      blinkTo: playing ? LED.white : undefined,
+    };
+  }
   return scenes;
 }
 

@@ -25,33 +25,31 @@ export const DECK_GESTURES = [
   "thrw",
 ] as const;
 
-export type DeckGesture = (typeof DECK_GESTURES)[number];
+export const DECK_GROUPS = ["rpt", "lop", "glc", "scr", "gat", "pch", "stp", "thr"] as const;
 
-/** Three-letter pad and the name the header shows while that pad is held. */
-export const DECK_PAD: readonly { id: DeckGesture; code: string; title: string }[] = [
-  { id: "roll", code: "ROL", title: "BEAT REPEAT" },
-  { id: "stut", code: "STU", title: "STUTTER" },
-  { id: "loop", code: "LOP", title: "LOOP" },
-  { id: "rev", code: "REV", title: "REVERSE" },
-  { id: "jump", code: "JMP", title: "RETRIGGER" },
-  { id: "glch", code: "GLC", title: "GLITCH" },
-  { id: "tran", code: "TRN", title: "TRANSFORM" },
-  { id: "drop", code: "DRP", title: "DROP" },
-  { id: "half", code: "HLF", title: "HALF TIME" },
-  { id: "dbl", code: "DBL", title: "DOUBLE" },
-  { id: "stop", code: "STP", title: "VINYL STOP" },
-  { id: "spin", code: "SPN", title: "SPIN UP" },
-  { id: "back", code: "BCK", title: "BACKSPIN" },
-  { id: "scr", code: "SCR", title: "SCRATCH" },
-  { id: "hlx", code: "HLX", title: "HELIX" },
-  { id: "thrw", code: "THR", title: "DELAY THROW" },
+export type DeckGroup = (typeof DECK_GROUPS)[number];
+
+/** A legacy name, or a group plus its row: `glc0` is shuffle, `glc3` is freeze. */
+export type DeckGesture = (typeof DECK_GESTURES)[number] | `${DeckGroup}${0 | 1 | 2 | 3}`;
+
+/** Left two columns, top to bottom. The other thirty-two minus these are the variation field. */
+export const GROUP_PAD: readonly { id: DeckGroup; index: number; code: string; title: string; hue: number }[] = [
+  { id: "rpt", index: 24, code: "RPT", title: "BEAT REPEAT", hue: 3 },
+  { id: "lop", index: 16, code: "LOP", title: "LOOP", hue: 9 },
+  { id: "glc", index: 8, code: "GLC", title: "GLITCH", hue: 13 },
+  { id: "scr", index: 0, code: "SCR", title: "SCRATCH", hue: 1 },
+  { id: "gat", index: 25, code: "GAT", title: "TRANSFORM", hue: 18 },
+  { id: "pch", index: 17, code: "PCH", title: "PITCH", hue: 21 },
+  { id: "stp", index: 9, code: "STP", title: "BRAKE", hue: 25 },
+  { id: "thr", index: 1, code: "THR", title: "DELAY THROW", hue: 8 },
 ];
 
-/** Top row, then the row under it. Pad index 24 is the first, 16 is the ninth. */
-export const DECK_PAD_INDEX: readonly number[] = [
-  ...Array.from({ length: 8 }, (_, col) => 24 + col),
-  ...Array.from({ length: 8 }, (_, col) => 16 + col),
-];
+export interface DeckCell {
+  /** 0 is the small left column, 5 is the large right column. */
+  x: number;
+  /** 0 is the plain bottom row, 3 is the strong top row. */
+  y: number;
+}
 
 export interface DeckKnobs {
   /** Index into {@link DIV_BEATS}. */
@@ -60,68 +58,224 @@ export interface DeckKnobs {
   len: number;
   /** 0 leaves the master alone, 1 is the whole gesture. */
   depth: number;
-  /** Index into the brake table: 1/4, 1/2, 1, 2 beats. */
+  /** Index into the brake table. */
   brake: number;
-  /** Scratch curve: baby, tear, flare, orbit. */
-  shape: number;
+  /** 0 is a clean curve, 1 skips and flutters. */
+  vary: number;
   /** When the gesture grabs the grid: now, division, beat, bar. */
   quant: number;
-  /** Transformer duty. */
+  /** Gate width. At 1/2 a glitch slot plays whole. */
   duty: number;
-  /** Helix pitch rise. */
+  /** 1/2 is straight. Left of centre reverses, right pitches up. */
   ramp: number;
+  /** Remembered field cell for each {@link DECK_GROUPS} entry. */
+  cells: DeckCell[];
+  /** Group whose cell the knobs are showing. */
+  focus: number;
 }
 
-export const DIV_BEATS = [2, 1, 0.5, 1 / 3, 0.25, 1 / 6, 0.125] as const;
-export const DIV_LABEL = ["1/2", "1/4", "1/8", "1/8T", "1/16", "1/16T", "1/32"] as const;
-export const BRAKE_BEATS = [0.25, 0.5, 1, 2] as const;
-export const BRAKE_LABEL = ["1/4", "1/2", "1/1", "2/1"] as const;
-export const SHAPE_LABEL = ["BAB", "TEA", "FLA", "ORB"] as const;
+/** Sixteenth, eighth, quarter, half, whole, two bars. Left of the field is the short one. */
+export const DIV_BEATS = [0.125, 0.25, 0.5, 1, 2, 4] as const;
+export const DIV_LABEL = ["1/32", "1/16", "1/8", "1/4", "1/2", "1/1"] as const;
+/** Shortest brake first. Index 4 is one beat, the old factory stop. */
+export const BRAKE_BEATS = [0.0625, 0.125, 0.25, 0.5, 1, 2] as const;
+export const BRAKE_LABEL = ["1/16", "1/8", "1/4", "1/2", "1/1", "2/1"] as const;
+/** Share of the scratch window. Index 4 is the old quarter-window throw. */
+export const THROW_FRAC = [0.05, 0.08, 0.12, 0.18, 0.25, 1] as const;
+export const PITCH_RATE = [0.5, 0.75, 1, 1.5, 2, 4] as const;
+const LEN_STEPS = [1, 2, 4, 8, 12, 16] as const;
 export const QUANT_LABEL = ["NOW", "DIV", "BEAT", "BAR"] as const;
+
+const FACTORY_CELLS: readonly DeckCell[] = [
+  { x: 2, y: 0 },
+  { x: 3, y: 0 },
+  { x: 2, y: 0 },
+  { x: 4, y: 0 },
+  { x: 2, y: 0 },
+  { x: 2, y: 0 },
+  { x: 4, y: 0 },
+  { x: 3, y: 0 },
+];
 
 /** 8 ms. Release slips back to the live head across this. */
 export const DECK_FADE = Math.round(0.008 * SAMPLE_RATE);
 
-export type DeckKnobId = keyof DeckKnobs;
+export type DeckKnobId = "div" | "len" | "depth" | "brake" | "vary" | "quant" | "duty" | "ramp";
 
 /**
  * Knobs that change this gesture. Depth is the wet mix on every one.
  * Stop and spin ignore the grid, so quant is absent there. A division
  * quant also needs the division knob, even when the gesture itself does not.
  */
-const GESTURE_KNOBS: Record<DeckGesture, readonly DeckKnobId[]> = {
-  roll: ["div", "depth", "quant"],
-  stut: ["div", "depth", "quant"],
-  loop: ["len", "depth", "quant"],
-  rev: ["len", "depth", "quant"],
-  jump: ["div", "depth", "quant"],
-  glch: ["depth", "quant"],
-  tran: ["div", "duty", "depth", "quant"],
-  drop: ["depth", "quant"],
-  half: ["depth", "quant"],
-  dbl: ["div", "depth", "quant"],
-  stop: ["brake", "depth"],
-  spin: ["brake", "depth"],
-  back: ["depth", "quant"],
-  scr: ["len", "shape", "depth", "quant"],
-  hlx: ["div", "ramp", "depth", "quant"],
-  thrw: ["depth", "quant"],
+const GROUP_KNOBS: Record<DeckGroup, readonly DeckKnobId[]> = {
+  rpt: ["div", "depth", "quant"],
+  lop: ["len", "depth", "quant"],
+  glc: ["div", "len", "vary", "depth", "quant", "duty", "ramp"],
+  scr: ["len", "brake", "vary", "depth", "quant", "duty", "ramp"],
+  gat: ["div", "duty", "depth", "quant"],
+  pch: ["ramp", "depth", "quant"],
+  stp: ["brake", "depth"],
+  thr: ["depth", "quant"],
 };
 
-/** Null means every knob: no gesture is held, so the strip is the whole deck. */
-export function deckKnobsFor(gesture: DeckGesture | null, knobs: DeckKnobs): readonly DeckKnobId[] | null {
-  if (!gesture) return null;
-  const ids = [...GESTURE_KNOBS[gesture]];
+/** Null means every knob: nothing is heard, so the strip is the whole deck. */
+export function deckKnobsFor(group: DeckGroup | null, knobs: DeckKnobs): readonly DeckKnobId[] | null {
+  if (!group) return null;
+  const ids = [...GROUP_KNOBS[group]];
   if (ids.includes("quant") && pick(knobs.quant, 4) === 1 && !ids.includes("div")) ids.push("div");
   return ids;
 }
 
 export function defaultDeck(): DeckKnobs {
-  return { div: 2, len: 0.5, depth: 1, brake: 2, shape: 0, quant: 2, duty: 0.5, ramp: 0.5 };
+  return {
+    div: 2,
+    len: 0.5,
+    depth: 1,
+    brake: 4,
+    vary: 0,
+    quant: 2,
+    duty: 0.5,
+    ramp: 0.5,
+    cells: FACTORY_CELLS.map((cell) => ({ ...cell })),
+    focus: 0,
+  };
+}
+
+export function isDeckGroup(value: string): value is DeckGroup {
+  return (DECK_GROUPS as readonly string[]).includes(value);
 }
 
 export function isDeckGesture(value: string): value is DeckGesture {
-  return (DECK_GESTURES as readonly string[]).includes(value);
+  if ((DECK_GESTURES as readonly string[]).includes(value)) return true;
+  return parseGroupGesture(value) !== null;
+}
+
+export function groupAt(index: number): DeckGroup | null {
+  return GROUP_PAD.find((pad) => pad.index === index)?.id ?? null;
+}
+
+/** Variation field. Column 2 is X 0, the bottom row is Y 0. */
+export function fieldAt(index: number): DeckCell | null {
+  const col = index % 8;
+  if (col < 2) return null;
+  return { x: col - 2, y: Math.floor(index / 8) };
+}
+
+export function groupIndex(group: DeckGroup): number {
+  return DECK_GROUPS.indexOf(group);
+}
+
+function cellOf(deck: DeckKnobs, group: DeckGroup): DeckCell {
+  const cell = deck.cells[groupIndex(group)] ?? FACTORY_CELLS[groupIndex(group)];
+  return { x: pick(cell?.x ?? 0, 6), y: pick(cell?.y ?? 0, 4) };
+}
+
+function copyCells(cells: DeckCell[]): DeckCell[] {
+  return cells.map((cell) => ({ x: cell.x, y: cell.y }));
+}
+
+/** Sixteenth count the loop column stands for, as the LEN knob's 0..1. */
+export function lenUnit(column: number, barBeats: number): number {
+  const sixteenths = Math.max(1, Math.round(barBeats) * 4);
+  const n = Math.min(sixteenths, LEN_STEPS[pick(column, LEN_STEPS.length)]);
+  if (n >= sixteenths) return 1;
+  return (n - 1) / sixteenths;
+}
+
+export function lenColumn(len: number, barBeats: number): number {
+  const sixteenths = Math.max(1, Math.round(barBeats) * 4);
+  const unit = Math.max(0, Math.min(1, len));
+  const n = 1 + Math.min(sixteenths - 1, Math.floor(unit * sixteenths));
+  let best = 0;
+  let dist = Number.POSITIVE_INFINITY;
+  LEN_STEPS.forEach((step, index) => {
+    const delta = Math.abs(Math.min(sixteenths, step) - n);
+    if (delta < dist) {
+      dist = delta;
+      best = index;
+    }
+  });
+  return best;
+}
+
+function ownsDiv(group: DeckGroup): boolean {
+  return group === "rpt" || group === "glc" || group === "gat";
+}
+
+function ownsBrake(group: DeckGroup): boolean {
+  return group === "stp" || group === "scr";
+}
+
+/** Knobs the voice hears for this group. Pitch rate and throw length ride in `div`. */
+export function assembleDeck(deck: DeckKnobs, group: DeckGroup, barBeats: number): DeckKnobs {
+  const cell = cellOf(deck, group);
+  const next = { ...deck, cells: deck.cells };
+  if (ownsDiv(group) || group === "pch" || group === "thr") next.div = cell.x;
+  if (group === "lop") next.len = lenUnit(cell.x, barBeats);
+  if (ownsBrake(group)) next.brake = cell.x;
+  return next;
+}
+
+export function behaviorOf(deck: DeckKnobs, group: DeckGroup): DeckGesture {
+  return `${group}${cellOf(deck, group).y}` as DeckGesture;
+}
+
+/** Load the group's column into the knob that column shares. */
+export function recallGroup(deck: DeckKnobs, group: DeckGroup, barBeats: number): DeckKnobs {
+  const cells = copyCells(deck.cells.length === 8 ? deck.cells : defaultDeck().cells);
+  const next = assembleDeck({ ...deck, cells, focus: groupIndex(group) }, group, barBeats);
+  next.cells = cells;
+  next.focus = groupIndex(group);
+  return next;
+}
+
+/** Remember a field press on the focused group and show that column on its knob. */
+export function setGroupCell(deck: DeckKnobs, group: DeckGroup, x: number, y: number, barBeats: number): DeckKnobs {
+  const cells = copyCells(deck.cells.length === 8 ? deck.cells : defaultDeck().cells);
+  cells[groupIndex(group)] = { x: pick(x, 6), y: pick(y, 4) };
+  return recallGroup({ ...deck, cells }, group, barBeats);
+}
+
+/** After a randomize, the focused group keeps the column its knob just landed on. */
+export function stickDeckFocus(deck: DeckKnobs, barBeats: number): DeckKnobs {
+  const group = DECK_GROUPS[pick(deck.focus, DECK_GROUPS.length)] ?? "rpt";
+  let next = deck;
+  if (ownsDiv(group)) next = writeDeckKnob(next, "div", next.div, barBeats);
+  if (ownsBrake(group)) next = writeDeckKnob(next, "brake", next.brake, barBeats);
+  if (group === "lop") next = writeDeckKnob(next, "len", next.len, barBeats);
+  return next;
+}
+
+/** A knob turn writes the shared value, and the focused group's column when it owns that knob. */
+export function writeDeckKnob(deck: DeckKnobs, id: DeckKnobId, value: number, barBeats: number): DeckKnobs {
+  const cells = copyCells(deck.cells.length === 8 ? deck.cells : defaultDeck().cells);
+  const next: DeckKnobs = { ...deck, cells, [id]: value };
+  const group = DECK_GROUPS[pick(next.focus, DECK_GROUPS.length)] ?? "rpt";
+  const cell = { ...cells[groupIndex(group)] };
+  if (id === "div" && ownsDiv(group)) cell.x = pick(value, 6);
+  if (id === "brake" && ownsBrake(group)) cell.x = pick(value, 6);
+  if (id === "len" && group === "lop") {
+    cell.x = lenColumn(value, barBeats);
+    next.len = lenUnit(cell.x, barBeats);
+  }
+  cells[groupIndex(group)] = cell;
+  return next;
+}
+
+/** Old files stored a 7-step division and a 4-step brake. Map them onto the field. */
+export function migrateDeckIndex(kind: "div" | "brake", index: number): number {
+  if (kind === "brake") return [2, 3, 4, 5][pick(index, 4)] ?? 4;
+  const beats = [2, 1, 0.5, 1 / 3, 0.25, 1 / 6, 0.125][pick(index, 7)] ?? 0.5;
+  let best = 0;
+  let dist = Number.POSITIVE_INFINITY;
+  DIV_BEATS.forEach((beat, at) => {
+    const delta = Math.abs(beat - beats);
+    if (delta < dist) {
+      dist = delta;
+      best = at;
+    }
+  });
+  return best;
 }
 
 function pick(value: number, count: number): number {
@@ -281,7 +435,246 @@ function scratch(origin: number, now: number, len: number, depth: number, shape:
   return { pos: origin + offset, live: 0, gain: 1, throw: 0, rate };
 }
 
+function parseGroupGesture(value: string): { group: DeckGroup; y: number } | null {
+  if (value.length !== 4) return null;
+  const group = value.slice(0, 3);
+  const y = Number(value[3]);
+  if (!isDeckGroup(group) || !Number.isInteger(y) || y < 0 || y > 3) return null;
+  return { group, y };
+}
+
+function clamp01(value: number): number {
+  return Math.max(0, Math.min(1, value));
+}
+
+function pingPong(start: number, now: number, origin: number, slice: number): DeckRead {
+  const period = Math.max(1, slice) * 2;
+  const at = mod(now - origin, period);
+  if (at <= slice) return { pos: start + at, live: 0, gain: 1, throw: 0, rate: 1 };
+  return { pos: start + (period - at), live: 0, gain: 1, throw: 0, rate: -1 };
+}
+
+function reverseSlice(start: number, now: number, origin: number, slice: number): DeckRead {
+  const into = mod(now - origin, Math.max(1, slice));
+  return { pos: start + slice - into, live: 0, gain: 1, throw: 0, rate: -1 };
+}
+
+function slotOpen(duty: number): number {
+  const unit = clamp01(duty);
+  return unit >= 0.5 ? 1 : unit / 0.5;
+}
+
+function skipSlot(seed: number, windowIndex: number, slot: number, vary: number): boolean {
+  if (!(vary > 0)) return false;
+  let state = (Math.imul(seed + 1, 997) + Math.imul(windowIndex + 1, 131) + Math.imul(slot + 1, 17)) >>> 0;
+  state = (Math.imul(state, 1664525) + 1013904223) >>> 0;
+  return (state % 1000) / 1000 < vary;
+}
+
+function readGroup(moment: DeckMoment, group: DeckGroup, y: number): DeckRead {
+  const { knobs, tempo, barBeats, now, down, ahead, seed } = moment;
+  const bar = barSamples(tempo, barBeats);
+  const div = divSamples(knobs, tempo);
+  const len = lenSamples(knobs, tempo, barBeats);
+  const beat = Math.max(1, Math.round(samplesPerBeat(tempo)));
+  const origin = group === "stp" ? down : snapUp(down, quantSamples(knobs, tempo, barBeats));
+  if (now < origin) return identity(now);
+  const held = now - origin;
+
+  if (group === "rpt") {
+    const start = origin - mod(origin, div) - div;
+    if (y === 1) {
+      const barStart = origin - mod(origin, bar);
+      return { pos: barStart + mod(held, div), live: 0, gain: 1, throw: 0, rate: 1 };
+    }
+    if (y === 2) return reverseSlice(start, now, origin, div);
+    if (y === 3) return pingPong(start, now, origin, div);
+    return { pos: loopPos(start, now, origin, div), live: 0, gain: 1, throw: 0, rate: 1 };
+  }
+
+  if (group === "lop") {
+    if (y === 1) {
+      const future = ahead >= len;
+      if (now >= origin + len) return identity(now);
+      const windowEnd = future ? origin + len : origin;
+      return { pos: windowEnd - held, live: 0, gain: 1, throw: 0, rate: -1 };
+    }
+    const start = origin - len;
+    if (y === 2) return pingPong(start, now, origin, len);
+    if (y === 3) {
+      const step = Math.max(1, Math.round(beat / 4));
+      const moved = start + Math.floor(held / Math.max(1, len)) * step;
+      return { pos: moved + mod(held, len), live: 0, gain: 1, throw: 0, rate: 1 };
+    }
+    return { pos: loopPos(start, now, origin, len), live: 0, gain: 1, throw: 0, rate: 1 };
+  }
+
+  if (group === "glc") return readGlitch(moment, origin, y);
+
+  if (group === "scr") return readScratch(origin, now, len, knobs, y);
+
+  if (group === "gat") {
+    if (y === 3) return { pos: now, live: 1, gain: 0, throw: 0, rate: 1 };
+    const base = [0.5, 0.28, 0.1][y] ?? 0.5;
+    const duty = Math.max(0.02, Math.min(0.95, base + (clamp01(knobs.duty) - 0.5) * 0.3));
+    const on = mod(held, div) < div * duty;
+    return { pos: now, live: 1, gain: on ? 1 : 0, throw: 0, rate: 1 };
+  }
+
+  if (group === "pch") return readPitch(moment, origin, y);
+
+  if (group === "stp") {
+    if (y === 1) {
+      const target = nextDownbeat(origin, brakeSamples(knobs, tempo), bar);
+      if (now >= target) return identity(now);
+      return spinAt(origin, now, target);
+    }
+    if (y === 2) {
+      const span = brakeSamples(knobs, tempo);
+      const u = held / span;
+      if (u >= 1) return identity(now);
+      return {
+        pos: origin + span * (2 / Math.PI) * (Math.cos(Math.PI * u) - 1),
+        live: 0,
+        gain: 1,
+        throw: 0,
+        rate: -2 * Math.sin(Math.PI * u),
+      };
+    }
+    if (y === 3) return readBounce(origin, now, brakeSamples(knobs, tempo));
+    const span = brakeSamples(knobs, tempo);
+    const rate = brakeRate(held, span);
+    if (rate < 0.02) return stopped(brakePos(span, span, origin));
+    return { pos: brakePos(held, span, origin), live: 0, gain: 1, throw: 0, rate };
+  }
+
+  const open = div;
+  const levels = [0.35, 1, 1, 1.5];
+  let amt = 0;
+  if (held < open) amt = levels[y] ?? 1;
+  else if (y === 2) {
+    const u = (held - open) / bar;
+    amt = u >= 1 ? 0 : Math.exp(-3 * u);
+  } else if (y === 3) {
+    const u = (held - open) / beat;
+    amt = u >= 1 ? 0 : 1.5 * (1 - u);
+  }
+  return { pos: now, live: 1, gain: 1, throw: amt, rate: 1 };
+}
+
+function readGlitch(moment: DeckMoment, origin: number, y: number): DeckRead {
+  const { knobs, tempo, barBeats, now, ahead, seed } = moment;
+  const window = lenSamples(knobs, tempo, barBeats);
+  const slice = Math.max(1, divSamples(knobs, tempo));
+  const count = Math.max(1, Math.min(48, Math.round(window / slice)));
+  const future = ahead >= window;
+  const start = future ? origin : origin - window;
+  const held = now - origin;
+  const windowIndex = Math.floor(held / Math.max(1, window));
+  const at = Math.floor(held / slice);
+  let src = mod(at, count);
+  if (y === 0) src = glitchOrder(seed, windowIndex, count)[mod(at, count)] ?? 0;
+  else if (y === 2) src = pongIndex(at, count);
+  else if (y === 3) src = count - 1;
+  const into = mod(held, slice);
+  const reverse = knobs.ramp < 0.5;
+  const pos = start + src * slice + (reverse ? slice - into : into);
+  const open = slotOpen(knobs.duty);
+  const gain = skipSlot(seed, windowIndex, src, clamp01(knobs.vary)) || into >= slice * open ? 0 : 1;
+  return { pos, live: 0, gain, throw: 0, rate: reverse ? -1 : 1 };
+}
+
+function pongIndex(at: number, count: number): number {
+  if (count <= 1) return 0;
+  const period = count * 2 - 2;
+  const i = mod(at, period);
+  return i < count ? i : period - i;
+}
+
+function readScratch(origin: number, now: number, len: number, knobs: DeckKnobs, shape: number): DeckRead {
+  const span = Math.max(1, len);
+  const phase = mod(now - origin, span) / span;
+  const reach = Math.max(1, THROW_FRAC[pick(knobs.brake, THROW_FRAC.length)] * span);
+  const ramp = clamp01(knobs.ramp);
+  const speed = 0.5 + ramp;
+  const dir = ramp < 0.5 ? -1 : 1;
+  const flutter = Math.sin(2 * Math.PI * phase * 7) * clamp01(knobs.vary);
+  const which = pick(shape, 4);
+  if (which === 2) {
+    const width = 0.6 * clamp01(knobs.duty);
+    const gain = Math.abs(phase - 0.5) < width / 2 ? 0 : 1;
+    return {
+      pos: origin + (phase + flutter * 0.25) * reach * dir,
+      live: 0,
+      gain,
+      throw: 0,
+      rate: (reach / span) * speed * dir,
+    };
+  }
+  const turns = which === 1 ? 2 : 1;
+  const wobble = Math.sin(2 * Math.PI * turns * phase);
+  const bias = which === 3 ? (phase - 0.5) * 0.35 : 0;
+  const offset = (wobble + bias + flutter * 0.35) * reach * dir;
+  const rate = ((2 * Math.PI * turns * Math.cos(2 * Math.PI * turns * phase)) / span) * reach * speed * dir;
+  return { pos: origin + offset, live: 0, gain: 1, throw: 0, rate };
+}
+
+function readPitch(moment: DeckMoment, origin: number, y: number): DeckRead {
+  const { knobs, tempo, barBeats, now, ahead } = moment;
+  const bar = barSamples(tempo, barBeats);
+  const beat = Math.max(1, Math.round(samplesPerBeat(tempo)));
+  const base = PITCH_RATE[pick(knobs.div, PITCH_RATE.length)] * (1 + (clamp01(knobs.ramp) - 0.5) * 0.5);
+  const held = now - origin;
+  const rate = pitchRate(base, y, held, bar, beat);
+  let pos = origin + pitchConsumed(base, y, held, bar, beat);
+  if (pos > now + ahead && rate > 1) {
+    const start = origin - beat;
+    pos = start + mod(Math.round(pos - origin), beat);
+  }
+  return { pos, live: 0, gain: 1, throw: 0, rate };
+}
+
+function pitchRate(base: number, y: number, held: number, bar: number, beat: number): number {
+  const u = Math.max(0, Math.min(1, held / bar));
+  if (y === 1) return base * (1 + u);
+  if (y === 2) return base * (1 - 0.5 * u);
+  if (y === 3) return base * (1 + 0.12 * Math.sin((2 * Math.PI * held) / beat));
+  return base;
+}
+
+function pitchConsumed(base: number, y: number, held: number, bar: number, beat: number): number {
+  if (y === 1) {
+    if (held <= bar) return base * (held + (held * held) / (2 * bar));
+    return base * (bar * 1.5) + base * 2 * (held - bar);
+  }
+  if (y === 2) {
+    if (held <= bar) return base * (held - (held * held) / (4 * bar));
+    return base * (bar * 0.75) + base * 0.5 * (held - bar);
+  }
+  if (y === 3) {
+    const swing = (0.12 * beat) / (2 * Math.PI);
+    return base * (held - swing * (Math.cos((2 * Math.PI * held) / beat) - 1));
+  }
+  return held * base;
+}
+
+function readBounce(origin: number, now: number, span: number): DeckRead {
+  const elapsed = now - origin;
+  const parked = brakePos(span, span, origin);
+  if (elapsed <= span) {
+    const rate = brakeRate(elapsed, span);
+    if (rate < 0.02) return { pos: parked, live: 0, gain: 1, throw: 0, rate };
+    return { pos: brakePos(elapsed, span, origin), live: 0, gain: 1, throw: 0, rate };
+  }
+  const hop = span * 0.35;
+  if (elapsed >= span + hop) return stopped(parked);
+  const u = (elapsed - span) / hop;
+  return { pos: parked - Math.sin(Math.PI * u) * span * 0.12, live: 0, gain: 1, throw: 0, rate: -Math.cos(Math.PI * u) };
+}
+
 function gestureRead(moment: DeckMoment, gesture: DeckGesture): DeckRead {
+  const grouped = parseGroupGesture(gesture);
+  if (grouped) return readGroup(moment, grouped.group, grouped.y);
   const { knobs, tempo, barBeats, now, down, ahead, seed } = moment;
   const bar = barSamples(tempo, barBeats);
   const div = divSamples(knobs, tempo);
@@ -377,7 +770,7 @@ function gestureRead(moment: DeckMoment, gesture: DeckGesture): DeckRead {
     return { pos, live: 0, gain: 1, throw: 0, rate: -2 * Math.sin(Math.PI * u) };
   }
 
-  if (gesture === "scr") return scratch(origin, now, len, knobs.depth, knobs.shape);
+  if (gesture === "scr") return scratch(origin, now, len, knobs.depth, 0);
 
   return { pos: now, live: 1, gain: 1, throw: 1, rate: 1 };
 }
@@ -425,6 +818,8 @@ export function deckPicture(moment: DeckMoment): DeckPicture {
 
 export interface DeckCommand {
   gesture: DeckGesture | null;
+  /** Changes when a pad retriggers the same cell, so the voice takes a new entry. */
+  press?: number;
   knobs: DeckKnobs;
   warm: boolean;
   seed: number;
@@ -434,10 +829,12 @@ export interface DeckCommand {
 /** One short record the voice can apply between blocks. `-` is no gesture. */
 export function formatDeckCommand(command: DeckCommand): string {
   const knobs = command.knobs;
-  const nums = [knobs.div, knobs.len, knobs.depth, knobs.brake, knobs.shape, knobs.quant, knobs.duty, knobs.ramp]
-    .map((n, index) => (index === 1 || index === 2 || index === 6 || index === 7 ? n.toFixed(4) : String(Math.round(n))))
+  const nums = [knobs.div, knobs.len, knobs.depth, knobs.brake, knobs.vary, knobs.quant, knobs.duty, knobs.ramp]
+    .map((n, index) => (index === 1 || index === 2 || index === 4 || index === 6 || index === 7 ? n.toFixed(4) : String(Math.round(n))))
     .join(",");
-  return `D|${command.gesture ?? "-"}|${nums}|${command.warm ? 1 : 0}|${Math.round(command.seed)}|${Math.max(1, Math.round(command.barBeats))}`;
+  const name = command.gesture ?? "-";
+  const token = command.gesture && command.press ? `${name}#${Math.round(command.press)}` : name;
+  return `D|${token}|${nums}|${command.warm ? 1 : 0}|${Math.round(command.seed)}|${Math.max(1, Math.round(command.barBeats))}`;
 }
 
 export function parseDeckCommand(text: string): DeckCommand | null {
@@ -446,19 +843,25 @@ export function parseDeckCommand(text: string): DeckCommand | null {
   if (parts.length < 6) return null;
   const nums = parts[2].split(",").map((item) => Number(item));
   if (nums.length !== 8 || nums.some((n) => !Number.isFinite(n))) return null;
-  const gesture = parts[1] === "-" ? null : isDeckGesture(parts[1]) ? parts[1] : null;
-  if (parts[1] !== "-" && gesture === null) return null;
+  const hash = parts[1].indexOf("#");
+  const token = hash >= 0 ? parts[1].slice(0, hash) : parts[1];
+  const press = hash >= 0 ? Math.round(Number(parts[1].slice(hash + 1))) || 0 : 0;
+  const gesture = token === "-" ? null : isDeckGesture(token) ? token : null;
+  if (token !== "-" && gesture === null) return null;
   return {
     gesture,
+    press,
     knobs: {
       div: nums[0],
       len: nums[1],
       depth: nums[2],
       brake: nums[3],
-      shape: nums[4],
+      vary: nums[4],
       quant: nums[5],
       duty: nums[6],
       ramp: nums[7],
+      cells: defaultDeck().cells,
+      focus: 0,
     },
     warm: parts[3] === "1",
     seed: Number(parts[4]) || 0,

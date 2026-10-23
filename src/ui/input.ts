@@ -23,7 +23,7 @@ import {
   toggleLock,
   toggleMute,
 } from "../core/performance.ts";
-import { DECK_PAD, DECK_PAD_INDEX } from "../core/deck.ts";
+import { DECK_GROUPS, fieldAt, groupAt, recallGroup, setGroupCell, type DeckGroup } from "../core/deck.ts";
 import { CAPTURE_CC, contextAtStep, DOWN_CC, isLane, JOG_CLICK_CC, LANES, LOOP_CC, MENU_CC, MUTE_CC, PLAY_CC, RANDOMIZE_DEPTHS, RANDOMIZE_SCOPES, RECORD_CC, SAMPLE_CC, TRANSITIONS, UP_CC, WANDERS, type ContextId, type PatternId, type Project } from "../core/types.ts";
 import { resetControl, writeControl } from "./controls.ts";
 import { bindingFor, bindingPaths, deckPage, mixerPage, pageCount, pageGroup, pagesFor, scopeIncludesPage } from "../core/pages.ts";
@@ -143,35 +143,62 @@ function onPad(session: Session, index: number, press: boolean): Session {
     if (page >= pageCount(held)) return session;
     return { ...session, ui: { ...rememberPage(session.ui, held, page), heldContext: held, heldPage: page } };
   }
-  if (kind === "deck" && (top || second)) return pressDeckPad(session, index);
+  if (kind === "deck") return pressDeckPad(session, index);
   return onScenePad(session, index);
 }
 
 function onPadRelease(session: Session, index: number): Session {
-  if (peekKind(session.ui) !== "deck" || session.ui.deckGesture === null) return session;
-  const which = DECK_PAD_INDEX.indexOf(index);
-  if (which < 0 || DECK_PAD[which]?.id !== session.ui.deckGesture) return session;
-  return { ...session, ui: { ...session.ui, deckGesture: null, deckGestureTick: null } };
+  if (peekKind(session.ui) !== "deck") return session;
+  return releaseDeckPad(session, index);
+}
+
+function releaseDeckPad(session: Session, index: number): Session {
+  if ((session.ui.deckPads & (1 << index)) === 0) return session;
+  const deckPads = session.ui.deckPads & ~(1 << index);
+  if (deckPads !== 0 || session.ui.deckLatchedGesture) {
+    return { ...session, ui: { ...session.ui, deckPads } };
+  }
+  return { ...session, ui: { ...session.ui, deckPads: 0, deckGesture: null, deckGestureTick: null } };
 }
 
 function pressDeckPad(session: Session, index: number): Session {
-  const which = DECK_PAD_INDEX.indexOf(index);
-  const pad = which < 0 ? null : DECK_PAD[which];
-  if (!pad) return session;
+  const group = groupAt(index);
+  const field = fieldAt(index);
+  if (!group && !field) return session;
+  const which: DeckGroup = group ?? DECK_GROUPS[session.project.deck.focus] ?? "rpt";
+  const bar = session.project.global.bar;
+  const deck = field
+    ? setGroupCell(session.project.deck, which, field.x, field.y, bar)
+    : recallGroup(session.project.deck, which, bar);
+  const deckPads = session.ui.deckPads | (1 << index);
+  const deckPress = session.ui.deckPress + 1;
   if (session.ui.shiftHeld) {
-    const latched = session.ui.deckLatchedGesture === pad.id ? null : pad.id;
+    const latched = session.ui.deckLatchedGesture === which ? null : which;
     return {
       ...session,
+      project: { ...session.project, deck },
       ui: {
         ...session.ui,
         deckLatchedGesture: latched,
         deckLatchTick: latched ? session.tick : null,
         deckGesture: null,
         deckGestureTick: null,
+        deckPress,
+        deckPads,
       },
     };
   }
-  return { ...session, ui: { ...session.ui, deckGesture: pad.id, deckGestureTick: session.tick } };
+  return {
+    ...session,
+    project: { ...session.project, deck },
+    ui: {
+      ...session.ui,
+      deckGesture: which,
+      deckGestureTick: session.tick,
+      deckPress,
+      deckPads,
+    },
+  };
 }
 
 /** Patterns of the journal or the active set. */

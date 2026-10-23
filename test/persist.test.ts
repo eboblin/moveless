@@ -140,6 +140,20 @@ describe("project persist", () => {
     assert.deepEqual(recorded.deck, project.deck);
   });
 
+  it("lifts an old brake and scratch curve onto the new field", () => {
+    const stored = JSON.parse(serializeStored(defaultProject(), { context: "aux", page: 0, mode: "journal", playing: true })) as {
+      project: { deck: Record<string, unknown> };
+    };
+    stored.project.deck = { div: 2, len: 0.5, depth: 1, brake: 2, shape: 1, quant: 2, duty: 0.5, ramp: 0.5 };
+    const parsed = parseStored(JSON.stringify(stored));
+    assert.ok(parsed);
+    assert.equal(parsed.project.deck.brake, 4);
+    assert.equal(parsed.project.deck.div, 2);
+    assert.equal(parsed.project.deck.vary, 0);
+    assert.equal(parsed.project.deck.cells[3]?.y, 1);
+    assert.equal(parsed.project.deck.cells[3]?.x, 4);
+  });
+
   it("clears morph and wander origin on parse", () => {
     const project = defaultProject();
     project.morph = {

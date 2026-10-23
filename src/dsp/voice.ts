@@ -480,7 +480,7 @@ export function applyDeckCommand(engine: Engine, command: DeckCommand): void {
   engine.deck.warm = command.warm;
   engine.deck.seed = command.seed;
   engine.deck.barBeats = command.barBeats;
-  commandDeck(engine.deck, command.gesture, engine.clock);
+  commandDeck(engine.deck, command.gesture, engine.clock, command.press ?? 0);
 }
 
 export function formatDeck(command: DeckCommand): string {

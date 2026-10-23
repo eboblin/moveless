@@ -10,7 +10,12 @@ import {
   divSamples,
   formatDeckCommand,
   lenSamples,
+  lenUnit,
   parseDeckCommand,
+  recallGroup,
+  setGroupCell,
+  assembleDeck,
+  writeDeckKnob,
   type DeckMoment,
 } from "../src/core/deck.ts";
 import { commandDeck, createDeckRuntime, hearDeck } from "../src/dsp/deck.ts";
@@ -116,13 +121,59 @@ describe("deck curves", () => {
 
   it("names the knobs a gesture can change", () => {
     const knobs = defaultDeck();
-    assert.deepEqual(deckKnobsFor("roll", knobs), ["div", "depth", "quant"]);
-    assert.deepEqual(deckKnobsFor("scr", knobs), ["len", "shape", "depth", "quant"]);
-    assert.deepEqual(deckKnobsFor("stop", knobs), ["brake", "depth"]);
-    assert.deepEqual(deckKnobsFor("tran", knobs), ["div", "duty", "depth", "quant"]);
-    assert.deepEqual(deckKnobsFor("hlx", knobs), ["div", "ramp", "depth", "quant"]);
+    assert.deepEqual(deckKnobsFor("rpt", knobs), ["div", "depth", "quant"]);
+    assert.deepEqual(deckKnobsFor("scr", knobs), ["len", "brake", "vary", "depth", "quant", "duty", "ramp"]);
+    assert.deepEqual(deckKnobsFor("stp", knobs), ["brake", "depth"]);
+    assert.deepEqual(deckKnobsFor("gat", knobs), ["div", "duty", "depth", "quant"]);
+    assert.deepEqual(deckKnobsFor("pch", knobs), ["ramp", "depth", "quant"]);
     assert.equal(deckKnobsFor(null, knobs), null);
-    assert.deepEqual(deckKnobsFor("drop", { ...knobs, quant: 1 }), ["depth", "quant", "div"]);
+    assert.deepEqual(deckKnobsFor("thr", { ...knobs, quant: 1 }), ["depth", "quant", "div"]);
+  });
+
+  it("walks glitch slices in order and cuts a slot below half duty", () => {
+    const knobs = assembleDeck({ ...defaultDeck(), len: 1, duty: 0.5, quant: 0 }, "glc", 4);
+    const div = divSamples(knobs, TEMPO);
+    const down = div * 8;
+    const a = deckRead(moment({ gesture: "glc1", down, now: down + 10, knobs }));
+    const b = deckRead(moment({ gesture: "glc1", down, now: down + div + 10, knobs }));
+    assert.ok(Math.abs(b.pos - a.pos - div) < 2, `step ${b.pos - a.pos} div ${div}`);
+    const lateAt = down + Math.floor(div * 0.75);
+    const open = deckRead(moment({ gesture: "glc1", down, now: lateAt, knobs }));
+    const gated = deckRead(moment({ gesture: "glc1", down, now: lateAt, knobs: { ...knobs, duty: 0.25 } }));
+    assert.equal(open.gain, 1);
+    assert.equal(gated.gain, 0);
+    assert.equal(deckRead(moment({ gesture: "glc0", down, now: down + 10, knobs })).gain, 1);
+    const frozenA = deckRead(moment({ gesture: "glc3", down, now: down + 10, knobs }));
+    const frozenB = deckRead(moment({ gesture: "glc3", down, now: down + div + 10, knobs }));
+    assert.ok(Math.abs(frozenB.pos - frozenA.pos) < 2);
+  });
+
+  it("throws a quarter of the scratch window on the factory column", () => {
+    const knobs = assembleDeck({ ...defaultDeck(), quant: 0, ramp: 0.5, vary: 0 }, "scr", 4);
+    const len = lenSamples(knobs, TEMPO, 4);
+    const down = len * 2;
+    const at = down + Math.floor(len / 4);
+    const baby = deckRead(moment({ gesture: "scr0", down, now: at, knobs }));
+    assert.ok(Math.abs(baby.pos - (down + 0.25 * len)) < len * 0.08, `pos ${baby.pos}`);
+    const shorter = assembleDeck(setGroupCell({ ...defaultDeck(), quant: 0, ramp: 0.5, vary: 0 }, "scr", 0, 0, 4), "scr", 4);
+    const small = deckRead(moment({ gesture: "scr0", down, now: at, knobs: shorter }));
+    assert.ok(Math.abs(small.pos - down) < Math.abs(baby.pos - down));
+    const back = deckRead(moment({ gesture: "scr0", down, now: at, knobs: { ...knobs, ramp: 0 } }));
+    assert.ok(back.pos < down);
+  });
+
+  it("remembers a division column on each group", () => {
+    let deck = setGroupCell(defaultDeck(), "glc", 1, 0, 4);
+    deck = recallGroup(deck, "rpt", 4);
+    deck = writeDeckKnob(deck, "div", 4, 4);
+    assert.equal(deck.cells[0]?.x, 4);
+    assert.equal(deck.cells[2]?.x, 1);
+    const glitch = recallGroup(deck, "glc", 4);
+    assert.equal(glitch.div, 1);
+    const loop = recallGroup(glitch, "lop", 4);
+    assert.equal(loop.div, 1);
+    assert.ok(Math.abs(loop.len - lenUnit(3, 4)) < 1e-6);
+    assert.equal(recallGroup(loop, "rpt", 4).div, 4);
   });
 
   it("round-trips the voice record", () => {

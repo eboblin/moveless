@@ -1,5 +1,5 @@
 import { clone } from "./clone.ts";
-import { defaultDeck } from "./deck.ts";
+import { defaultDeck, stickDeckFocus } from "./deck.ts";
 import { defaultBus, defaultGlobal, defaultProgression, defaultProject } from "./defaults.ts";
 import { nodeAt, setPath } from "./fields.ts";
 import { hash01 } from "./hash.ts";
@@ -285,11 +285,11 @@ export function randomizeSurface(project: Project, kind: "mix" | "perf" | "progr
     return { ...project, global: globalFromRecord(numbers), randomizeNonce: nonce };
   }
   if (kind === "deck") {
-    const deck = { ...defaultDeck(), ...project.deck };
+    const deck = { ...defaultDeck(), ...project.deck, cells: project.deck.cells.map((cell) => ({ ...cell })) };
     const homes = { deck: defaultDeck() };
     if (intensity === "clear") restoreFactory({ deck }, homes, eligible, "all");
     else applySplitBudget({ deck }, homes, eligible, roll, intensity);
-    return { ...project, deck, randomizeNonce: nonce };
+    return { ...project, deck: stickDeckFocus(deck, project.global.bar), randomizeNonce: nonce };
   }
   if (kind === "bus") {
     const bus = { ...defaultBus(), ...project.bus };

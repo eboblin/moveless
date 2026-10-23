@@ -6,7 +6,7 @@ import { generatePhrase } from "../core/phrase.ts";
 import { loadStoredProject, saveStoredProject, type HostFiles, type StoredUi } from "../core/persist.ts";
 import { phraseLoop, soundMotions } from "../dsp/schedule.ts";
 import { formatFx } from "../dsp/fx.ts";
-import { formatDeckCommand } from "../core/deck.ts";
+import { assembleDeck, behaviorOf, formatDeckCommand, isDeckGroup } from "../core/deck.ts";
 import { formatBus, packPhraseBody } from "../dsp/voice.ts";
 import { midiMessage, reduce, type Session } from "../ui/input.ts";
 import { CAPTURE_CC, DOWN_CC, MENU_CC, MUTE_CC, PLAY_CC, SAMPLE_CC, UP_CC } from "../core/types.ts";
@@ -193,18 +193,22 @@ function deckEdge(before: UiState, after: UiState): boolean {
   return before.deckGesture !== after.deckGesture
     || before.deckLatchedGesture !== after.deckLatchedGesture
     || before.deckHeld !== after.deckHeld
-    || before.deckLatched !== after.deckLatched;
+    || before.deckLatched !== after.deckLatched
+    || before.deckPress !== after.deckPress;
 }
 
 function deckCommand(): string {
-  const gesture = session.ui.deckGesture ?? session.ui.deckLatchedGesture;
+  const heard = session.ui.deckGesture ?? session.ui.deckLatchedGesture;
+  const group = heard && isDeckGroup(heard) ? heard : null;
   const open = peekKind(session.ui) === "deck";
+  const barBeats = session.project.global.bar;
   return formatDeckCommand({
-    gesture: open ? gesture : null,
-    knobs: session.project.deck,
+    gesture: open && group ? behaviorOf(session.project.deck, group) : null,
+    press: open && group ? session.ui.deckPress : 0,
+    knobs: group ? assembleDeck(session.project.deck, group, barBeats) : session.project.deck,
     warm: open,
     seed: session.project.global.seed,
-    barBeats: session.project.global.bar,
+    barBeats,
   });
 }
 

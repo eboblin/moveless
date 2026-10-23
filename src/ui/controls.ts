@@ -134,7 +134,9 @@ function readStored(project: Project, binding: Binding): number {
     case "bus":
       return project.bus[binding.path.slice("bus.".length) as keyof Bus];
     case "deck":
-      return project.deck[binding.path.slice("deck.".length) as keyof Project["deck"]];
+      const key = binding.path.slice("deck.".length);
+      const value = project.deck[key as keyof Project["deck"]];
+      return typeof value === "number" ? value : 0;
     case "lane":
       return 0;
   }
