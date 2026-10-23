@@ -239,6 +239,8 @@ export const MENU_CC = 50;
 export const JOG_CLICK_CC = 3;
 /** Transport play. The button LED has one color: bright while running, dark when stopped. */
 export const PLAY_CC = 85;
+/** Large circle beside Play. Press writes a new scene. */
+export const RECORD_CC = 86;
 /** Mute peek. White button, bright while the peek is held or latched. */
 export const MUTE_CC = 88;
 /** Capture peek. White button, bright while the peek is held or latched. */

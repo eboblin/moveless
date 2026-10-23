@@ -1553,7 +1553,7 @@ describe("surface", () => {
 
   it("records, mutes, captures, and stores a track bookmark", () => {
     let state = session();
-    state = reduce(state, { kind: "cc", data1: 118, data2: 127 });
+    state = reduce(state, { kind: "cc", data1: 86, data2: 127 });
     assert.equal(state.project.journal.length, 1);
     state = reduce(state, { kind: "cc", data1: 88, data2: 127 });
     state = reduce(state, { kind: "note", data1: 19, data2: 127 });
@@ -1959,7 +1959,7 @@ describe("surface", () => {
 
   it("records into the set and turns journal pages", () => {
     let state: Session = { ...session(), ui: { ...defaultUi(), mode: "set" } };
-    state = reduce(state, { kind: "cc", data1: 118, data2: 127 });
+    state = reduce(state, { kind: "cc", data1: 86, data2: 127 });
     assert.equal(state.project.journal.length, 1);
     assert.deepEqual(state.project.sets[0].sceneIds, ["001"]);
     assert.deepEqual(state.project.sets[1].sceneIds, []);

@@ -23,7 +23,7 @@ import {
   toggleLock,
   toggleMute,
 } from "../core/performance.ts";
-import { CAPTURE_CC, contextAtStep, DOWN_CC, isLane, JOG_CLICK_CC, LANES, LOOP_CC, MENU_CC, MUTE_CC, PLAY_CC, RANDOMIZE_DEPTHS, RANDOMIZE_SCOPES, TRANSITIONS, UP_CC, WANDERS, type ContextId, type PatternId, type Project } from "../core/types.ts";
+import { CAPTURE_CC, contextAtStep, DOWN_CC, isLane, JOG_CLICK_CC, LANES, LOOP_CC, MENU_CC, MUTE_CC, PLAY_CC, RANDOMIZE_DEPTHS, RANDOMIZE_SCOPES, RECORD_CC, TRANSITIONS, UP_CC, WANDERS, type ContextId, type PatternId, type Project } from "../core/types.ts";
 import { resetControl, writeControl } from "./controls.ts";
 import { bindingFor, bindingPaths, mixerPage, pageCount, pageGroup, pagesFor, scopeIncludesPage } from "../core/pages.ts";
 import { applyBookmark, FOCUS_HOLD_MS, focusHoldTicks, HOLD_MS, HOLD_TICKS, holdIsShort, MACRO_RETURN_MS, mutePeekOpen, peekKind, RANDOMIZE_HINT_MS, rememberPage, settleWheel, type CaptureLine, type MacroReturn, type Notice, type RandomizeLine, type UiState } from "./state.ts";
@@ -76,7 +76,7 @@ function onCc(session: Session, cc: number, value: number, press: boolean): Sess
     return { ...session, ui: { ...session.ui, randomizeLatched: !session.ui.randomizeLatched } };
   }
   if (cc === LOOP_CC && press) return applyRandomize(session);
-  if (cc === 118 && press) return { ...session, project: recordInto(session.project, session.ui.mode === "set") };
+  if (cc === RECORD_CC && press) return { ...session, project: recordInto(session.project, session.ui.mode === "set") };
   if (cc === PLAY_CC && press) return { ...session, playing: !session.playing };
   if (cc >= 71 && cc <= 78) return turnEncoder(session, cc - 71, value);
   if (cc === 14) return turnWheel(session, value);
