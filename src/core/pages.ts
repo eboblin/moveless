@@ -1,4 +1,4 @@
-import { DECK_GROUPS, deckSlots, defaultDeck, rowKnobName, type DeckGroup, type DeckKnobs, type DeckSlot } from "./deck.ts";
+import { DECK_GROUPS, deckSlots, defaultDeck, focusedGroup, rowKnobName, type DeckGroup, type DeckKnobs, type DeckSlot } from "./deck.ts";
 import {
   LANE_CODE,
   LANES,
@@ -12,6 +12,7 @@ import {
   type LaneId,
   type PatternId,
   type PitchedId,
+  type Project,
   type RandomizeScope,
 } from "./types.ts";
 
@@ -43,7 +44,7 @@ export interface Binding {
   detents?: readonly number[];
 }
 
-export type PageGroup = "pattern" | "notes" | "sound" | "fx" | "global" | "macro" | "mix" | "bus";
+export type PageGroup = "pattern" | "notes" | "sound" | "fx" | "global" | "macro" | "mix" | "bus" | "deck";
 
 export interface Page {
   id: string;
@@ -63,8 +64,9 @@ export const PAGE_GROUP_COLOR: Record<PageGroup, number> = {
   fx: 9,
   global: 8,
   macro: 22,
-  mix: 120,
+  mix: 18,
   bus: 16,
+  deck: 11,
 };
 
 const TITLE_WORD: Record<string, string> = {
@@ -557,7 +559,7 @@ const DECK_FACE: Record<DeckSlot, { label: string; min: number; max: number; ste
   open: { label: "OPN", min: 0, max: 5, step: 1, integer: true },
 };
 
-/** Knobs of the selected group. Depth is always the rightmost encoder. Not an aux page. */
+/** Knobs of the selected group. Depth is always the rightmost encoder. */
 export function deckPage(group: DeckGroup, knobs: DeckKnobs): Page {
   const bindings = deckSlots(group, knobs).map((slot) => {
     if (!slot) return null;
@@ -575,10 +577,15 @@ function rememberDeck(): void {
 }
 
 function mixPage(): Page {
-  return page("mix", "MIXER", [null, null], "mix", [
+  return page("mixer", "MIXER", ["MIXER", null], "mix", [
     ...LANES.map((lane) => plain(lane, LANE_CODE[lane], 0, 1, 0.01, false, "mixer")),
     plain("master", "MASTER", 0, 1, 0.01, false, "mixer"),
   ]);
+}
+
+/** Purple-lane slot for DJ FX. Live knobs come from `deckPage` of the focused group. */
+function deckAuxPage(): Page {
+  return page("deck", "DJ", [null, null], "deck", []);
 }
 
 function globalPage(): Page {
@@ -648,12 +655,31 @@ function busPage(): Page {
   ]);
 }
 
-/** Progression, global, the macro page, then the final mix. Fx is its own lane. Mixer lives on the Mute peek. */
-const AUX_PAGES: Page[] = [progPage(), globalPage(), perfPage(), busPage()];
+/** Progression, global, the macro page, the bus, then mixer and DJ FX. Fx is its own lane. */
+const AUX_PAGES: Page[] = [progPage(), globalPage(), perfPage(), busPage(), mixPage(), deckAuxPage()];
 
-/** Eight mixer faders. Not an aux page; the Mute peek edits these knobs. */
+/** Eight mixer faders on the purple lane. */
 export function mixerPage(): Page {
-  return mixPage();
+  return AUX_PAGES.find((item) => item.id === "mixer") ?? mixPage();
+}
+
+/** Id of one context page. The index clamps into the page list. */
+export function pageId(context: ContextId, index: number): string | null {
+  const pages = pagesFor(context);
+  if (!pages.length) return null;
+  const clamped = Math.min(Math.max(0, index), pages.length - 1);
+  return pages[clamped]?.id ?? null;
+}
+
+/**
+ * Page the caller is showing. The deck slot expands to the knobs of the focused group.
+ */
+export function livePage(project: Project, context: ContextId, index: number): Page | undefined {
+  const pages = pagesFor(context);
+  const item = pages[Math.min(Math.max(0, index), Math.max(0, pages.length - 1))];
+  if (!item) return undefined;
+  if (item.id !== "deck") return item;
+  return deckPage(focusedGroup(project.deck), project.deck);
 }
 
 export function lanePages(lane: PatternId): Page[] {
@@ -739,7 +765,7 @@ export function pageGroup(context: ContextId, index: number): PageGroup {
 /**
  * Pages the scope geometry includes. `lane` is every page, `page` is the current
  * one, `group` is the current page's group. Aux groups stay as they are
- * (progression, global, macro, bus). Lane pattern pages still share one group.
+ * (progression, global, macro, bus, mix, deck). Lane pattern pages still share one group.
  */
 export function scopeIncludesPage(scope: RandomizeScope, context: ContextId, index: number, page: number): boolean {
   const item = pagesFor(context)[index];

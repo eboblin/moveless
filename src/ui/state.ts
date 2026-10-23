@@ -1,5 +1,5 @@
 import type { DeckGroup } from "../core/deck.ts";
-import { pageCount } from "../core/pages.ts";
+import { pageCount, pageId } from "../core/pages.ts";
 import { STEPS, type ContextId, type PageRef } from "../core/types.ts";
 
 export type UiMode = "journal" | "set";
@@ -64,18 +64,15 @@ export interface UiState {
   wheelReleaseMs: number | null;
   /** Jog click leaves the randomize pads up after the touch ends. */
   randomizeLatched: boolean;
+  /**
+   * Latch saved while the purple lane forces it off. Null while the latch is live.
+   * Leaving for any other lane writes this back.
+   */
+  randomizeParked: boolean | null;
   /** The randomize row last pressed, until its caption times out. */
   randomizeHint: RandomizeHint | null;
   /** The Capture row last pressed, until its caption times out. */
   captureHint: CaptureHint | null;
-  muteHeld: boolean;
-  /** Peek stays up after a short Mute tap. */
-  muteLatched: boolean;
-  /** Latch from before this Mute press, restored when the hold was long. */
-  muteWasLatched: boolean;
-  /** Tick and wall clock when Mute went down. */
-  muteDownTick: number | null;
-  muteDownMs: number | null;
   shiftHeld: boolean;
   copyHeld: boolean;
   /** Tick and wall clock when Copy went down, so a short click can paste. */
@@ -95,13 +92,7 @@ export interface UiState {
   captureWasLatched: boolean;
   captureDownTick: number | null;
   captureDownMs: number | null;
-  /** Sample button. Same latch as Mute: a short tap stays, a long hold ends on release. */
-  deckHeld: boolean;
-  deckLatched: boolean;
-  deckWasLatched: boolean;
-  deckDownTick: number | null;
-  deckDownMs: number | null;
-  /** Group currently under a finger. */
+  /** Group currently under a finger. The deck page has to be showing. */
   deckGesture: DeckGroup | null;
   /** Transport tick when that finger went down. The picture counts the gesture from here. */
   deckGestureTick: number | null;
@@ -152,39 +143,17 @@ export function holdIsShort(downTick: number | null, downMs: number | null, tick
   return heldTicks < HOLD_TICKS && heldMs < HOLD_MS;
 }
 
-export type PeekKind = "mute" | "capture" | "deck";
+export type PeekKind = "capture";
 
 export interface PeekFlags {
-  muteHeld?: boolean;
-  muteLatched?: boolean;
-  muteDownMs?: number | null;
   captureHeld?: boolean;
   captureLatched?: boolean;
-  captureDownMs?: number | null;
-  deckHeld?: boolean;
-  deckLatched?: boolean;
-  deckDownMs?: number | null;
 }
 
-/** The peek on screen. A held button beats any latch. The latest hold wins. A latched mixer covers a latched Capture, and either covers a latched deck. */
+/** Capture is the only latched pad overlay. Mixer and DJ FX are purple-lane pages. */
 export function peekKind(ui: PeekFlags): PeekKind | null {
-  const rank: Record<PeekKind, number> = { deck: 0, mute: 1, capture: 2 };
-  const held: { kind: PeekKind; at: number }[] = [];
-  if (ui.captureHeld) held.push({ kind: "capture", at: ui.captureDownMs ?? 0 });
-  if (ui.muteHeld) held.push({ kind: "mute", at: ui.muteDownMs ?? 0 });
-  if (ui.deckHeld) held.push({ kind: "deck", at: ui.deckDownMs ?? 0 });
-  if (held.length) {
-    held.sort((a, b) => a.at - b.at || rank[a.kind] - rank[b.kind]);
-    return held[held.length - 1].kind;
-  }
-  if (ui.muteLatched) return "mute";
-  if (ui.captureLatched) return "capture";
-  if (ui.deckLatched) return "deck";
+  if (ui.captureHeld || ui.captureLatched) return "capture";
   return null;
-}
-
-export function mutePeekOpen(ui: PeekFlags): boolean {
-  return peekKind(ui) === "mute";
 }
 
 /** 300 ms of musical time at the current tempo. */
@@ -218,11 +187,36 @@ function blankLanePages(): Record<ContextId, number> {
   return pages;
 }
 
-/** Keep `page` and that step's memory on the same clamped index. */
+/** Purple lane ignores the randomize menu, latch and jog touch. A held purple step counts. */
+export function auxHidesRandomize(ui: { context?: string | null; heldContext?: string | null }): boolean {
+  return ui.context === "aux" || ui.heldContext === "aux";
+}
+
+/** Park the jog latch on the purple lane and put it back on any other lane. */
+export function settleRandomize(ui: UiState): UiState {
+  if (auxHidesRandomize(ui)) {
+    if (ui.randomizeParked !== null) return ui.randomizeLatched ? { ...ui, randomizeLatched: false } : ui;
+    return { ...ui, randomizeParked: ui.randomizeLatched, randomizeLatched: false };
+  }
+  if (ui.randomizeParked === null) return ui;
+  return { ...ui, randomizeLatched: ui.randomizeParked, randomizeParked: null };
+}
+
+/** Jog click. On the purple lane this flips the parked value and the pads stay on the lane. */
+export function toggleRandomize(ui: UiState): UiState {
+  const settled = settleRandomize(ui);
+  if (settled.randomizeParked !== null) {
+    return { ...settled, randomizeParked: !settled.randomizeParked, randomizeLatched: false };
+  }
+  return { ...settled, randomizeLatched: !settled.randomizeLatched };
+}
+
+/** Keep `page` and that step's memory on the same clamped index. Leaving DJ FX stops its gesture. */
 export function rememberPage(ui: UiState, context: ContextId, page: number): UiState {
   const count = Math.max(1, pageCount(context));
   const clamped = Math.min(Math.max(0, page), count - 1);
   const moved = context !== ui.context || clamped !== ui.page;
+  const deckLive = pageId(context, clamped) === "deck";
   return {
     ...ui,
     context,
@@ -230,6 +224,11 @@ export function rememberPage(ui: UiState, context: ContextId, page: number): UiS
     lanePages: { ...ui.lanePages, [context]: clamped },
     focus: moved ? null : ui.focus,
     detent: moved ? null : ui.detent,
+    deckGesture: deckLive ? ui.deckGesture : null,
+    deckGestureTick: deckLive ? ui.deckGestureTick : null,
+    deckLatchedGesture: deckLive ? ui.deckLatchedGesture : null,
+    deckLatchTick: deckLive ? ui.deckLatchTick : null,
+    deckPads: deckLive ? ui.deckPads : 0,
   };
 }
 
@@ -242,13 +241,9 @@ export function defaultUi(): UiState {
     wheelTouch: false,
     wheelReleaseMs: null,
     randomizeLatched: false,
+    randomizeParked: null,
     randomizeHint: null,
     captureHint: null,
-    muteHeld: false,
-    muteLatched: false,
-    muteWasLatched: false,
-    muteDownTick: null,
-    muteDownMs: null,
     shiftHeld: false,
     copyHeld: false,
     copyDownTick: null,
@@ -262,11 +257,6 @@ export function defaultUi(): UiState {
     captureWasLatched: false,
     captureDownTick: null,
     captureDownMs: null,
-    deckHeld: false,
-    deckLatched: false,
-    deckWasLatched: false,
-    deckDownTick: null,
-    deckDownMs: null,
     deckGesture: null,
     deckGestureTick: null,
     deckLatchedGesture: null,
@@ -291,5 +281,5 @@ export function openSetMode(ui: UiState): UiState {
 }
 
 export function applyBookmark(ui: UiState, ref: PageRef): UiState {
-  return { ...rememberPage(ui, ref.context, ref.page), heldContext: null };
+  return settleRandomize({ ...rememberPage(ui, ref.context, ref.page), heldContext: null, heldPage: null });
 }

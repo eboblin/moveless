@@ -8,8 +8,8 @@ import { evalModulated } from "../core/modulate.ts";
 import { RANDOMIZE_DEPTHS, RANDOMIZE_INTENSITIES, RANDOMIZE_SCOPES, TRANSITIONS, WANDERS, isPitched, isVoice, LANES, LANE_CODE, type RandomizeDepth, type RandomizeIntensity, type RandomizeScope, type ContextId, type HarmonicEvent, type LaneId, type Phrase, type Project, type TimedEvent } from "../core/types.ts";
 import { DIGIT_H, displayAmount, type BigAmount, type DisplayAmount } from "./digits.ts";
 import { readControl } from "./controls.ts";
-import { bindingFor, deckPage, pagesFor, type Binding, type Page } from "../core/pages.ts";
-import { focusVisible, macroReturnValue, peekKind, type CaptureLine, type RandomizeLine, type UiState } from "./state.ts";
+import { bindingFor, livePage, pagesFor, type Binding, type Page } from "../core/pages.ts";
+import { focusVisible, macroReturnValue, type CaptureLine, type RandomizeLine, type UiState } from "./state.ts";
 import { drawWaveform, emptyWave, type WaveTape } from "./wave.ts";
 
 export const WIDTH = 128;
@@ -82,8 +82,7 @@ export function renderScreen(
   const context = peek ?? ui.context;
   const pageIndex = peek ? ui.heldPage ?? ui.lanePages[peek] ?? 0 : ui.page;
   const pages = pagesFor(context);
-  const page = pages[Math.min(pageIndex, pages.length - 1)];
-  const kind = peekKind(ui);
+  const page = livePage(project, context, pageIndex);
   const notice = ui.notice && now < ui.notice.untilMs ? ui.notice : null;
   const randomize = ui.randomizeHint && now < ui.randomizeHint.untilMs ? ui.randomizeHint : null;
   const capture = ui.captureHint && now < ui.captureHint.untilMs ? ui.captureHint : null;
@@ -91,8 +90,8 @@ export function renderScreen(
   const focusState = !notice && focusVisible(ui.focus, tick, now) ? ui.focus : null;
   const focus = focusState?.label ?? null;
   const focusBinding = focusState ? bindingFor(focusState.path) : null;
-  const mixer = !notice && kind === "mute";
-  const decking = !notice && kind === "deck";
+  const mixer = !notice && page?.id === "mixer";
+  const decking = !notice && page?.id === "deck";
   const effectTitle = GROUP_PAD.find((pad) => pad.id === focusedGroup(project.deck))?.title ?? "BEAT REPEAT";
   const knobLine = decking && focus && focusBinding ? deckKnobHeader(project, focusBinding) : null;
   const header = mixer
@@ -107,9 +106,8 @@ export function renderScreen(
   const bars = !notice && !mixer && !decking && page?.id === "prog";
   const viz = notice ? "notice" : mixer ? "mixer" : decking ? "deck" : generator ? "generator" : vizLane || bars ? "phrase" : "none";
   pixels.fill(0);
-  const laneMark = (LANES as readonly ContextId[]).indexOf(context);
-  const pageMark = mixer ? laneMark : Math.min(pageIndex, Math.max(0, pages.length - 1));
-  const pageCount = mixer ? MIX_CHANNELS.length : pages.length;
+  const pageMark = Math.min(pageIndex, Math.max(0, pages.length - 1));
+  const pageCount = pages.length;
   if (ui.wheelTouch) drawPager(pixels, pageMark, pageCount);
   else drawLoad(pixels, cpu);
   if (!mixer) drawParamSeparator(pixels);
@@ -129,11 +127,10 @@ export function renderScreen(
   else if (vizLane && phrase) drawPhrase(pixels, project, phrase, vizLane, playhead);
   else if (decking) drawDeck(pixels, project, ui, tick, wave);
   const deckFocus = decking ? (focus ?? effectTitle) : focus;
-  const deck = decking ? deckPage(focusedGroup(project.deck), project.deck) : null;
   const labels = mixer
     ? [{ x: 1, y: TITLE_Y, text: header.slice(0, LINE_LIMIT) }, ...mixerChannelLabels(project, focus)]
     : decking
-      ? drawLabels(project, context, deck ?? undefined, deckFocus, header, ui, now, "DJ")
+      ? drawLabels(project, context, page, deckFocus, header, ui, now, "DJ")
     : drawLabels(project, context, page, focus, header, ui, now);
   const menu = hint && !notice && !mixer ? menuLineLabels(project, hint.line) : null;
   if (phrase && bars) {
@@ -146,7 +143,7 @@ export function renderScreen(
     clearLinePlate(pixels, menu);
     labels.push(...menu);
   }
-  const digits = mixer ? [] : deck ? paramDigits(project, context, deck, focus, ui, now) : !page ? [] : paramDigits(project, context, page, focus, ui, now);
+  const digits = mixer || !page ? [] : paramDigits(project, context, page, focus, ui, now);
   const dim: number[] = [];
   return { header, viz, pixels, labels, digits, dim };
 }

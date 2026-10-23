@@ -27,6 +27,7 @@ import {
 } from "../ui/screen.ts";
 import { resetWaveform, serviceWaveform } from "../ui/wave-audio.ts";
 import { applyWavePages, type WaveTape } from "../ui/wave.ts";
+import { pageId } from "../core/pages.ts";
 import { defaultUi, focusVisible, peekKind, rememberPage, settleWheel, type UiState } from "../ui/state.ts";
 import type { Project } from "../core/types.ts";
 
@@ -192,15 +193,26 @@ function syncVoice(reset: boolean): void {
 function deckEdge(before: UiState, after: UiState): boolean {
   return before.deckGesture !== after.deckGesture
     || before.deckLatchedGesture !== after.deckLatchedGesture
-    || before.deckHeld !== after.deckHeld
-    || before.deckLatched !== after.deckLatched
-    || before.deckPress !== after.deckPress;
+    || before.deckPress !== after.deckPress
+    || before.context !== after.context
+    || before.page !== after.page;
+}
+
+/** DJ FX is audible while its purple-lane page is the current one. */
+function deckOpen(ui: UiState): boolean {
+  return pageId(ui.context, ui.page) === "deck";
+}
+
+/** The strip is on screen, including a held preview of the DJ page. */
+function deckVisible(ui: UiState): boolean {
+  if (ui.heldContext) return pageId(ui.heldContext, ui.heldPage ?? ui.lanePages[ui.heldContext] ?? 0) === "deck";
+  return deckOpen(ui);
 }
 
 function deckCommand(): string {
   const heard = session.ui.deckGesture ?? session.ui.deckLatchedGesture;
   const group = heard && isDeckGroup(heard) ? heard : null;
-  const open = peekKind(session.ui) === "deck";
+  const open = deckOpen(session.ui);
   const barBeats = session.project.global.bar;
   return formatDeckCommand({
     gesture: open && group ? behaviorOf(session.project.deck, group) : null,
@@ -273,7 +285,7 @@ function screenChanged(): boolean {
   const focus = focusVisible(ui.focus, session.tick, now);
   const peek = peekKind(ui);
   const latch = Math.round(session.project.progression.count) <= 0 ? latchStamp() : "";
-  const deckFrame = peek === "deck" ? Math.floor(Math.max(0, session.tick)) : -1;
+  const deckFrame = deckVisible(ui) ? Math.floor(Math.max(0, session.tick)) : -1;
   if (
     paintProject === session.project &&
     paintUi === ui &&
@@ -325,7 +337,7 @@ function readParam(key: string): string | null {
 
 function paintScreen(): void {
   let wave: WaveTape | null = null;
-  if (peekKind(session.ui) === "deck") {
+  if (deckVisible(session.ui)) {
     wave = serviceWaveform(session.project);
     applyWavePages(wave, [readParam("wave0"), readParam("wave1")]);
   }
@@ -446,20 +458,18 @@ function paintLeds(): void {
     sentPlay = play;
     offerLed(ledOut, [0x0b, 0xb0, PLAY_CC, play]);
   }
-  const mute = modeButtonLed(session.ui.muteHeld || session.ui.muteLatched);
-  if (sentMute !== mute) {
-    sentMute = mute;
-    offerLed(ledOut, [0x0b, 0xb0, MUTE_CC, mute]);
+  if (sentMute !== 0) {
+    sentMute = 0;
+    offerLed(ledOut, [0x0b, 0xb0, MUTE_CC, 0]);
   }
   const capture = modeButtonLed(session.ui.captureHeld || session.ui.captureLatched);
   if (sentCapture !== capture) {
     sentCapture = capture;
     offerLed(ledOut, [0x0b, 0xb0, CAPTURE_CC, capture]);
   }
-  const sample = peekKind(session.ui) === "deck" ? 11 : 0;
-  if (sentSample !== sample) {
-    sentSample = sample;
-    offerLed(ledOut, [0x0b, 0xb0, SAMPLE_CC, sample]);
+  if (sentSample !== 0) {
+    sentSample = 0;
+    offerLed(ledOut, [0x0b, 0xb0, SAMPLE_CC, 0]);
   }
 }
 

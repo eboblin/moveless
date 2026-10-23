@@ -15,7 +15,7 @@ import {
   type PatternId,
   type Project,
 } from "../core/types.ts";
-import { pageCount, pageGroupColor, pagesFor, scopeIncludesPage } from "../core/pages.ts";
+import { livePage, pageCount, pageGroupColor, pageId, scopeIncludesPage } from "../core/pages.ts";
 import { depthTouchesPath } from "../core/randomize.ts";
 import { DECK_GROUPS, GROUP_PAD, fieldAt, groupAt, type DeckKnobs } from "../core/deck.ts";
 import { peekKind } from "./state.ts";
@@ -134,15 +134,6 @@ export interface PadSurface {
   lanePages?: Partial<Record<ContextId, number>>;
   copyHeld?: boolean;
   journalPage?: number;
-  muteHeld?: boolean;
-  muteLatched?: boolean;
-  muteDownMs?: number | null;
-  muteDownTick?: number | null;
-  deckHeld?: boolean;
-  deckLatched?: boolean;
-  deckDownMs?: number | null;
-  deckGesture?: string | null;
-  deckLatchedGesture?: string | null;
 }
 
 /**
@@ -150,20 +141,32 @@ export interface PadSurface {
  * dark→dim→bright by morph progress. An empty journal/set still shows pad 0 as the
  * current working scene. Capture adds Transition and Wander on the bottom row of that list.
  * Jog touch or a latched jog click shows randomize instead, so the Capture row stays hidden.
+ * The purple lane ignores both: its pads stay the page face.
  */
 export function padLeds(project: Project, mode: "journal" | "set", surface?: PadSurface, tick = 0): Led[] {
   const context = surface?.context ?? "kick";
   const page = surface?.page ?? 0;
-  const kind = peekKind(surface ?? {});
-  if (kind === "mute") return mutePeekLeds(project);
-  if (surface?.wheelTouch || surface?.randomizeLatched) return randomizePadLeds(project, context, page);
-  if (kind === "capture") return capturePadLeds(project, mode, surface ?? {}, tick);
+  const onAux = context === "aux" || surface?.heldContext === "aux";
+  if (!onAux && (surface?.wheelTouch || surface?.randomizeLatched)) return randomizePadLeds(project, context, page);
+  if (peekKind(surface ?? {}) === "capture") return capturePadLeds(project, mode, surface ?? {}, tick);
   const scenes = scenePadLeds(project, mode, tick, surface?.journalPage ?? 0, surface?.copyHeld ?? false);
   if (surface?.heldContext) {
     const shown = surface.heldPage ?? surface.lanePages?.[surface.heldContext] ?? (surface.heldContext === context ? page : -1);
+    if (surface.heldContext === "aux") return pageOverlay(auxFaceLeds(project, scenes, shown), "aux", shown, 1);
     return pageOverlay(scenes, surface.heldContext, shown);
   }
-  if (kind === "deck") return deckPadLeds(scenes, project.deck);
+  const id = pageId(context, page);
+  if (id === "mixer") return mutePeekLeds(project);
+  if (id === "deck") return deckPadLeds(scenes, project.deck);
+  return scenes;
+}
+
+/** Mixer and DJ pads for the purple page under the finger. Other pages keep the scene grid. */
+function auxFaceLeds(project: Project, scenes: Led[], pageIndex: number): Led[] {
+  if (pageIndex < 0) return scenes;
+  const id = pageId("aux", pageIndex);
+  if (id === "mixer") return mutePeekLeds(project);
+  if (id === "deck") return deckPadLeds(scenes.slice(), project.deck);
   return scenes;
 }
 
@@ -257,7 +260,7 @@ function paintRandomizePages(out: Led[], project: Project, context: ContextId, p
 /** Pages Loop will rewrite under the current scope and depth. */
 function randomizeTouchesPage(project: Project, context: ContextId, index: number, page: number): boolean {
   if (!scopeIncludesPage(project.randomizeScope, context, index, page)) return false;
-  const item = pagesFor(context)[index];
+  const item = livePage(project, context, index);
   if (!item) return false;
   return item.bindings.some((binding) => binding && depthTouchesPath(binding.path, project.randomizeDepth));
 }
@@ -325,11 +328,12 @@ function randomizePadLeds(project: Project, context: ContextId, page: number): L
   return out;
 }
 
-function pageOverlay(base: Led[], context: ContextId, page: number): Led[] {
+function pageOverlay(base: Led[], context: ContextId, page: number, rows: 1 | 2 = 2): Led[] {
   const out = base.slice();
   const count = pageCount(context);
   for (let col = 0; col < 8; col++) {
     out[24 + col] = col < count ? pageLed(context, col, col === page) : led("off", false);
+    if (rows < 2) continue;
     const extra = 8 + col;
     out[16 + col] = extra < count ? pageLed(context, extra, extra === page) : led("off", false);
   }
