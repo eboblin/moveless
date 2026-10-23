@@ -1,4 +1,4 @@
-import { GROUP_PAD, DIV_LABEL, BRAKE_LABEL, QUANT_LABEL, RATE_LABEL, assembleDeck, behaviorOf, deckPicture, focusedGroup, isDeckGroup, lenLabel, readDeckSlot, rowValueLabel, type DeckPicture } from "../core/deck.ts";
+import { GROUP_PAD, DIV_LABEL, BRAKE_LABEL, QUANT_LABEL, RATE_LABEL, assembleDeck, behaviorOf, brakeShort, deckPicture, divShort, focusedGroup, isDeckGroup, lenLabel, lenShort, quantShort, readDeckSlot, rowValueLabel, rowValueWord, type DeckPicture } from "../core/deck.ts";
 import { laneHeard } from "../core/journal.ts";
 import { SIXTEENTH_TICKS, countFromUnit, rateFromUnit, tickToSample } from "../core/clock.ts";
 import { phraseStepsOf } from "../core/events.ts";
@@ -93,12 +93,12 @@ export function renderScreen(
   const focusBinding = focusState ? bindingFor(focusState.path) : null;
   const mixer = !notice && kind === "mute";
   const decking = !notice && kind === "deck";
-  const heard = ui.deckGesture ?? ui.deckLatchedGesture;
-  const deckTitle = GROUP_PAD.find((pad) => pad.id === heard)?.title ?? "DECK";
+  const effectTitle = GROUP_PAD.find((pad) => pad.id === focusedGroup(project.deck))?.title ?? "BEAT REPEAT";
+  const knobLine = decking && focus && focusBinding ? deckKnobHeader(project, focusBinding) : null;
   const header = mixer
     ? (focusBinding?.title ?? focus ?? "MIXER")
     : decking
-      ? (focusBinding?.title ?? focus ?? deckTitle)
+      ? (knobLine ?? effectTitle)
     : (focusBinding ? figureHeader(project, context, focusBinding) : null) ??
       focusBinding?.title ??
       (focus ? focus : laneHeader(project, context, page));
@@ -128,12 +128,12 @@ export function renderScreen(
   else if (chordRoll && phrase) drawChordRoll(pixels, phrase, playhead);
   else if (vizLane && phrase) drawPhrase(pixels, project, phrase, vizLane, playhead);
   else if (decking) drawDeck(pixels, project, ui, tick, wave);
-  const deckFocus = decking && !focus && heard ? deckTitle : focus;
+  const deckFocus = decking ? (focus ?? effectTitle) : focus;
   const deck = decking ? deckPage(focusedGroup(project.deck), project.deck) : null;
   const labels = mixer
     ? [{ x: 1, y: TITLE_Y, text: header.slice(0, LINE_LIMIT) }, ...mixerChannelLabels(project, focus)]
     : decking
-      ? drawLabels(project, context, deck ?? undefined, deckFocus, header, ui, now)
+      ? drawLabels(project, context, deck ?? undefined, deckFocus, header, ui, now, "DJ")
     : drawLabels(project, context, page, focus, header, ui, now);
   const menu = hint && !notice && !mixer ? menuLineLabels(project, hint.line) : null;
   if (phrase && bars) {
@@ -924,7 +924,54 @@ function knobAmount(project: Project, context: ContextId, binding: Binding, ui: 
   return displayAmount(coasting ?? readControl(project, context, binding.path), binding);
 }
 
-function deckKnobText(project: Project, path: string): string | null {
+/** Full knob name and its current value, shown while the encoder is held. */
+function deckKnobHeader(project: Project, binding: Binding): string {
+  const name = deckKnobTitle(binding.path, focusedGroup(project.deck));
+  const named = deckKnobWord(project, binding.path);
+  const value = named ?? deckNumber(project, binding);
+  return `${name}: ${value}`.toLowerCase().slice(0, LINE_LIMIT);
+}
+
+function deckKnobTitle(path: string, group: ReturnType<typeof focusedGroup>): string {
+  switch (path) {
+    case "deck.div":
+      return "DIVISION";
+    case "deck.len":
+      return "LENGTH";
+    case "deck.depth":
+      return "DEPTH";
+    case "deck.brake":
+      return "TIME";
+    case "deck.vary":
+      return "VARY";
+    case "deck.quant":
+      return "QUANTIZE";
+    case "deck.duty":
+      return "DUTY";
+    case "deck.ramp":
+      return "BEND";
+    case "deck.rate":
+      return "RATE";
+    case "deck.open":
+      return "OPEN";
+    case "deck.row":
+      if (group === "glc") return "PATTERN";
+      if (group === "scr") return "CURVE";
+      if (group === "gat") return "TRANSFORM";
+      if (group === "pch" || group === "stp") return "SHAPE";
+      if (group === "thr") return "SEND";
+      return "WAY";
+    default:
+      return "DECK";
+  }
+}
+
+function deckNumber(project: Project, binding: Binding): string {
+  const amount = displayAmount(readControl(project, "aux", binding.path), binding);
+  return amount.kind === "big" ? String(amount.n) : amount.text;
+}
+
+function deckKnobWord(project: Project, path: string): string | null {
   const deck = project.deck;
   const group = focusedGroup(deck);
   switch (path) {
@@ -937,11 +984,34 @@ function deckKnobText(project: Project, path: string): string | null {
     case "deck.quant":
       return QUANT_LABEL[deck.quant] ?? null;
     case "deck.row":
-      return rowValueLabel(group, readDeckSlot(deck, "row"));
+      return rowValueWord(group, readDeckSlot(deck, "row"));
     case "deck.rate":
       return RATE_LABEL[readDeckSlot(deck, "rate")] ?? null;
     case "deck.open":
       return DIV_LABEL[readDeckSlot(deck, "open")] ?? null;
+    default:
+      return null;
+  }
+}
+
+function deckKnobText(project: Project, path: string): string | null {
+  const deck = project.deck;
+  const group = focusedGroup(deck);
+  switch (path) {
+    case "deck.div":
+      return divShort(deck.div);
+    case "deck.len":
+      return lenShort(deck, project.global.bar);
+    case "deck.brake":
+      return brakeShort(deck.brake);
+    case "deck.quant":
+      return quantShort(deck.quant);
+    case "deck.row":
+      return rowValueLabel(group, readDeckSlot(deck, "row"));
+    case "deck.rate":
+      return RATE_LABEL[readDeckSlot(deck, "rate")] ?? null;
+    case "deck.open":
+      return divShort(readDeckSlot(deck, "open"));
     default:
       return null;
   }
@@ -967,9 +1037,10 @@ function drawLabels(
   header: string,
   ui: UiState,
   now: number,
+  tagText?: string,
 ): Label[] {
   const labels: Label[] = [];
-  const tag = laneTag(project, context);
+  const tag = tagText ?? laneTag(project, context);
   labels.push({ x: rightEdgeX(tag), y: TITLE_Y, text: tag });
   if (focus) {
     labels.push({ x: 1, y: TITLE_Y, text: header.slice(0, LINE_LIMIT) });

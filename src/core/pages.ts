@@ -565,7 +565,7 @@ export function deckPage(group: DeckGroup, knobs: DeckKnobs): Page {
     const label = slot === "row" ? rowKnobName(group) : face.label;
     return plain(`deck.${slot}`, label, face.min, face.max, face.step, face.integer, "deck");
   });
-  return page("deck", "DECK", ["TIME", "DECK"], "bus", bindings);
+  return page("deck", "DECK", [null, null], "bus", bindings);
 }
 
 function rememberDeck(): void {

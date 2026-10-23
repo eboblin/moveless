@@ -2335,7 +2335,11 @@ describe("deck screen", () => {
     assert.equal(open.project.nextSceneId, before.project.nextSceneId);
     const screen = renderScreen(open.project, open.ui, 0);
     assert.equal(screen.viz, "deck");
-    assert.equal(screen.header, "DECK");
+    assert.equal(screen.header, "BEAT REPEAT");
+    assert.equal(screen.labels.some((label) => label.y === TITLE_Y && label.text === "DJ"), true);
+    assert.equal(screen.labels.some((label) => label.text === "TIME" || label.text === "DECK"), false);
+    const quant = reduce(open, { kind: "cc", data1: 77, data2: 1 });
+    assert.equal(renderScreen(quant.project, quant.ui, 0).header, "quantize: bar");
     assert.equal(screen.labels.some((label) => label.text === "ROL"), false);
     assert.equal(screen.labels.some((label) => label.y >= HEADER_H && label.y < SEP_Y), false);
     assert.equal(screen.labels.some((label) => label.text === "1/8"), true);
@@ -2362,7 +2366,9 @@ describe("deck screen", () => {
     const lit = padLeds(top.project, "journal", top.ui);
     assert.equal(lit[24]?.color, 3);
     assert.equal(lit[16]?.color, offColor(9));
-    assert.equal(lit[4]?.blink, true);
+    assert.equal(lit[4]?.color, 3);
+    assert.equal(lit[4]?.blink, false);
+    assert.equal(idle[4]?.color, 3);
     assert.equal(idle[4]?.blink, false);
     assert.equal(idle[24]?.color, 3);
     const up = reduce(top, { kind: "note", data1: 92, data2: 0 });
@@ -2372,7 +2378,7 @@ describe("deck screen", () => {
     assert.equal(bottom.ui.deckGesture, "thr");
     assert.equal(bottom.project.morph?.targetId, first);
     assert.notEqual(bottom.project.morph?.targetId, second);
-    const turned = reduce(openDeck(session()), { kind: "cc", data1: 71, data2: 1 });
+    const turned = reduce(openDeck(session()), { kind: "cc", data1: 76, data2: 1 });
     assert.equal(turned.project.deck.div, 3);
   });
 
@@ -2382,23 +2388,29 @@ describe("deck screen", () => {
     assert.deepEqual(idle.dim, []);
     const names = (state: Session) =>
       renderScreen(state.project, state.ui, 0).labels.filter((label) => label.y === NAME_Y).map((label) => label.text);
-    const depthCell = (state: Session) =>
-      renderScreen(state.project, state.ui, 0).labels.find((label) => label.y === NAME_Y && label.text === "DEP")?.cell;
-    assert.deepEqual(names(open), ["DIV", "WAY", "QNT", "DEP"]);
-    assert.equal(depthCell(open), 7);
+    const namedCell = (state: Session, text: string) =>
+      renderScreen(state.project, state.ui, 0).labels.find((label) => label.y === NAME_Y && label.text === text)?.cell;
+    assert.deepEqual(names(open), ["WAY", "DIV", "QNT", "DEP"]);
+    assert.equal(namedCell(open, "DIV"), 5);
+    assert.equal(namedCell(open, "QNT"), 6);
+    assert.equal(namedCell(open, "DEP"), 7);
     const corner = reduce(open, { kind: "note", data1: 99, data2: 127 });
     assert.equal(corner.project.deck.div, 5);
     assert.equal(corner.project.deck.cells[0]?.y, 3);
     const cornerScreen = renderScreen(corner.project, corner.ui, 0);
     assert.equal(cornerScreen.labels.some((label) => label.text === "1/1"), true);
-    assert.equal(cornerScreen.labels.some((label) => label.text === "PONG"), true);
-    assert.equal(depthCell(corner), 7);
+    assert.equal(cornerScreen.labels.some((label) => label.text === "PNG"), true);
+    assert.equal(namedCell(corner, "QNT"), 6);
+    assert.equal(namedCell(corner, "DEP"), 7);
     const scratch = reduce(open, { kind: "note", data1: 68, data2: 127 });
-    assert.deepEqual(names(scratch), ["TIM", "CRV", "LEN", "VAR", "DUT", "BND", "QNT", "DEP"]);
-    assert.equal(depthCell(scratch), 7);
+    assert.deepEqual(names(scratch), ["CRV", "LEN", "VAR", "DUT", "BND", "TIM", "QNT", "DEP"]);
+    assert.equal(namedCell(scratch, "TIM"), 5);
+    assert.equal(namedCell(scratch, "QNT"), 6);
+    assert.equal(namedCell(scratch, "DEP"), 7);
     assert.deepEqual(renderScreen(scratch.project, scratch.ui, 0).dim, []);
     const pitch = reduce(open, { kind: "note", data1: 85, data2: 127 });
-    assert.deepEqual(names(pitch), ["RTE", "SHP", "BND", "QNT", "DEP"]);
+    assert.deepEqual(names(pitch), ["SHP", "BND", "RTE", "QNT", "DEP"]);
+    assert.equal(namedCell(pitch, "RTE"), 5);
     assert.equal(pitch.project.deck.div, 2);
     const slow = reduce(pitch, { kind: "note", data1: 78, data2: 127 });
     assert.equal(slow.project.deck.cells[5]?.x, 0);
@@ -2406,11 +2418,13 @@ describe("deck screen", () => {
     assert.equal(slow.project.deck.div, 2);
     const slowScreen = renderScreen(slow.project, slow.ui, 0);
     assert.equal(slowScreen.labels.some((label) => label.text === "1/2"), true);
-    assert.equal(slowScreen.labels.some((label) => label.text === "RISE"), true);
-    assert.equal(depthCell(slow), 7);
+    assert.equal(slowScreen.labels.some((label) => label.text === "RIS"), true);
+    assert.equal(namedCell(slow, "QNT"), 6);
+    assert.equal(namedCell(slow, "DEP"), 7);
     const field = padLeds(scratch.project, "journal", scratch.ui);
-    assert.equal(field[31]?.color, 1);
+    assert.equal(field[31]?.color, offColor(1));
     assert.equal(field[2]?.color, offColor(1));
+    assert.equal(field[6]?.color, 1);
     assert.equal(field[24]?.color, offColor(3));
   });
 

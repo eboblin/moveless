@@ -121,14 +121,14 @@ describe("deck curves", () => {
 
   it("puts depth on the right and shows only the group's knobs", () => {
     const knobs = defaultDeck();
-    assert.deepEqual(deckSlots("rpt", knobs), ["div", "row", "quant", null, null, null, null, "depth"]);
-    assert.deepEqual(deckSlots("scr", knobs), ["brake", "row", "len", "vary", "duty", "ramp", "quant", "depth"]);
-    assert.deepEqual(deckSlots("stp", knobs), ["brake", "row", null, null, null, null, null, "depth"]);
-    assert.deepEqual(deckSlots("gat", knobs), ["div", "row", "duty", "quant", null, null, null, "depth"]);
-    assert.deepEqual(deckSlots("pch", knobs), ["rate", "row", "ramp", "quant", null, null, null, "depth"]);
-    assert.deepEqual(deckSlots("lop", { ...knobs, quant: 1 }), ["len", "row", "quant", "div", null, null, null, "depth"]);
-    assert.deepEqual(deckSlots("thr", { ...knobs, quant: 1 }), ["open", "row", "quant", null, null, null, null, "depth"]);
-    assert.deepEqual(deckSlots("scr", { ...knobs, quant: 1 }), ["brake", "row", "len", "vary", "duty", "ramp", "quant", "depth"]);
+    assert.deepEqual(deckSlots("rpt", knobs), ["row", null, null, null, null, "div", "quant", "depth"]);
+    assert.deepEqual(deckSlots("scr", knobs), ["row", "len", "vary", "duty", "ramp", "brake", "quant", "depth"]);
+    assert.deepEqual(deckSlots("stp", knobs), ["row", null, null, null, null, "brake", null, "depth"]);
+    assert.deepEqual(deckSlots("gat", knobs), ["row", "duty", null, null, null, "div", "quant", "depth"]);
+    assert.deepEqual(deckSlots("pch", knobs), ["row", "ramp", null, null, null, "rate", "quant", "depth"]);
+    assert.deepEqual(deckSlots("lop", { ...knobs, quant: 1 }), ["row", "div", null, null, null, "len", "quant", "depth"]);
+    assert.deepEqual(deckSlots("thr", { ...knobs, quant: 1 }), ["row", null, null, null, null, "open", "quant", "depth"]);
+    assert.deepEqual(deckSlots("scr", { ...knobs, quant: 1 }), ["row", "len", "vary", "duty", "ramp", "brake", "quant", "depth"]);
   });
 
   it("walks glitch slices in order and cuts a slot below half duty", () => {

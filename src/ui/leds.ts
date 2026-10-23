@@ -163,12 +163,11 @@ export function padLeds(project: Project, mode: "journal" | "set", surface?: Pad
     const shown = surface.heldPage ?? surface.lanePages?.[surface.heldContext] ?? (surface.heldContext === context ? page : -1);
     return pageOverlay(scenes, surface.heldContext, shown);
   }
-  if (kind === "deck") return deckPadLeds(scenes, surface ?? {}, project.deck);
+  if (kind === "deck") return deckPadLeds(scenes, project.deck);
   return scenes;
 }
 
-function deckPadLeds(scenes: Led[], surface: PadSurface, deck: DeckKnobs): Led[] {
-  const heard = surface.deckGesture ?? surface.deckLatchedGesture ?? null;
+function deckPadLeds(scenes: Led[], deck: DeckKnobs): Led[] {
   const focus = DECK_GROUPS[deck.focus] ?? "rpt";
   const hue = GROUP_PAD.find((pad) => pad.id === focus)?.hue ?? 3;
   const cell = deck.cells[DECK_GROUPS.indexOf(focus)] ?? { x: 0, y: 0 };
@@ -181,14 +180,8 @@ function deckPadLeds(scenes: Led[], surface: PadSurface, deck: DeckKnobs): Led[]
     }
     const field = fieldAt(index);
     if (!field) continue;
-    const amount = 0.05 + 0.95 * (field.x / 5 + field.y / 3) / 2;
-    const playing = heard === focus && field.x === cell.x && field.y === cell.y;
-    scenes[index] = {
-      family: "yellow",
-      color: shadeColor(hue, amount),
-      blink: playing,
-      blinkTo: playing ? LED.white : undefined,
-    };
+    const active = field.x === cell.x && field.y === cell.y;
+    scenes[index] = { family: "yellow", color: active ? hue : offColor(hue), blink: false };
   }
   return scenes;
 }

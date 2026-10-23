@@ -77,14 +77,18 @@ export interface DeckKnobs {
 /** Sixteenth, eighth, quarter, half, whole, two bars. Left of the field is the short one. */
 export const DIV_BEATS = [0.125, 0.25, 0.5, 1, 2, 4] as const;
 export const DIV_LABEL = ["1/32", "1/16", "1/8", "1/4", "1/2", "1/1"] as const;
+/** Cell text. The column fits three characters, so 1/32 and 1/16 drop the leading 1. */
+const DIV_SHORT = ["/32", "/16", "1/8", "1/4", "1/2", "1/1"] as const;
 /** Shortest brake first. Index 4 is one beat, the old factory stop. */
 export const BRAKE_BEATS = [0.0625, 0.125, 0.25, 0.5, 1, 2] as const;
 export const BRAKE_LABEL = ["1/16", "1/8", "1/4", "1/2", "1/1", "2/1"] as const;
+const BRAKE_SHORT = ["/16", "1/8", "1/4", "1/2", "1/1", "2/1"] as const;
 /** Share of the scratch window. Index 4 is the old quarter-window throw. */
 export const THROW_FRAC = [0.05, 0.08, 0.12, 0.18, 0.25, 1] as const;
 export const PITCH_RATE = [0.5, 0.75, 1, 1.5, 2, 4] as const;
 const LEN_STEPS = [1, 2, 4, 8, 12, 16] as const;
 export const QUANT_LABEL = ["NOW", "DIV", "BEAT", "BAR"] as const;
+const QUANT_SHORT = ["NOW", "DIV", "BEA", "BAR"] as const;
 
 const FACTORY_CELLS: readonly DeckCell[] = [
   { x: 2, y: 0 },
@@ -108,19 +112,31 @@ export type DeckSlot = DeckKnobId | "row" | "rate" | "open";
 const SLOT_IDS: readonly DeckSlot[] = ["div", "len", "depth", "brake", "vary", "quant", "duty", "ramp", "row", "rate", "open"];
 
 /**
- * Knobs this group shows, left to right, depth excluded. Depth is always the
- * rightmost encoder. `row` is the field's Y. Pitch rate and throw length are
- * their own columns, so they do not move the repeat grain.
+ * Knobs left of the fixed trio. The field column — a division, a window, a
+ * throw or a tape speed — sits on one encoder, quant beside it, depth last.
+ * Stop ignores the grid, so its quant column stays empty.
  */
 const GROUP_SLOTS: Record<DeckGroup, readonly DeckSlot[]> = {
-  rpt: ["div", "row", "quant"],
-  lop: ["len", "row", "quant"],
-  glc: ["div", "row", "len", "vary", "duty", "ramp", "quant"],
-  scr: ["brake", "row", "len", "vary", "duty", "ramp", "quant"],
-  gat: ["div", "row", "duty", "quant"],
-  pch: ["rate", "row", "ramp", "quant"],
-  stp: ["brake", "row"],
-  thr: ["open", "row", "quant"],
+  rpt: ["row"],
+  lop: ["row"],
+  glc: ["row", "len", "vary", "duty", "ramp"],
+  scr: ["row", "len", "vary", "duty", "ramp"],
+  gat: ["row", "duty"],
+  pch: ["row", "ramp"],
+  stp: ["row"],
+  thr: ["row"],
+};
+
+/** The X column. It is a division on every group except pitch, where it is tape speed. */
+const COLUMN_SLOT: Record<DeckGroup, DeckSlot> = {
+  rpt: "div",
+  lop: "len",
+  glc: "div",
+  scr: "brake",
+  gat: "div",
+  pch: "rate",
+  stp: "brake",
+  thr: "open",
 };
 
 /** Short name under the row knob. The value itself is the variant name. */
@@ -142,14 +158,26 @@ export function rowKnobName(group: DeckGroup): string {
   }
 }
 
+/** Three characters, the width of one encoder cell. */
 const ROW_TEXT: Record<DeckGroup, readonly string[]> = {
-  rpt: ["RPT", "JUMP", "REV", "PONG"],
-  lop: ["FWD", "REV", "PONG", "STEP"],
-  glc: ["SHUF", "ORD", "PONG", "FRZ"],
+  rpt: ["RPT", "JMP", "REV", "PNG"],
+  lop: ["FWD", "REV", "PNG", "STP"],
+  glc: ["SHF", "ORD", "PNG", "FRZ"],
   scr: ["BAB", "TEA", "FLA", "ORB"],
-  gat: ["HALF", "NARR", "MUTE", "DROP"],
-  pch: ["HOLD", "RISE", "FALL", "WOB"],
-  stp: ["STOP", "SPIN", "BACK", "BNCE"],
+  gat: ["HLF", "NAR", "MUT", "DRP"],
+  pch: ["HLD", "RIS", "FAL", "WOB"],
+  stp: ["STP", "SPN", "BCK", "BNC"],
+  thr: ["SFT", "EVN", "TAL", "HOT"],
+};
+
+const ROW_WORD: Record<DeckGroup, readonly string[]> = {
+  rpt: ["REPEAT", "JUMP", "REVERSE", "PONG"],
+  lop: ["FORWARD", "REVERSE", "PONG", "STEP"],
+  glc: ["SHUFFLE", "ORDER", "PONG", "FREEZE"],
+  scr: ["BABY", "TEAR", "FLARE", "ORBIT"],
+  gat: ["HALF", "NARROW", "MUTE", "DROP"],
+  pch: ["HOLD", "RISE", "FALL", "WOBBLE"],
+  stp: ["STOP", "SPIN", "BACK", "BOUNCE"],
   thr: ["SOFT", "EVEN", "TAIL", "HOT"],
 };
 
@@ -160,6 +188,23 @@ export function rowValueLabel(group: DeckGroup, y: number): string {
   return ROW_TEXT[group][pick(y, 4)] ?? "RPT";
 }
 
+/** Spoken row name for the header. The cell uses {@link rowValueLabel}. */
+export function rowValueWord(group: DeckGroup, y: number): string {
+  return ROW_WORD[group][pick(y, 4)] ?? "REPEAT";
+}
+
+export function divShort(index: number): string {
+  return DIV_SHORT[pick(index, DIV_SHORT.length)] ?? "1/8";
+}
+
+export function brakeShort(index: number): string {
+  return BRAKE_SHORT[pick(index, BRAKE_SHORT.length)] ?? "1/1";
+}
+
+export function quantShort(index: number): string {
+  return QUANT_SHORT[pick(index, QUANT_SHORT.length)] ?? "BAR";
+}
+
 export function isDeckSlot(id: string): id is DeckSlot {
   return (SLOT_IDS as readonly string[]).includes(id);
 }
@@ -168,16 +213,20 @@ export function focusedGroup(deck: DeckKnobs): DeckGroup {
   return DECK_GROUPS[pick(deck.focus, DECK_GROUPS.length)] ?? "rpt";
 }
 
-/** Eight encoder columns. Depth stays in the last one. Null is an empty encoder. */
+/** Eight encoder columns. Division, quant and depth stay on the right. Null is an empty encoder. */
 export function deckSlots(group: DeckGroup, knobs: DeckKnobs): (DeckSlot | null)[] {
   const left = [...GROUP_SLOTS[group]];
-  const quantIsDiv = left.includes("quant") && pick(knobs.quant, 4) === 1;
-  const columnIsDiv = ownsDiv(group) || group === "pch" || group === "thr";
-  if (quantIsDiv && !columnIsDiv && !left.includes("div") && left.length < 7) left.push("div");
+  const column = COLUMN_SLOT[group];
+  const usesQuant = group !== "stp";
+  const quantIsDiv = usesQuant && pick(knobs.quant, 4) === 1;
+  const columnIsDiv = column === "div" || column === "rate" || column === "open";
+  if (quantIsDiv && !columnIsDiv && !left.includes("div") && left.length < 5) left.push("div");
   const slots: (DeckSlot | null)[] = [null, null, null, null, null, null, null, null];
   left.forEach((id, index) => {
-    if (index < 7) slots[index] = id;
+    if (index < 5) slots[index] = id;
   });
+  slots[5] = column;
+  if (usesQuant) slots[6] = "quant";
   slots[7] = "depth";
   return slots;
 }
@@ -942,9 +991,17 @@ export function divLabel(knobs: DeckKnobs): string {
   return DIV_LABEL[pick(knobs.div, DIV_LABEL.length)];
 }
 
-export function lenLabel(knobs: DeckKnobs, barBeats: number): string {
+function lenSixteenths(knobs: DeckKnobs, barBeats: number): number {
   const sixteenths = Math.max(1, Math.round(barBeats) * 4);
   const unit = Math.max(0, Math.min(1, knobs.len));
-  const n = 1 + Math.min(sixteenths - 1, Math.floor(unit * sixteenths));
-  return `${n}/16`;
+  return 1 + Math.min(sixteenths - 1, Math.floor(unit * sixteenths));
+}
+
+export function lenLabel(knobs: DeckKnobs, barBeats: number): string {
+  return `${lenSixteenths(knobs, barBeats)}/16`;
+}
+
+/** Sixteenth count alone. `12/16` does not fit the cell. */
+export function lenShort(knobs: DeckKnobs, barBeats: number): string {
+  return String(lenSixteenths(knobs, barBeats));
 }
