@@ -991,17 +991,27 @@ export function divLabel(knobs: DeckKnobs): string {
   return DIV_LABEL[pick(knobs.div, DIV_LABEL.length)];
 }
 
-function lenSixteenths(knobs: DeckKnobs, barBeats: number): number {
+/** Sixteenths the length knob stands for. The cell shows this count. */
+export function lenCount(knobs: DeckKnobs, barBeats: number): number {
   const sixteenths = Math.max(1, Math.round(barBeats) * 4);
   const unit = Math.max(0, Math.min(1, knobs.len));
   return 1 + Math.min(sixteenths - 1, Math.floor(unit * sixteenths));
 }
 
-export function lenLabel(knobs: DeckKnobs, barBeats: number): string {
-  return `${lenSixteenths(knobs, barBeats)}/16`;
+function gcd(a: number, b: number): number {
+  let x = Math.abs(a);
+  let y = Math.abs(b);
+  while (y) {
+    const next = x % y;
+    x = y;
+    y = next;
+  }
+  return x || 1;
 }
 
-/** Sixteenth count alone. `12/16` does not fit the cell. */
-export function lenShort(knobs: DeckKnobs, barBeats: number): string {
-  return String(lenSixteenths(knobs, barBeats));
+/** Header form. Two sixteenths read as `1/8`, not `2/16`. */
+export function lenLabel(knobs: DeckKnobs, barBeats: number): string {
+  const count = lenCount(knobs, barBeats);
+  const divisor = gcd(count, 16);
+  return `${count / divisor}/${16 / divisor}`;
 }

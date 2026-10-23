@@ -355,9 +355,10 @@ function paintScreen(): void {
   }
   for (const digit of screen.digits) {
     const color = digit.invert ? 0 : 1;
-    plotAmount(digit.cell * PARAM_COL_W, PARAM_COL_W, DIGIT_Y, digit.amount, (x, y) => {
+    const plot = (x: number, y: number) => {
       host.set_pixel?.(x, y, color);
-    });
+    };
+    plotAmount(digit.cell * PARAM_COL_W, PARAM_COL_W, DIGIT_Y, digit.amount, plot);
   }
   for (const label of screen.labels) {
     const width = host.text_width?.(label.text) ?? label.text.length * CHAR_W;

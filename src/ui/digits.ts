@@ -47,7 +47,15 @@ export interface WideAmount {
   negative: boolean;
 }
 
-export type DisplayAmount = BigAmount | WideAmount;
+/** Division. The cell prints both numbers in the ordinary small face, one floor each. */
+export interface FractionAmount {
+  kind: "fraction";
+  num: number;
+  den: number;
+  triplet: boolean;
+}
+
+export type DisplayAmount = BigAmount | WideAmount | FractionAmount;
 
 /** The three fields a value cell needs from a knob. */
 interface AmountRange {
@@ -65,7 +73,7 @@ export function naturalAmount(value: number, binding: AmountRange): number {
  * Big digits for 0..99; otherwise small-font text (true natural value, no scaling).
  * Bipolar keeps abs digits/text and a minus flag above the glyph.
  */
-export function displayAmount(value: number, binding: AmountRange): DisplayAmount {
+export function displayAmount(value: number, binding: AmountRange): BigAmount | WideAmount {
   const bipolar = binding.min < 0 && binding.max > 0;
   const negative = bipolar && value < 0;
   const natural = Math.abs(naturalAmount(value, binding));
@@ -104,6 +112,24 @@ export function plotAmount(
   }
   plotDigit(amount.n % 10, x, digitY, plot);
   if (amount.negative) plotMinus(cellLeft, cellW, digitY, plot);
+}
+
+/** `1/16` and `1/16T`. Anything else is not a division label. */
+export function fractionFromLabel(text: string): FractionAmount | null {
+  const match = /^(\d+)\/(\d+)(T)?$/.exec(text);
+  if (!match) return null;
+  const num = Number(match[1]);
+  const den = Number(match[2]);
+  if (num > 99 || den > 99) return null;
+  return { kind: "fraction", num, den, triplet: match[3] === "T" };
+}
+
+/** `1/x` is the denominator alone. The title keeps the full fraction, including a triplet. */
+export function divisionCell(text: string): BigAmount | FractionAmount | null {
+  const fraction = fractionFromLabel(text);
+  if (!fraction) return null;
+  if (fraction.num === 1) return { kind: "big", n: fraction.den, negative: false };
+  return fraction;
 }
 
 /** Short dash centered above the digit block. */

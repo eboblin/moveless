@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { clone } from "../src/core/clone.ts";
-import { SIXTEENTH_TICKS, unitForIndex } from "../src/core/clock.ts";
+import { CHORD_RATES, RATES, SIXTEENTH_TICKS, unitForIndex } from "../src/core/clock.ts";
+import { BRAKE_LABEL, DIV_LABEL } from "../src/core/deck.ts";
 import { defaultProject } from "../src/core/defaults.ts";
 import { modulated } from "../src/core/modulate.ts";
 import { applyMorph } from "../src/core/morph.ts";
@@ -10,7 +11,7 @@ import { createSet, journalPadIds, journalPageCount, launchScene, record } from 
 import { generatePhrase } from "../src/core/phrase.ts";
 import { bindingFor, lanePages, pageCount, pageGroup, pageGroupColor, pagesFor, scopeIncludesPage } from "../src/core/pages.ts";
 import { LED, advancePulseClock, blinkHalfMs, directionLit, dropLed, ledColorAt, menuLed, modeButtonLed, offColor, offerLed, padBlinkSteps, padLeds, padPackets, PLAY_LED_ON, playLed, PULSE_CLOCK_IDLE, shadeColor, stepLed, stepLeds, takeLeds, trackLeds } from "../src/ui/leds.ts";
-import { DIGIT_H, displayAmount, plotAmount } from "../src/ui/digits.ts";
+import { DIGIT_H, displayAmount, fractionFromLabel, plotAmount } from "../src/ui/digits.ts";
 import { lettersWidth, plotLetters } from "../src/ui/letters.ts";
 import { CHAR_W, DIGIT_Y, FONT_H, HEADER_H, HEIGHT, NAME_Y, PAGE_TITLE_BAND_H, PAGE_TITLE_PAD, PAGE_TITLE_Y, PAGER_Y, PARAM_COL_W, PARAM_H, SEP_Y, TITLE_Y, VALUE_Y, VIZ_H, WIDTH, loadWidth, pageTitleTravel, pixel, renderScreen, type Screen } from "../src/ui/screen.ts";
 import { WAVE_HOP, emptyWave, type WaveTape } from "../src/ui/wave.ts";
@@ -471,10 +472,9 @@ describe("surface", () => {
     assert.ok(ret);
     assert.equal(ret.from, -0.25);
     const early = renderScreen(state.project, state.ui, 0, false, ret.untilMs - 500);
-    assert.equal(early.digits[0]?.amount.n, 25);
-    assert.equal(early.digits[0]?.amount.negative, true);
+    assert.deepEqual(early.digits[0]?.amount, { kind: "big", n: 25, negative: true });
     const done = renderScreen(state.project, state.ui, 0, false, ret.untilMs);
-    assert.equal(done.digits[0]?.amount.n, 0);
+    assert.deepEqual(done.digits[0]?.amount, { kind: "big", n: 0, negative: false });
     state = reduce(state, { kind: "note", data1: 1, data2: 127 });
     assert.deepEqual(state.ui.macroReturns, []);
   });
@@ -1373,6 +1373,43 @@ describe("surface", () => {
     }, 0);
     assert.ok(mode.labels.some((label) => label.y === VALUE_Y && label.text === "D" && label.cell === 2));
     assert.ok(mode.labels.some((label) => label.y === TITLE_Y && label.text === "DORIAN"));
+  });
+
+  it("draws a 1/x division as one big denominator", () => {
+    for (const label of [...RATES.map((rate) => rate.id), ...CHORD_RATES.map((rate) => rate.id), ...DIV_LABEL, ...BRAKE_LABEL]) {
+      const amount = fractionFromLabel(label);
+      assert.ok(amount, label);
+      if (amount.num === 1) assert.ok(amount.den <= 99, label);
+    }
+
+    const big = (screen: Screen, cell: number) => screen.digits.find((digit) => digit.cell === cell)?.amount;
+    const project = defaultProject();
+    const kick = renderScreen(project, { ...defaultUi(), context: "kick", page: 2 }, 0);
+    assert.deepEqual(big(kick, 4), { kind: "big", n: 8, negative: false });
+    project.working.kick.ratchet.rate = modulated(unitForIndex(1, 6));
+    const sixteenth = renderScreen(project, { ...defaultUi(), context: "kick", page: 2 }, 0);
+    assert.deepEqual(big(sixteenth, 4), { kind: "big", n: 16, negative: false });
+    project.working.kick.ratchet.rate = modulated(unitForIndex(2, 6));
+    const triplet = renderScreen(project, { ...defaultUi(), context: "kick", page: 2, focus: { label: "RATE V", path: "ratchet.rate.value", generator: "ratchet.rate", showPattern: false, held: true, untilTick: 0, untilMs: 0 } }, 0);
+    assert.deepEqual(big(triplet, 4), { kind: "big", n: 16, negative: false });
+    assert.equal(triplet.labels.some((label) => label.cell === 4 && label.text.includes("T")), false);
+    assert.equal(triplet.header, "1/16T");
+
+    const chords = defaultProject();
+    const block = renderScreen(
+      { ...chords, working: { ...chords.working, chords: { ...chords.working.chords, rate: modulated(0) } } },
+      { ...defaultUi(), context: "chords", page: 1, focus: { label: "RATE V", path: "rate.value", generator: "rate.value", showPattern: false, held: true, untilTick: 0, untilMs: 0 } },
+      0,
+    );
+    assert.equal(block.header, "BLOCK");
+    assert.equal(block.labels.some((label) => label.text === "BLK" && label.cell === 0 && label.y === VALUE_Y), true);
+    assert.equal(block.digits.some((digit) => digit.cell === 0), false);
+    const arp = renderScreen(
+      { ...chords, working: { ...chords.working, chords: { ...chords.working.chords, rate: modulated(0.01) } } },
+      { ...defaultUi(), context: "chords", page: 1 },
+      0,
+    );
+    assert.deepEqual(big(arp, 0), { kind: "big", n: 1, negative: false });
   });
 
   it("shows a modulated generator while its knob is held and the lane phrase after release", () => {
@@ -2523,7 +2560,29 @@ describe("deck screen", () => {
     assert.equal(renderScreen(quant.project, quant.ui, 0).header, "quantize: bar");
     assert.equal(screen.labels.some((label) => label.text === "ROL"), false);
     assert.equal(screen.labels.some((label) => label.y >= HEADER_H && label.y < SEP_Y), false);
-    assert.equal(screen.labels.some((label) => label.text === "1/8"), true);
+    assert.equal(screen.labels.some((label) => label.text === "1/8" || label.text === "/16" || label.text === "/32"), false);
+    assert.deepEqual(screen.digits.find((digit) => digit.cell === 5)?.amount, { kind: "big", n: 8, negative: false });
+    assert.equal(screen.labels.some((label) => label.text === "BEA"), true);
+    const tim = renderScreen({ ...open.project, deck: { ...open.project.deck, focus: 6 } }, open.ui, 0);
+    assert.deepEqual(tim.digits.find((digit) => digit.cell === 5)?.amount, { kind: "big", n: 1, negative: false });
+    const opn = renderScreen({ ...open.project, deck: { ...open.project.deck, focus: 7 } }, open.ui, 0);
+    assert.deepEqual(opn.digits.find((digit) => digit.cell === 5)?.amount, { kind: "big", n: 4, negative: false });
+    const two = renderScreen({ ...open.project, deck: { ...open.project.deck, focus: 6, brake: 5 } }, open.ui, 0);
+    assert.deepEqual(
+      [two.labels.find((label) => label.cell === 5 && label.y === DIGIT_Y)?.text, two.labels.find((label) => label.cell === 5 && label.y === DIGIT_Y + FONT_H + 1)?.text],
+      ["2", "1"],
+    );
+    const pitch = {
+      ...open.project,
+      deck: {
+        ...open.project.deck,
+        focus: 5,
+        cells: open.project.deck.cells.map((cell, index) => (index === 5 ? { ...cell, x: 0 } : cell)),
+      },
+    };
+    const speed = renderScreen(pitch, open.ui, 0);
+    assert.equal(speed.labels.some((label) => label.text === "1/2" && label.cell === 5), true);
+    assert.equal(speed.digits.some((digit) => digit.cell === 5), false);
     assert.ok(vizLit(screen) > 40);
   });
 
@@ -2576,7 +2635,8 @@ describe("deck screen", () => {
     assert.equal(corner.project.deck.div, 5);
     assert.equal(corner.project.deck.cells[0]?.y, 3);
     const cornerScreen = renderScreen(corner.project, corner.ui, 0);
-    assert.equal(cornerScreen.labels.some((label) => label.text === "1/1"), true);
+    assert.deepEqual(cornerScreen.digits.find((digit) => digit.cell === 5)?.amount, { kind: "big", n: 1, negative: false });
+    assert.equal(cornerScreen.labels.some((label) => label.text === "1/1"), false);
     assert.equal(cornerScreen.labels.some((label) => label.text === "PNG"), true);
     assert.equal(namedCell(corner, "QNT"), 6);
     assert.equal(namedCell(corner, "DEP"), 7);
@@ -2597,6 +2657,22 @@ describe("deck screen", () => {
     const slowScreen = renderScreen(slow.project, slow.ui, 0);
     assert.equal(slowScreen.labels.some((label) => label.text === "1/2"), true);
     assert.equal(slowScreen.labels.some((label) => label.text === "RIS"), true);
+    const loop = reduce(open, { kind: "note", data1: 84, data2: 127 });
+    const loopScreen = renderScreen(loop.project, loop.ui, 0);
+    assert.deepEqual(loopScreen.digits.find((digit) => digit.cell === 5)?.amount, { kind: "big", n: 8, negative: false });
+    assert.equal(loopScreen.labels.some((label) => label.text.includes("/16")), false);
+    const held = renderScreen(loop.project, {
+      ...loop.ui,
+      focus: { label: "LEN", path: "deck.len", generator: null, showPattern: false, held: true, untilTick: 0, untilMs: 0 },
+    }, 0);
+    assert.equal(held.header, "length: 1/2");
+    const eighth = renderScreen(
+      { ...loop.project, deck: { ...loop.project.deck, len: 1 / 16 } },
+      { ...loop.ui, focus: { label: "LEN", path: "deck.len", generator: null, showPattern: false, held: true, untilTick: 0, untilMs: 0 } },
+      0,
+    );
+    assert.equal(eighth.header, "length: 1/8");
+    assert.deepEqual(eighth.digits.find((digit) => digit.cell === 5)?.amount, { kind: "big", n: 2, negative: false });
     assert.equal(namedCell(slow, "QNT"), 6);
     assert.equal(namedCell(slow, "DEP"), 7);
     const field = padLeds(scratch.project, "journal", scratch.ui);

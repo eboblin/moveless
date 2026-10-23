@@ -1,4 +1,4 @@
-import { GROUP_PAD, DIV_LABEL, BRAKE_LABEL, QUANT_LABEL, RATE_LABEL, assembleDeck, behaviorOf, brakeShort, deckPicture, divShort, focusedGroup, isDeckGroup, lenLabel, lenShort, quantShort, readDeckSlot, rowValueLabel, rowValueWord, type DeckPicture } from "../core/deck.ts";
+import { GROUP_PAD, DIV_LABEL, BRAKE_LABEL, QUANT_LABEL, RATE_LABEL, assembleDeck, behaviorOf, brakeShort, deckPicture, divShort, focusedGroup, isDeckGroup, lenCount, lenLabel, quantShort, readDeckSlot, rowValueLabel, rowValueWord, type DeckPicture } from "../core/deck.ts";
 import { laneHeard } from "../core/journal.ts";
 import { SIXTEENTH_TICKS, countFromUnit, rateFromUnit, tickToSample } from "../core/clock.ts";
 import { phraseStepsOf } from "../core/events.ts";
@@ -6,7 +6,7 @@ import { chordSymbol, degreeNumeral, pitchClassName, scaleShort, scaleTitle } fr
 import { chordFigure, generatePhrase, laneSteps, octaveNumber, restingChordToneLabel, restingPitchLabel, restingSliceLabel } from "../core/phrase.ts";
 import { evalModulated } from "../core/modulate.ts";
 import { RANDOMIZE_DEPTHS, RANDOMIZE_INTENSITIES, RANDOMIZE_SCOPES, TRANSITIONS, WANDERS, isPitched, isVoice, LANES, LANE_CODE, type RandomizeDepth, type RandomizeIntensity, type RandomizeScope, type ContextId, type HarmonicEvent, type LaneId, type Phrase, type Project, type TimedEvent } from "../core/types.ts";
-import { DIGIT_H, displayAmount, type BigAmount, type DisplayAmount } from "./digits.ts";
+import { DIGIT_H, displayAmount, divisionCell, type BigAmount, type DisplayAmount } from "./digits.ts";
 import { readControl } from "./controls.ts";
 import { bindingFor, livePage, pageTitle, pagesFor, type Binding, type Page } from "../core/pages.ts";
 import { focusVisible, macroReturnValue, PAGE_TITLE_SLIDE_MS, screenPlace, type CaptureLine, type RandomizeLine, type UiState } from "./state.ts";
@@ -49,7 +49,7 @@ export interface Label {
   minus?: boolean;
 }
 
-/** Big 0..99 value drawn by the host after cell invert. */
+/** Big 0..99 value, or a stacked division, drawn by the host after cell invert. */
 export interface DigitCell {
   cell: number;
   amount: BigAmount;
@@ -953,10 +953,21 @@ function knobAmount(project: Project, context: ContextId, binding: Binding, ui: 
       return { kind: "wide", text: scaleShort(project.global.scale), negative: false };
     case "count":
       return { kind: "big", n: countFromUnit(readControl(project, context, binding.path)), negative: false };
+    case "division": {
+      const unit = readControl(project, context, binding.path);
+      if (context === "chords" && unit <= 0) return { kind: "wide", text: "BLK", negative: false };
+      const label = context === "chords" ? chordFigure(unit).label : rateFromUnit(unit).id;
+      return divisionCell(label) ?? { kind: "wide", text: label.slice(0, 3), negative: false };
+    }
     default:
       break;
   }
   if (binding.store === "deck") {
+    if (binding.path === "deck.len") {
+      return { kind: "big", n: lenCount(project.deck, project.global.bar), negative: false };
+    }
+    const fraction = deckFraction(project, binding.path);
+    if (fraction) return fraction;
     const text = deckKnobText(project, binding.path);
     if (text) return { kind: "wide", text, negative: false };
   }
@@ -1035,14 +1046,32 @@ function deckKnobWord(project: Project, path: string): string | null {
   }
 }
 
+function labelAt(index: number, labels: readonly string[]): string | null {
+  if (!Number.isFinite(index)) return labels[0] ?? null;
+  return labels[Math.max(0, Math.min(labels.length - 1, Math.round(index)))] ?? null;
+}
+
+/** DIV, OPN and TIM. OPN reads the same division table as DIV. */
+function deckFraction(project: Project, path: string): DisplayAmount | null {
+  const deck = project.deck;
+  switch (path) {
+    case "deck.div":
+      return divisionCell(labelAt(deck.div, DIV_LABEL) ?? "");
+    case "deck.brake":
+      return divisionCell(labelAt(deck.brake, BRAKE_LABEL) ?? "");
+    case "deck.open":
+      return divisionCell(labelAt(readDeckSlot(deck, "open"), DIV_LABEL) ?? "");
+    default:
+      return null;
+  }
+}
+
 function deckKnobText(project: Project, path: string): string | null {
   const deck = project.deck;
   const group = focusedGroup(deck);
   switch (path) {
     case "deck.div":
       return divShort(deck.div);
-    case "deck.len":
-      return lenShort(deck, project.global.bar);
     case "deck.brake":
       return brakeShort(deck.brake);
     case "deck.quant":
@@ -1095,7 +1124,12 @@ function drawLabels(
     const name = binding.short;
     const lit = focus === binding.label;
     const amount = knobAmount(project, context, binding, ui, now);
-    if (amount.kind === "wide") {
+    if (amount.kind === "fraction") {
+      const num = String(amount.num);
+      const den = `${amount.den}${amount.triplet ? "T" : ""}`;
+      labels.push({ x: cellTextX(index, num), y: DIGIT_Y, text: num, invert: lit, cell: index });
+      labels.push({ x: cellTextX(index, den), y: DIGIT_Y + FONT_H + 1, text: den, invert: lit, cell: index });
+    } else if (amount.kind === "wide") {
       labels.push({
         x: cellTextX(index, amount.text),
         y: VALUE_Y,
