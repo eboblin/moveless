@@ -134,10 +134,15 @@ function flip(pixels: Uint8Array, stride: number, x: number, y: number): void {
   pixels[index] = pixels[index] ? 0 : 1;
 }
 
+/** Square root against full scale, so a body stays visible and a hit keeps its height as it scrolls. */
+function waveLevel(peak: number): number {
+  if (!(peak > 0)) return 0;
+  return Math.min(1, Math.sqrt(peak));
+}
+
 /**
  * Stereo strip from the center. Left grows up, right grows down.
- * Square-root against the window peak keeps a quiet bar legible and leaves
- * the body of a note standing next to a hit.
+ * Height is the square root of the peak on a fixed full scale.
  */
 export function drawWaveform(pixels: Uint8Array, stride: number, tape: WaveTape, view: WaveView): void {
   if (view.w <= 0 || view.h <= 0 || !(view.span > 0)) return;
@@ -148,20 +153,12 @@ export function drawWaveform(pixels: Uint8Array, stride: number, tape: WaveTape,
   const downRoom = Math.max(1, y1 - mid);
   const column = view.span / view.w;
   const origin = view.x + (view.w - 1) / 2;
-  const cols: WavePeak[] = [];
-  let peak = 0;
   for (let i = 0; i < view.w; i++) {
     const sample = view.head + (view.x + i - origin) * column;
     const got = wavePeak(tape, sample - column * 0.5, sample + column * 0.5, view.head);
-    cols.push(got);
-    if (got.left > peak) peak = got.left;
-    if (got.right > peak) peak = got.right;
-  }
-  const scale = Math.sqrt(Math.max(peak, 1e-4));
-  for (let i = 0; i < view.w; i++) {
     const x = view.x + i;
-    const up = Math.round((Math.sqrt(cols[i].left) / scale) * gain * upRoom);
-    const down = Math.round((Math.sqrt(cols[i].right) / scale) * gain * downRoom);
+    const up = Math.round(waveLevel(got.left) * gain * upRoom);
+    const down = Math.round(waveLevel(got.right) * gain * downRoom);
     for (let y = 1; y <= up; y++) plot(pixels, stride, x, mid - y, 1);
     for (let y = 1; y <= down; y++) plot(pixels, stride, x, mid + y, 1);
     plot(pixels, stride, x, mid, 1);

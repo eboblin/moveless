@@ -95,6 +95,27 @@ describe("waveform", () => {
     assert.ok(moved > 10);
   });
 
+  it("keeps a column the same height when a louder hit shares the window", () => {
+    const quiet = emptyWave();
+    for (let hop = 0; hop < 4; hop++) quiet.left.set(17920 + hop * 128, 0.25);
+    const loud = emptyWave();
+    for (let hop = 0; hop < 4; hop++) {
+      loud.left.set(17920 + hop * 128, 0.25);
+      loud.left.set(40192 + hop * 128, 1);
+    }
+    const mid = Math.floor(31 / 2);
+    const height = (pixels: Uint8Array, x: number) => {
+      let n = 0;
+      for (let y = 0; y < mid; y++) if (lit(pixels, x, y)) n++;
+      return n;
+    };
+    const alone = pixelsOf(quiet, 0);
+    const shared = pixelsOf(loud, 0);
+    assert.ok(height(alone, 90) >= 3);
+    assert.equal(height(shared, 90), height(alone, 90));
+    assert.ok(height(shared, 122) > height(shared, 90));
+  });
+
   it("folds the future into the phrase and leaves an empty ring silent", () => {
     const tape = emptyWave(128, 1024);
     tape.left.set(0, 1);
