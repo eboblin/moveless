@@ -1769,6 +1769,41 @@ describe("surface", () => {
     assert.equal(held.ui.page, mixer);
   });
 
+  it("clears a track bookmark with Delete and leaves the screen", () => {
+    let state = shiftTrack(session(), 1);
+    state = reduce(state, { kind: "note", data1: 20, data2: 127 });
+    state = reduce(state, { kind: "note", data1: 20, data2: 0 });
+    state = shiftTrack(state, 0);
+    assert.deepEqual(state.project.bookmarks[0], { context: "bass", page: 0 });
+    assert.deepEqual(state.project.bookmarks[1], { context: "kick", page: 0 });
+
+    state = reduce(state, { kind: "cc", data1: 119, data2: 127 });
+    state = reduce(state, { kind: "cc", data1: 40, data2: 127 });
+    state = reduce(state, { kind: "cc", data1: 40, data2: 0 });
+    assert.equal(state.project.bookmarks[0], null);
+    assert.deepEqual(state.project.bookmarks[1], { context: "kick", page: 0 });
+    assert.equal(state.ui.context, "bass");
+    assert.equal(state.ui.page, 0);
+    assert.equal(trackLeds(state.project, state.ui.context, state.ui.page)[0].color, 0);
+    assert.equal(state.ui.trackLatch, null);
+    state = reduce(state, { kind: "cc", data1: 119, data2: 0 });
+
+    state = tapTrack(state, 1);
+    assert.equal(state.ui.context, "kick");
+    assert.equal(state.ui.trackLatch, 1);
+    state = reduce(state, { kind: "cc", data1: 119, data2: 127 });
+    state = reduce(state, { kind: "cc", data1: 41, data2: 127 });
+    state = reduce(state, { kind: "cc", data1: 41, data2: 0 });
+    assert.equal(state.project.bookmarks[1], null);
+    assert.equal(state.ui.context, "kick");
+    assert.equal(state.ui.page, 0);
+    assert.equal(state.ui.trackLatch, null);
+    state = reduce(state, { kind: "cc", data1: 119, data2: 0 });
+    state = tapTrack(state, 1);
+    assert.equal(state.ui.context, "kick");
+    assert.equal(state.ui.page, 0);
+  });
+
   it("writes the encoder while Capture is held", () => {
     let state = session();
     const before = clone(state.project.working.kick);

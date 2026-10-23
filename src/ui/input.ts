@@ -563,6 +563,15 @@ function onCopy(session: Session, press: boolean): Session {
   };
 }
 
+/** Delete clears the stored page. The screen stays where it is. */
+function clearBookmark(session: Session, index: number): Session {
+  const bookmarks = session.project.bookmarks.slice();
+  bookmarks[index] = null;
+  let ui = session.ui;
+  if (ui.trackLatch === index) ui = { ...ui, trackLatch: null, trackOrigin: null };
+  return { ...session, project: { ...session.project, bookmarks }, ui };
+}
+
 /** Shift stores the screen that is showing, including a purple-lane page under a held step. */
 function storeBookmark(session: Session, index: number): Session {
   const place = screenPlace(session.ui);
@@ -597,6 +606,7 @@ export function settleTrackPeek(session: Session, now = Date.now()): Session {
 
 function onTrack(session: Session, index: number, press: boolean): Session {
   if (press) {
+    if (session.ui.deleteHeld) return clearBookmark(session, index);
     if (session.ui.shiftHeld) return storeBookmark(session, index);
     const trackDownTick = session.ui.trackDownTick.slice();
     const trackDownMs = session.ui.trackDownMs.slice();
