@@ -27,7 +27,7 @@ import { DECK_GROUPS, fieldAt, focusedGroup, groupAt, recallGroup, setGroupCell,
 import { CAPTURE_CC, contextAtStep, DOWN_CC, isLane, JOG_CLICK_CC, LANES, LOOP_CC, MENU_CC, PLAY_CC, RANDOMIZE_DEPTHS, RANDOMIZE_SCOPES, RECORD_CC, TRANSITIONS, UP_CC, WANDERS, type ContextId, type PatternId, type Project } from "../core/types.ts";
 import { resetControl, writeControl } from "./controls.ts";
 import { bindingFor, bindingPaths, deckPage, livePage, pageCount, pageGroup, pageId, pagesFor, scopeIncludesPage } from "../core/pages.ts";
-import { applyBookmark, auxHidesRandomize, FOCUS_HOLD_MS, focusHoldTicks, HOLD_MS, HOLD_TICKS, holdIsShort, MACRO_RETURN_MS, peekKind, RANDOMIZE_HINT_MS, rememberPage, settleRandomize, settleWheel, toggleRandomize, type CaptureLine, type MacroReturn, type Notice, type RandomizeLine, type UiState } from "./state.ts";
+import { applyBookmark, auxHidesRandomize, FOCUS_HOLD_MS, focusHoldTicks, HOLD_MS, HOLD_TICKS, holdIsShort, MACRO_RETURN_MS, patternPadsVisible, RANDOMIZE_HINT_MS, rememberPage, settleRandomize, settleWheel, toggleRandomize, type CaptureLine, type MacroReturn, type Notice, type RandomizeLine, type UiState } from "./state.ts";
 import { journalPageCount } from "../core/journal.ts";
 
 export interface MidiMsg {
@@ -136,7 +136,6 @@ function onPad(session: Session, index: number, press: boolean): Session {
   const second = row === 2;
   const randomize = !auxHidesRandomize(session.ui) && (session.ui.wheelTouch || session.ui.randomizeLatched);
   if (randomize) return onRandomizePad(session, row, col);
-  if (peekKind(session.ui) === "capture") return onCapturePad(session, row, col);
   const holdingAux = session.ui.heldContext === "aux";
   if (!session.ui.heldContext && session.ui.context === "aux" && session.ui.wheelTouch && top) {
     if (col >= pageCount("aux")) return session;
@@ -153,6 +152,10 @@ function onPad(session: Session, index: number, press: boolean): Session {
   }
   if (facePageId(session.ui) === "mixer") return onMutePad(session, index);
   if (facePageId(session.ui) === "deck") return pressDeckPad(session, index);
+  if ((session.ui.captureHeld || session.ui.captureLatched) && patternPadsVisible(session.ui)) {
+    if (row === 0) return onCaptureStrip(session, col);
+    return onScenePad(session, index - 8);
+  }
   return onScenePad(session, index);
 }
 
@@ -248,9 +251,8 @@ function onScenePad(session: Session, index: number): Session {
   return { ...session, project: launchScene(session.project, sceneId, session.tick) };
 }
 
-/** Capture overlay. The bottom row is transition, then Off and wander. The rows above are patterns, shifted up. */
-function onCapturePad(session: Session, row: number, col: number): Session {
-  if (row !== 0) return onScenePad(session, row * 8 + col - 8);
+/** Wander and transition on the bottom row. Pattern pads above are the row that used to sit under them. */
+function onCaptureStrip(session: Session, col: number): Session {
   if (col < TRANSITIONS.length) {
     const transition = TRANSITIONS[col];
     return showCaptureLine(session, { ...session.project, transition }, "transition");

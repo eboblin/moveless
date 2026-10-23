@@ -1925,13 +1925,16 @@ describe("surface", () => {
     state = reduce(state, { kind: "cc", data1: 52, data2: 0 });
     assert.equal(state.ui.captureLatched, true);
     assert.equal(renderScreen(state.project, state.ui, 0).viz, "mixer");
-    assert.equal(padLeds(state.project, state.ui.mode, state.ui)[1].color, LED.yellow);
-    assert.equal(padLeds(state.project, state.ui.mode, state.ui)[0].color, offColor(LED.yellow));
+    const mixPads = padLeds(state.project, state.ui.mode, state.ui);
+    assert.equal(mixPads[0].color, 0);
+    assert.equal(mixPads[1].color, 0);
+    assert.notEqual(mixPads[24].color, 0);
     state = reduce(state, { kind: "note", data1: 16, data2: 127 });
     state = reduce(state, { kind: "note", data1: 16, data2: 0 });
     assert.equal(state.ui.context, "kick");
     assert.equal(renderScreen(state.project, state.ui, 0).viz, "phrase");
     assert.equal(state.ui.captureLatched, true);
+    assert.equal(padLeds(state.project, state.ui.mode, state.ui)[1].color, LED.yellow);
   });
 
   it("restores the factory on the next bare Capture after Delete was chosen", () => {
@@ -2519,7 +2522,7 @@ describe("deck screen", () => {
     assert.equal(renderScreen(mixed.project, mixed.ui, 0).viz, "phrase");
   });
 
-  it("latches a gesture with shift, and capture still wins over the pads", () => {
+  it("latches a gesture with shift, and capture leaves the deck pads alone", () => {
     let state = openDeck(session());
     state = reduce(state, { kind: "cc", data1: 49, data2: 127 });
     state = reduce(state, { kind: "note", data1: 92, data2: 127 });
@@ -2534,8 +2537,10 @@ describe("deck screen", () => {
     assert.equal(again.ui.deckLatchTick, null);
     const captured = reduce(state, { kind: "cc", data1: 52, data2: 127 });
     const pad = reduce(captured, { kind: "note", data1: 92, data2: 127 });
-    assert.equal(pad.ui.deckGesture, null);
+    assert.equal(pad.ui.captureHeld, true);
+    assert.equal(pad.ui.deckGesture, "rpt");
     assert.equal(pad.ui.deckLatchedGesture, "rpt");
+    assert.equal(pad.project.transition, state.project.transition);
     const wheeled = reduce({ ...state, ui: { ...state.ui, wheelTouch: true } }, { kind: "note", data1: 69, data2: 127 });
     assert.equal(wheeled.ui.deckGesture, "thr");
     assert.equal(wheeled.ui.deckLatchedGesture, "rpt");

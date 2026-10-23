@@ -150,10 +150,33 @@ export interface PeekFlags {
   captureLatched?: boolean;
 }
 
-/** Capture is the only latched pad overlay. Mixer and DJ FX are purple-lane pages. */
+/** Capture is latched. The wander strip is drawn only where pattern pads are showing. */
 export function peekKind(ui: PeekFlags): PeekKind | null {
   if (ui.captureHeld || ui.captureLatched) return "capture";
   return null;
+}
+
+/** Scene pads are on screen. The randomize layer, mixer, and DJ FX hide them. */
+export function patternPadsVisible(ui: {
+  context?: string | null;
+  page?: number;
+  heldContext?: string | null;
+  heldPage?: number | null;
+  lanePages?: Partial<Record<ContextId, number>> | null;
+  wheelTouch?: boolean;
+  randomizeLatched?: boolean;
+}): boolean {
+  const context = (ui.context ?? "kick") as ContextId;
+  const page = ui.page ?? 0;
+  const onAux = context === "aux" || ui.heldContext === "aux";
+  if (!onAux && (ui.wheelTouch || ui.randomizeLatched)) return false;
+  if (ui.heldContext === "aux") {
+    const shown = ui.heldPage ?? ui.lanePages?.aux ?? (context === "aux" ? page : 0);
+    const id = pageId("aux", shown);
+    return id !== "mixer" && id !== "deck";
+  }
+  const id = pageId(context, page);
+  return id !== "mixer" && id !== "deck";
 }
 
 /** 300 ms of musical time at the current tempo. */

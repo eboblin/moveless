@@ -18,7 +18,7 @@ import {
 import { livePage, pageCount, pageGroupColor, pageId, scopeIncludesPage } from "../core/pages.ts";
 import { depthTouchesPath } from "../core/randomize.ts";
 import { DECK_GROUPS, GROUP_PAD, fieldAt, groupAt, type DeckKnobs } from "../core/deck.ts";
-import { peekKind } from "./state.ts";
+import { patternPadsVisible, peekKind } from "./state.ts";
 
 export const LED = {
   off: 0,
@@ -139,7 +139,8 @@ export interface PadSurface {
 /**
  * Playing and morph-target pads share one pulse. Target also shades
  * dark→dim→bright by morph progress. An empty journal/set still shows pad 0 as the
- * current working scene. Capture adds Transition and Wander on the bottom row of that list.
+ * current working scene. Where those pads are showing, Capture lifts the first 24 patterns
+ * one row and puts Transition and Wander on the bottom row.
  * Jog touch or a latched jog click shows randomize instead, so the Capture row stays hidden.
  * On the purple lane the jog still draws the page row, and the randomize rows stay off.
  */
@@ -148,17 +149,28 @@ export function padLeds(project: Project, mode: "journal" | "set", surface?: Pad
   const page = surface?.page ?? 0;
   const onAux = context === "aux" || surface?.heldContext === "aux";
   if (!onAux && (surface?.wheelTouch || surface?.randomizeLatched)) return randomizePadLeds(project, context, page);
-  if (peekKind(surface ?? {}) === "capture") return capturePadLeds(project, mode, surface ?? {}, tick);
   const scenes = scenePadLeds(project, mode, tick, surface?.journalPage ?? 0, surface?.copyHeld ?? false);
+  let leds: Led[];
   if (surface?.heldContext) {
     const shown = surface.heldPage ?? surface.lanePages?.[surface.heldContext] ?? (surface.heldContext === context ? page : -1);
-    if (surface.heldContext === "aux") return pageOverlay(auxFaceLeds(project, scenes, shown), "aux", shown, 1);
-    return pageOverlay(scenes, surface.heldContext, shown);
+    leds = surface.heldContext === "aux"
+      ? pageOverlay(auxFaceLeds(project, scenes, shown), "aux", shown, 1)
+      : pageOverlay(scenes, surface.heldContext, shown);
+  } else {
+    const id = pageId(context, page);
+    const face = id === "mixer" ? mutePeekLeds(project) : id === "deck" ? deckPadLeds(scenes, project.deck) : scenes;
+    leds = context === "aux" && surface?.wheelTouch ? pageOverlay(face, "aux", page, 1) : face;
   }
-  const id = pageId(context, page);
-  const face = id === "mixer" ? mutePeekLeds(project) : id === "deck" ? deckPadLeds(scenes, project.deck) : scenes;
-  if (context === "aux" && surface?.wheelTouch) return pageOverlay(face, "aux", page, 1);
-  return face;
+  if (peekKind(surface ?? {}) === "capture" && patternPadsVisible({ ...surface, context, page })) {
+    const lifted = liftPatterns(scenes, project);
+    if (surface?.heldContext) {
+      const shown = surface.heldPage ?? surface.lanePages?.[surface.heldContext] ?? (surface.heldContext === context ? page : -1);
+      return surface.heldContext === "aux" ? pageOverlay(lifted, "aux", shown, 1) : pageOverlay(lifted, surface.heldContext, shown);
+    }
+    if (context === "aux" && surface?.wheelTouch) return pageOverlay(lifted, "aux", page, 1);
+    return lifted;
+  }
+  return leds;
 }
 
 /** Mixer and DJ pads for the purple page under the finger. Other pages keep the scene grid. */
@@ -212,11 +224,10 @@ function mutePeekLeds(project: Project): Led[] {
   return out;
 }
 
-/** Bottom row is transition, then wander with Off first. The other three rows are the first 24 patterns, one row higher than usual. */
-function capturePadLeds(project: Project, mode: "journal" | "set", surface: PadSurface, tick: number): Led[] {
-  const scenes = scenePadLeds(project, mode, tick, surface.journalPage ?? 0, surface.copyHeld ?? false);
+/** First 24 patterns move up one row. The bottom row is transition, then wander with Off first. */
+function liftPatterns(scenes: Led[], project: Project): Led[] {
   const out = Array.from({ length: 32 }, () => led("off", false));
-  for (let index = 0; index < 24; index++) out[8 + index] = scenes[index];
+  for (let index = 0; index < 24; index++) out[8 + index] = scenes[index] ?? led("off", false);
   TRANSITIONS.forEach((id, col) => {
     out[col] = choiceLed("yellow", LED.yellow, project.transition === id);
   });
