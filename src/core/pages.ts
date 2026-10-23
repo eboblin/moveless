@@ -1,3 +1,4 @@
+import { DECK_GROUPS, deckSlots, defaultDeck, rowKnobName, type DeckGroup, type DeckKnobs, type DeckSlot } from "./deck.ts";
 import {
   LANE_CODE,
   LANES,
@@ -87,6 +88,15 @@ const TITLE_WORD: Record<string, string> = {
   SHP: "SHAPE",
   QNT: "QUANT",
   DUT: "DUTY",
+  WAY: "WAY",
+  PAT: "PATTERN",
+  CRV: "CURVE",
+  RTE: "RATE",
+  OPN: "OPEN",
+  SND: "SEND",
+  TIM: "TIME",
+  VAR: "VARY",
+  BND: "BEND",
   RMP: "RAMP",
   SCR: "SCRATCH",
   TRN: "TRANSFORM",
@@ -533,20 +543,35 @@ const FX_PAGES: Page[] = [
   ], "lerp"),
 ];
 
-/** One screen for the deck. Not an aux page; the Sample button edits these knobs. */
-export function deckPage(): Page {
-  const knob = (path: string, label: string, min: number, max: number, step: number, integer = false) =>
-    plain(`deck.${path}`, label, min, max, step, integer, "deck");
-  return page("deck", "DECK", ["TIME", "DECK"], "bus", [
-    knob("div", "DIV", 0, 5, 1, true),
-    knob("len", "LEN", 0, 1, 0.01),
-    knob("depth", "DEP", 0, 1, 0.01),
-    knob("brake", "TIM", 0, 5, 1, true),
-    knob("vary", "VAR", 0, 1, 0.01),
-    knob("quant", "QNT", 0, 3, 1, true),
-    knob("duty", "DUT", 0, 1, 0.01),
-    knob("ramp", "BND", 0, 1, 0.01),
-  ]);
+const DECK_FACE: Record<DeckSlot, { label: string; min: number; max: number; step: number; integer: boolean }> = {
+  div: { label: "DIV", min: 0, max: 5, step: 1, integer: true },
+  len: { label: "LEN", min: 0, max: 1, step: 0.01, integer: false },
+  depth: { label: "DEP", min: 0, max: 1, step: 0.01, integer: false },
+  brake: { label: "TIM", min: 0, max: 5, step: 1, integer: true },
+  vary: { label: "VAR", min: 0, max: 1, step: 0.01, integer: false },
+  quant: { label: "QNT", min: 0, max: 3, step: 1, integer: true },
+  duty: { label: "DUT", min: 0, max: 1, step: 0.01, integer: false },
+  ramp: { label: "BND", min: 0, max: 1, step: 0.01, integer: false },
+  row: { label: "WAY", min: 0, max: 3, step: 1, integer: true },
+  rate: { label: "RTE", min: 0, max: 5, step: 1, integer: true },
+  open: { label: "OPN", min: 0, max: 5, step: 1, integer: true },
+};
+
+/** Knobs of the selected group. Depth is always the rightmost encoder. Not an aux page. */
+export function deckPage(group: DeckGroup, knobs: DeckKnobs): Page {
+  const bindings = deckSlots(group, knobs).map((slot) => {
+    if (!slot) return null;
+    const face = DECK_FACE[slot];
+    const label = slot === "row" ? rowKnobName(group) : face.label;
+    return plain(`deck.${slot}`, label, face.min, face.max, face.step, face.integer, "deck");
+  });
+  return page("deck", "DECK", ["TIME", "DECK"], "bus", bindings);
+}
+
+function rememberDeck(): void {
+  const knobs = defaultDeck();
+  const divided = { ...knobs, quant: 1 };
+  for (const group of DECK_GROUPS) remember([deckPage(group, knobs), deckPage(group, divided)]);
 }
 
 function mixPage(): Page {
@@ -737,4 +762,5 @@ export function bindingFor(path: string): Binding | null {
 }
 
 for (const context of STEPS) pagesFor(context);
-remember([mixerPage(), deckPage()]);
+remember([mixerPage()]);
+rememberDeck();

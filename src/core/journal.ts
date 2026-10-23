@@ -1,4 +1,4 @@
-import { writeDeckKnob } from "./deck.ts";
+import { isDeckSlot, writeDeckKnob } from "./deck.ts";
 import { clamp01, ticksPerBar } from "./clock.ts";
 import { clone } from "./clone.ts";
 import { defaultProject } from "./defaults.ts";
@@ -331,8 +331,8 @@ export function commitMacro(project: Project, key: string): Project {
   return { ...project, working, macros, morph: { ...project.morph, punched } };
 }
 
-export function setDeck(project: Project, id: keyof Project["deck"], value: number): Project {
-  if (id === "cells" || id === "focus") return project;
+export function setDeck(project: Project, id: string, value: number): Project {
+  if (!isDeckSlot(id)) return project;
   return { ...project, deck: writeDeckKnob(project.deck, id, value, project.global.bar) };
 }
 

@@ -1,4 +1,5 @@
 import { clone } from "../core/clone.ts";
+import { isDeckSlot, readDeckSlot } from "../core/deck.ts";
 import { setDeck } from "../core/journal.ts";
 import { punch } from "../core/morph.ts";
 import { bindingFor, type Binding } from "../core/pages.ts";
@@ -116,7 +117,7 @@ function storeControl(project: Project, context: ContextId, binding: Binding, ra
     case "bus":
       return setBus(project, binding.path.slice("bus.".length) as keyof Bus, value);
     case "deck":
-      return setDeck(project, binding.path.slice("deck.".length) as keyof Project["deck"], value);
+      return setDeck(project, binding.path.slice("deck.".length), value);
   }
 }
 
@@ -135,8 +136,8 @@ function readStored(project: Project, binding: Binding): number {
       return project.bus[binding.path.slice("bus.".length) as keyof Bus];
     case "deck":
       const key = binding.path.slice("deck.".length);
-      const value = project.deck[key as keyof Project["deck"]];
-      return typeof value === "number" ? value : 0;
+      if (!isDeckSlot(key)) return 0;
+      return readDeckSlot(project.deck, key);
     case "lane":
       return 0;
   }

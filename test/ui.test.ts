@@ -2376,21 +2376,38 @@ describe("deck screen", () => {
     assert.equal(turned.project.deck.div, 3);
   });
 
-  it("checkers knobs the sounding gesture is not using", () => {
+  it("shows the selected group's knobs and parks depth on the right", () => {
     const open = openDeck(session());
     const idle = renderScreen(open.project, open.ui, 0);
     assert.deepEqual(idle.dim, []);
-    assert.equal(idle.labels.some((label) => label.text === "VAR"), true);
     const names = (state: Session) =>
       renderScreen(state.project, state.ui, 0).labels.filter((label) => label.y === NAME_Y).map((label) => label.text);
-    const roll = reduce(open, { kind: "note", data1: 92, data2: 127 });
-    const rolled = renderScreen(roll.project, roll.ui, 0);
-    assert.deepEqual(names(roll), ["DIV", "LEN", "DEP", "TIM", "VAR", "QNT", "DUT", "BND"]);
-    assert.deepEqual(rolled.dim, [1, 3, 4, 6, 7]);
+    const depthCell = (state: Session) =>
+      renderScreen(state.project, state.ui, 0).labels.find((label) => label.y === NAME_Y && label.text === "DEP")?.cell;
+    assert.deepEqual(names(open), ["DIV", "WAY", "QNT", "DEP"]);
+    assert.equal(depthCell(open), 7);
+    const corner = reduce(open, { kind: "note", data1: 99, data2: 127 });
+    assert.equal(corner.project.deck.div, 5);
+    assert.equal(corner.project.deck.cells[0]?.y, 3);
+    const cornerScreen = renderScreen(corner.project, corner.ui, 0);
+    assert.equal(cornerScreen.labels.some((label) => label.text === "1/1"), true);
+    assert.equal(cornerScreen.labels.some((label) => label.text === "PONG"), true);
+    assert.equal(depthCell(corner), 7);
     const scratch = reduce(open, { kind: "note", data1: 68, data2: 127 });
-    assert.deepEqual(renderScreen(scratch.project, scratch.ui, 0).dim, [0]);
-    const still = reduce(roll, { kind: "cc", data1: 75, data2: 1 });
-    assert.ok(still.project.deck.vary > 0);
+    assert.deepEqual(names(scratch), ["TIM", "CRV", "LEN", "VAR", "DUT", "BND", "QNT", "DEP"]);
+    assert.equal(depthCell(scratch), 7);
+    assert.deepEqual(renderScreen(scratch.project, scratch.ui, 0).dim, []);
+    const pitch = reduce(open, { kind: "note", data1: 85, data2: 127 });
+    assert.deepEqual(names(pitch), ["RTE", "SHP", "BND", "QNT", "DEP"]);
+    assert.equal(pitch.project.deck.div, 2);
+    const slow = reduce(pitch, { kind: "note", data1: 78, data2: 127 });
+    assert.equal(slow.project.deck.cells[5]?.x, 0);
+    assert.equal(slow.project.deck.cells[5]?.y, 1);
+    assert.equal(slow.project.deck.div, 2);
+    const slowScreen = renderScreen(slow.project, slow.ui, 0);
+    assert.equal(slowScreen.labels.some((label) => label.text === "1/2"), true);
+    assert.equal(slowScreen.labels.some((label) => label.text === "RISE"), true);
+    assert.equal(depthCell(slow), 7);
     const field = padLeds(scratch.project, "journal", scratch.ui);
     assert.equal(field[31]?.color, 1);
     assert.equal(field[2]?.color, offColor(1));

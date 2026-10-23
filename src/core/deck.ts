@@ -102,28 +102,91 @@ export const DECK_FADE = Math.round(0.008 * SAMPLE_RATE);
 
 export type DeckKnobId = "div" | "len" | "depth" | "brake" | "vary" | "quant" | "duty" | "ramp";
 
+/** A cell axis that is not one of the eight shared numbers. Pitch rate and throw length stay off DIV. */
+export type DeckSlot = DeckKnobId | "row" | "rate" | "open";
+
+const SLOT_IDS: readonly DeckSlot[] = ["div", "len", "depth", "brake", "vary", "quant", "duty", "ramp", "row", "rate", "open"];
+
 /**
- * Knobs that change this gesture. Depth is the wet mix on every one.
- * Stop and spin ignore the grid, so quant is absent there. A division
- * quant also needs the division knob, even when the gesture itself does not.
+ * Knobs this group shows, left to right, depth excluded. Depth is always the
+ * rightmost encoder. `row` is the field's Y. Pitch rate and throw length are
+ * their own columns, so they do not move the repeat grain.
  */
-const GROUP_KNOBS: Record<DeckGroup, readonly DeckKnobId[]> = {
-  rpt: ["div", "depth", "quant"],
-  lop: ["len", "depth", "quant"],
-  glc: ["div", "len", "vary", "depth", "quant", "duty", "ramp"],
-  scr: ["len", "brake", "vary", "depth", "quant", "duty", "ramp"],
-  gat: ["div", "duty", "depth", "quant"],
-  pch: ["ramp", "depth", "quant"],
-  stp: ["brake", "depth"],
-  thr: ["depth", "quant"],
+const GROUP_SLOTS: Record<DeckGroup, readonly DeckSlot[]> = {
+  rpt: ["div", "row", "quant"],
+  lop: ["len", "row", "quant"],
+  glc: ["div", "row", "len", "vary", "duty", "ramp", "quant"],
+  scr: ["brake", "row", "len", "vary", "duty", "ramp", "quant"],
+  gat: ["div", "row", "duty", "quant"],
+  pch: ["rate", "row", "ramp", "quant"],
+  stp: ["brake", "row"],
+  thr: ["open", "row", "quant"],
 };
 
-/** Null means every knob: nothing is heard, so the strip is the whole deck. */
-export function deckKnobsFor(group: DeckGroup | null, knobs: DeckKnobs): readonly DeckKnobId[] | null {
-  if (!group) return null;
-  const ids = [...GROUP_KNOBS[group]];
-  if (ids.includes("quant") && pick(knobs.quant, 4) === 1 && !ids.includes("div")) ids.push("div");
-  return ids;
+/** Short name under the row knob. The value itself is the variant name. */
+export function rowKnobName(group: DeckGroup): string {
+  switch (group) {
+    case "glc":
+      return "PAT";
+    case "scr":
+      return "CRV";
+    case "gat":
+      return "TRN";
+    case "pch":
+    case "stp":
+      return "SHP";
+    case "thr":
+      return "SND";
+    default:
+      return "WAY";
+  }
+}
+
+const ROW_TEXT: Record<DeckGroup, readonly string[]> = {
+  rpt: ["RPT", "JUMP", "REV", "PONG"],
+  lop: ["FWD", "REV", "PONG", "STEP"],
+  glc: ["SHUF", "ORD", "PONG", "FRZ"],
+  scr: ["BAB", "TEA", "FLA", "ORB"],
+  gat: ["HALF", "NARR", "MUTE", "DROP"],
+  pch: ["HOLD", "RISE", "FALL", "WOB"],
+  stp: ["STOP", "SPIN", "BACK", "BNCE"],
+  thr: ["SOFT", "EVEN", "TAIL", "HOT"],
+};
+
+/** Tape speed of the pitch column. Middle step is ×1. */
+export const RATE_LABEL = ["1/2", "3/4", "x1", "3/2", "x2", "x4"] as const;
+
+export function rowValueLabel(group: DeckGroup, y: number): string {
+  return ROW_TEXT[group][pick(y, 4)] ?? "RPT";
+}
+
+export function isDeckSlot(id: string): id is DeckSlot {
+  return (SLOT_IDS as readonly string[]).includes(id);
+}
+
+export function focusedGroup(deck: DeckKnobs): DeckGroup {
+  return DECK_GROUPS[pick(deck.focus, DECK_GROUPS.length)] ?? "rpt";
+}
+
+/** Eight encoder columns. Depth stays in the last one. Null is an empty encoder. */
+export function deckSlots(group: DeckGroup, knobs: DeckKnobs): (DeckSlot | null)[] {
+  const left = [...GROUP_SLOTS[group]];
+  const quantIsDiv = left.includes("quant") && pick(knobs.quant, 4) === 1;
+  const columnIsDiv = ownsDiv(group) || group === "pch" || group === "thr";
+  if (quantIsDiv && !columnIsDiv && !left.includes("div") && left.length < 7) left.push("div");
+  const slots: (DeckSlot | null)[] = [null, null, null, null, null, null, null, null];
+  left.forEach((id, index) => {
+    if (index < 7) slots[index] = id;
+  });
+  slots[7] = "depth";
+  return slots;
+}
+
+export function readDeckSlot(deck: DeckKnobs, id: DeckSlot): number {
+  const cell = cellOf(deck, focusedGroup(deck));
+  if (id === "row") return cell.y;
+  if (id === "rate" || id === "open") return cell.x;
+  return deck[id];
 }
 
 export function defaultDeck(): DeckKnobs {
@@ -220,12 +283,14 @@ export function behaviorOf(deck: DeckKnobs, group: DeckGroup): DeckGesture {
   return `${group}${cellOf(deck, group).y}` as DeckGesture;
 }
 
-/** Load the group's column into the knob that column shares. */
+/** Load the group's column into the shared knob it owns. Pitch rate and throw length stay on the cell. */
 export function recallGroup(deck: DeckKnobs, group: DeckGroup, barBeats: number): DeckKnobs {
   const cells = copyCells(deck.cells.length === 8 ? deck.cells : defaultDeck().cells);
-  const next = assembleDeck({ ...deck, cells, focus: groupIndex(group) }, group, barBeats);
-  next.cells = cells;
-  next.focus = groupIndex(group);
+  const next: DeckKnobs = { ...deck, cells, focus: groupIndex(group) };
+  const cell = cellOf(next, group);
+  if (ownsDiv(group)) next.div = cell.x;
+  if (group === "lop") next.len = lenUnit(cell.x, barBeats);
+  if (ownsBrake(group)) next.brake = cell.x;
   return next;
 }
 
@@ -246,11 +311,12 @@ export function stickDeckFocus(deck: DeckKnobs, barBeats: number): DeckKnobs {
   return next;
 }
 
-/** A knob turn writes the shared value, and the focused group's column when it owns that knob. */
-export function writeDeckKnob(deck: DeckKnobs, id: DeckKnobId, value: number, barBeats: number): DeckKnobs {
+/** A knob turn writes the shared value, and the focused group's cell when that knob is its column or row. */
+export function writeDeckKnob(deck: DeckKnobs, id: DeckSlot, value: number, barBeats: number): DeckKnobs {
   const cells = copyCells(deck.cells.length === 8 ? deck.cells : defaultDeck().cells);
-  const next: DeckKnobs = { ...deck, cells, [id]: value };
-  const group = DECK_GROUPS[pick(next.focus, DECK_GROUPS.length)] ?? "rpt";
+  const next: DeckKnobs = { ...deck, cells };
+  if (id !== "row" && id !== "rate" && id !== "open") next[id] = value;
+  const group = focusedGroup(next);
   const cell = { ...cells[groupIndex(group)] };
   if (id === "div" && ownsDiv(group)) cell.x = pick(value, 6);
   if (id === "brake" && ownsBrake(group)) cell.x = pick(value, 6);
@@ -258,6 +324,9 @@ export function writeDeckKnob(deck: DeckKnobs, id: DeckKnobId, value: number, ba
     cell.x = lenColumn(value, barBeats);
     next.len = lenUnit(cell.x, barBeats);
   }
+  if (id === "row") cell.y = pick(value, 4);
+  if (id === "rate" && group === "pch") cell.x = pick(value, 6);
+  if (id === "open" && group === "thr") cell.x = pick(value, 6);
   cells[groupIndex(group)] = cell;
   return next;
 }

@@ -23,7 +23,7 @@ import {
   toggleLock,
   toggleMute,
 } from "../core/performance.ts";
-import { DECK_GROUPS, fieldAt, groupAt, recallGroup, setGroupCell, type DeckGroup } from "../core/deck.ts";
+import { DECK_GROUPS, fieldAt, focusedGroup, groupAt, recallGroup, setGroupCell, type DeckGroup } from "../core/deck.ts";
 import { CAPTURE_CC, contextAtStep, DOWN_CC, isLane, JOG_CLICK_CC, LANES, LOOP_CC, MENU_CC, MUTE_CC, PLAY_CC, RANDOMIZE_DEPTHS, RANDOMIZE_SCOPES, RECORD_CC, SAMPLE_CC, TRANSITIONS, UP_CC, WANDERS, type ContextId, type PatternId, type Project } from "../core/types.ts";
 import { resetControl, writeControl } from "./controls.ts";
 import { bindingFor, bindingPaths, deckPage, mixerPage, pageCount, pageGroup, pagesFor, scopeIncludesPage } from "../core/pages.ts";
@@ -410,7 +410,7 @@ export function modulatedBase(path: string): string | null {
 
 function currentBinding(session: Session, index: number) {
   if (mutePeekOpen(session.ui)) return mixerPage().bindings[index] ?? null;
-  if (peekKind(session.ui) === "deck") return deckPage().bindings[index] ?? null;
+  if (peekKind(session.ui) === "deck") return deckPage(focusedGroup(session.project.deck), session.project.deck).bindings[index] ?? null;
   const pages = pagesFor(session.ui.context);
   const page = pages[Math.min(session.ui.page, pages.length - 1)];
   return page?.bindings[index] ?? null;
@@ -527,7 +527,7 @@ function applyRandomize(session: Session): Session {
   const { context, page } = randomizeTarget(session);
   let project = session.project;
   if (mutePeekOpen(session.ui)) project = randomizeSurface(project, "mix", bindingPaths(mixerPage()));
-  else if (peekKind(session.ui) === "deck") project = randomizeSurface(project, "deck", bindingPaths(deckPage()));
+  else if (peekKind(session.ui) === "deck") project = randomizeSurface(project, "deck", bindingPaths(deckPage(focusedGroup(project.deck), project.deck)));
   else if (context === "aux") project = rerollAux(project, page);
   else if (isLane(context)) project = rerollLane(project, context, page);
   return { ...session, project };

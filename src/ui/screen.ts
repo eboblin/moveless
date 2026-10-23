@@ -1,4 +1,4 @@
-import { GROUP_PAD, DIV_LABEL, BRAKE_LABEL, QUANT_LABEL, assembleDeck, behaviorOf, deckKnobsFor, deckPicture, isDeckGroup, lenLabel, type DeckKnobId, type DeckPicture } from "../core/deck.ts";
+import { GROUP_PAD, DIV_LABEL, BRAKE_LABEL, QUANT_LABEL, RATE_LABEL, assembleDeck, behaviorOf, deckPicture, focusedGroup, isDeckGroup, lenLabel, readDeckSlot, rowValueLabel, type DeckPicture } from "../core/deck.ts";
 import { laneHeard } from "../core/journal.ts";
 import { SIXTEENTH_TICKS, countFromUnit, rateFromUnit, tickToSample } from "../core/clock.ts";
 import { phraseStepsOf } from "../core/events.ts";
@@ -129,7 +129,7 @@ export function renderScreen(
   else if (vizLane && phrase) drawPhrase(pixels, project, phrase, vizLane, playhead);
   else if (decking) drawDeck(pixels, project, ui, tick, wave);
   const deckFocus = decking && !focus && heard ? deckTitle : focus;
-  const deck = decking ? deckPage() : null;
+  const deck = decking ? deckPage(focusedGroup(project.deck), project.deck) : null;
   const labels = mixer
     ? [{ x: 1, y: TITLE_Y, text: header.slice(0, LINE_LIMIT) }, ...mixerChannelLabels(project, focus)]
     : decking
@@ -147,7 +147,7 @@ export function renderScreen(
     labels.push(...menu);
   }
   const digits = mixer ? [] : deck ? paramDigits(project, context, deck, focus, ui, now) : !page ? [] : paramDigits(project, context, page, focus, ui, now);
-  const dim = decking ? deckDimCells(project, ui) : [];
+  const dim: number[] = [];
   return { header, viz, pixels, labels, digits, dim };
 }
 
@@ -211,21 +211,6 @@ function drawMixer(pixels: Uint8Array, project: Project, focus: string | null): 
       }
     }
   }
-}
-
-/** Columns a sounding gesture does not read. Empty when every knob is in play. */
-function deckDimCells(project: Project, ui: UiState): number[] {
-  const heard = ui.deckGesture ?? ui.deckLatchedGesture;
-  const keys = deckKnobsFor(heard && isDeckGroup(heard) ? heard : null, project.deck);
-  if (!keys) return [];
-  const allow = new Set<string>(keys);
-  const dim: number[] = [];
-  deckPage().bindings.forEach((binding, index) => {
-    if (!binding || index >= PARAM_COLS) return;
-    const id = binding.path.slice("deck.".length) as DeckKnobId;
-    if (!allow.has(id)) dim.push(index);
-  });
-  return dim;
 }
 
 function deckHeardTick(ui: UiState): number | null {
@@ -941,6 +926,7 @@ function knobAmount(project: Project, context: ContextId, binding: Binding, ui: 
 
 function deckKnobText(project: Project, path: string): string | null {
   const deck = project.deck;
+  const group = focusedGroup(deck);
   switch (path) {
     case "deck.div":
       return DIV_LABEL[deck.div] ?? null;
@@ -950,6 +936,12 @@ function deckKnobText(project: Project, path: string): string | null {
       return BRAKE_LABEL[deck.brake] ?? null;
     case "deck.quant":
       return QUANT_LABEL[deck.quant] ?? null;
+    case "deck.row":
+      return rowValueLabel(group, readDeckSlot(deck, "row"));
+    case "deck.rate":
+      return RATE_LABEL[readDeckSlot(deck, "rate")] ?? null;
+    case "deck.open":
+      return DIV_LABEL[readDeckSlot(deck, "open")] ?? null;
     default:
       return null;
   }

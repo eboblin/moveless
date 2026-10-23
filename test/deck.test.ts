@@ -3,7 +3,7 @@ import { describe, it } from "node:test";
 import {
   barSamples,
   brakeSamples,
-  deckKnobsFor,
+  deckSlots,
   deckPicture,
   deckRead,
   defaultDeck,
@@ -119,15 +119,16 @@ describe("deck curves", () => {
     assert.ok(later.head < live.head);
   });
 
-  it("names the knobs a gesture can change", () => {
+  it("puts depth on the right and shows only the group's knobs", () => {
     const knobs = defaultDeck();
-    assert.deepEqual(deckKnobsFor("rpt", knobs), ["div", "depth", "quant"]);
-    assert.deepEqual(deckKnobsFor("scr", knobs), ["len", "brake", "vary", "depth", "quant", "duty", "ramp"]);
-    assert.deepEqual(deckKnobsFor("stp", knobs), ["brake", "depth"]);
-    assert.deepEqual(deckKnobsFor("gat", knobs), ["div", "duty", "depth", "quant"]);
-    assert.deepEqual(deckKnobsFor("pch", knobs), ["ramp", "depth", "quant"]);
-    assert.equal(deckKnobsFor(null, knobs), null);
-    assert.deepEqual(deckKnobsFor("thr", { ...knobs, quant: 1 }), ["depth", "quant", "div"]);
+    assert.deepEqual(deckSlots("rpt", knobs), ["div", "row", "quant", null, null, null, null, "depth"]);
+    assert.deepEqual(deckSlots("scr", knobs), ["brake", "row", "len", "vary", "duty", "ramp", "quant", "depth"]);
+    assert.deepEqual(deckSlots("stp", knobs), ["brake", "row", null, null, null, null, null, "depth"]);
+    assert.deepEqual(deckSlots("gat", knobs), ["div", "row", "duty", "quant", null, null, null, "depth"]);
+    assert.deepEqual(deckSlots("pch", knobs), ["rate", "row", "ramp", "quant", null, null, null, "depth"]);
+    assert.deepEqual(deckSlots("lop", { ...knobs, quant: 1 }), ["len", "row", "quant", "div", null, null, null, "depth"]);
+    assert.deepEqual(deckSlots("thr", { ...knobs, quant: 1 }), ["open", "row", "quant", null, null, null, null, "depth"]);
+    assert.deepEqual(deckSlots("scr", { ...knobs, quant: 1 }), ["brake", "row", "len", "vary", "duty", "ramp", "quant", "depth"]);
   });
 
   it("walks glitch slices in order and cuts a slot below half duty", () => {
@@ -174,6 +175,13 @@ describe("deck curves", () => {
     assert.equal(loop.div, 1);
     assert.ok(Math.abs(loop.len - lenUnit(3, 4)) < 1e-6);
     assert.equal(recallGroup(loop, "rpt", 4).div, 4);
+    const pitched = writeDeckKnob(recallGroup(deck, "pch", 4), "rate", 5, 4);
+    assert.equal(pitched.cells[5]?.x, 5);
+    assert.equal(pitched.div, 4);
+    const thrown = writeDeckKnob(recallGroup(pitched, "thr", 4), "open", 1, 4);
+    assert.equal(thrown.cells[7]?.x, 1);
+    assert.equal(thrown.div, 4);
+    assert.equal(writeDeckKnob(recallGroup(thrown, "rpt", 4), "row", 3, 4).cells[0]?.y, 3);
   });
 
   it("round-trips the voice record", () => {

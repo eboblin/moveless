@@ -1,5 +1,5 @@
 import { clone } from "./clone.ts";
-import { defaultDeck, stickDeckFocus } from "./deck.ts";
+import { defaultDeck, focusedGroup, groupIndex, stickDeckFocus } from "./deck.ts";
 import { defaultBus, defaultGlobal, defaultProgression, defaultProject } from "./defaults.ts";
 import { nodeAt, setPath } from "./fields.ts";
 import { hash01 } from "./hash.ts";
@@ -285,11 +285,43 @@ export function randomizeSurface(project: Project, kind: "mix" | "perf" | "progr
     return { ...project, global: globalFromRecord(numbers), randomizeNonce: nonce };
   }
   if (kind === "deck") {
-    const deck = { ...defaultDeck(), ...project.deck, cells: project.deck.cells.map((cell) => ({ ...cell })) };
-    const homes = { deck: defaultDeck() };
+    const group = focusedGroup(project.deck);
+    const at = groupIndex(group);
+    const cell = project.deck.cells[at] ?? { x: 0, y: 0 };
+    const homeCell = defaultDeck().cells[at] ?? { x: 0, y: 0 };
+    const deck = {
+      ...defaultDeck(),
+      ...project.deck,
+      cells: project.deck.cells.map((item) => ({ ...item })),
+      row: cell.y,
+      rate: cell.x,
+      open: cell.x,
+    };
+    const homes = { deck: { ...defaultDeck(), row: homeCell.y, rate: homeCell.x, open: homeCell.x } };
     if (intensity === "clear") restoreFactory({ deck }, homes, eligible, "all");
     else applySplitBudget({ deck }, homes, eligible, roll, intensity);
-    return { ...project, deck: stickDeckFocus(deck, project.global.bar), randomizeNonce: nonce };
+    const cells = deck.cells.map((item) => ({ ...item }));
+    const written = { ...(cells[at] ?? { x: 0, y: 0 }) };
+    written.y = Math.max(0, Math.min(3, Math.round(deck.row)));
+    if (group === "pch") written.x = Math.max(0, Math.min(5, Math.round(deck.rate)));
+    if (group === "thr") written.x = Math.max(0, Math.min(5, Math.round(deck.open)));
+    cells[at] = written;
+    const next = stickDeckFocus(
+      {
+        div: deck.div,
+        len: deck.len,
+        depth: deck.depth,
+        brake: deck.brake,
+        vary: deck.vary,
+        quant: deck.quant,
+        duty: deck.duty,
+        ramp: deck.ramp,
+        cells,
+        focus: deck.focus,
+      },
+      project.global.bar,
+    );
+    return { ...project, deck: next, randomizeNonce: nonce };
   }
   if (kind === "bus") {
     const bus = { ...defaultBus(), ...project.bus };
