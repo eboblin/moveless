@@ -29,6 +29,9 @@ export interface DeckRuntime {
   mask: number;
   /** One past the newest sample written. */
   filled: number;
+  /** Max |sample| per 128-sample hop, same slots the device ring keeps. */
+  peakL: Float32Array;
+  peakR: Float32Array;
   /** How many samples past the live clock the ring already holds. */
   lead: number;
   /** Shadow render skips the platter so it can fill the ring. */
@@ -49,6 +52,8 @@ export function createDeckRuntime(): DeckRuntime {
     ringR: new Float32Array(RING),
     mask: RING - 1,
     filled: 0,
+    peakL: new Float32Array(RING >> 7),
+    peakR: new Float32Array(RING >> 7),
     lead: 0,
     bypass: false,
   };
@@ -76,6 +81,16 @@ export function noteDeck(deck: DeckRuntime, sample: number, left: number, right:
   deck.ringL[i] = left;
   deck.ringR[i] = right;
   if (sample + 1 > deck.filled) deck.filled = sample + 1;
+  if (sample < 0) return;
+  const hop = (sample >> 7) & ((RING >> 7) - 1);
+  if ((sample & 127) === 0) {
+    deck.peakL[hop] = 0;
+    deck.peakR[hop] = 0;
+  }
+  const al = Math.abs(left);
+  const ar = Math.abs(right);
+  if (al > deck.peakL[hop]) deck.peakL[hop] = al;
+  if (ar > deck.peakR[hop]) deck.peakR[hop] = ar;
 }
 
 function readAt(deck: DeckRuntime, pos: number): [number, number] {
@@ -127,4 +142,88 @@ export function hearDeck(deck: DeckRuntime, now: number, tempo: number, left: nu
 export function writeDeckBlock(deck: DeckRuntime, start: number, interleaved: Float32Array): void {
   const frames = interleaved.length / 2;
   for (let i = 0; i < frames; i++) noteDeck(deck, start + i, interleaved[i * 2], interleaved[i * 2 + 1]);
+}
+
+/** Columns on the left of the stylus. Matches the `wave0` / `wave1` pages in dsp.so. */
+export const WAVE_PAST_COLS = 64;
+export const WAVE_PAGE_COLS = 32;
+
+export interface WavePeak {
+  left: number;
+  right: number;
+}
+
+export interface WavePage {
+  page: number;
+  head: number;
+  span: number;
+  cols: WavePeak[];
+}
+
+function hopMax(deck: DeckRuntime, from: number, to: number): WavePeak {
+  const filled = deck.filled;
+  const oldest = Math.max(0, filled - (deck.mask + 1));
+  let s = Math.max(oldest, Math.floor(from));
+  const end = Math.min(filled, Math.ceil(to));
+  let left = 0;
+  let right = 0;
+  while (s < end) {
+    const hop = (s >> 7) & ((RING >> 7) - 1);
+    if (deck.peakL[hop] > left) left = deck.peakL[hop];
+    if (deck.peakR[hop] > right) right = deck.peakR[hop];
+    const next = (s & ~127) + 128;
+    s = next > s ? next : s + 1;
+  }
+  return { left, right };
+}
+
+/** 64 stereo peaks covering [head - span/2, head). Unwritten samples stay silent. */
+export function pastColumns(deck: DeckRuntime, head: number, span: number, count = WAVE_PAST_COLS): WavePeak[] {
+  const width = span / 2;
+  const start = head - width;
+  const col = count > 0 ? width / count : width;
+  const cols: WavePeak[] = [];
+  for (let i = 0; i < count; i++) {
+    const from = start + i * col;
+    cols.push(hopMax(deck, from, from + col));
+  }
+  return cols;
+}
+
+function nibble(peak: number): string {
+  const clamped = Math.max(0, Math.min(1, peak));
+  const n = Math.max(0, Math.min(15, Math.round(clamped * 15)));
+  return n.toString(16);
+}
+
+/** `page|head|span|` plus 32 left/right nibbles. A short host buffer gets the other page. */
+export function formatWavePage(page: number, head: number, span: number, cols: WavePeak[]): string {
+  const start = page * WAVE_PAGE_COLS;
+  let hex = "";
+  for (let i = 0; i < WAVE_PAGE_COLS; i++) {
+    const col = cols[start + i] ?? { left: 0, right: 0 };
+    hex += nibble(col.left) + nibble(col.right);
+  }
+  return `${page}|${Math.round(head)}|${Math.round(span)}|${hex}`;
+}
+
+export function parseWavePage(text: string | null | undefined): WavePage | null {
+  if (!text) return null;
+  const parts = text.split("|");
+  if (parts.length !== 4) return null;
+  const page = Number(parts[0]);
+  const head = Number(parts[1]);
+  const span = Number(parts[2]);
+  const hex = parts[3] ?? "";
+  if (page !== 0 && page !== 1) return null;
+  if (!Number.isInteger(head) || !Number.isInteger(span) || !(span > 0)) return null;
+  if (hex.length !== WAVE_PAGE_COLS * 2) return null;
+  const cols: WavePeak[] = [];
+  for (let i = 0; i < WAVE_PAGE_COLS; i++) {
+    const left = Number.parseInt(hex[i * 2] ?? "", 16);
+    const right = Number.parseInt(hex[i * 2 + 1] ?? "", 16);
+    if (!Number.isInteger(left) || !Number.isInteger(right)) return null;
+    cols.push({ left: left / 15, right: right / 15 });
+  }
+  return { page, head, span, cols };
 }

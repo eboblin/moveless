@@ -15,6 +15,10 @@
 #include <time.h>
 
 #define SR 44100.0f
+#define DECK_HOP 128
+#define DECK_PEAKS 2048
+#define WAVE_COLS 64
+#define WAVE_PAGE 32
 #define TWO_PI 6.28318530718f
 #define DRUMS 4
 #define NOTES 12
@@ -173,6 +177,10 @@ typedef struct {
     float deck_k[8];
     int deck_seed;
     float deck_bar;
+    float *deck_peak_l;
+    float *deck_peak_r;
+    int deck_view_head;
+    int deck_view_span;
 } Engine;
 
 typedef struct {
@@ -1398,13 +1406,21 @@ static int fx_init(Engine *engine) {
     engine->deck_k[7] = 0.5f;
     engine->deck_bar = 4.0f;
     engine->deck_seed = 1;
+    engine->deck_peak_l = calloc((size_t)DECK_PEAKS, sizeof(float));
+    engine->deck_peak_r = calloc((size_t)DECK_PEAKS, sizeof(float));
+    if (!engine->deck_peak_l || !engine->deck_peak_r) return 0;
+    engine->deck_view_span = 4 * (int)lroundf((SR * 60.0f) / 120.0f);
     return ok;
 }
 
 static void fx_free(Engine *engine) {
     free(engine->deck_l);
     free(engine->deck_r);
+    free(engine->deck_peak_l);
+    free(engine->deck_peak_r);
     engine->deck_l = NULL;
+    engine->deck_peak_l = NULL;
+    engine->deck_peak_r = NULL;
     engine->deck_r = NULL;
     Plate *p = &engine->plate;
     line_free(&p->pre);
@@ -2120,6 +2136,19 @@ static float deck_throw(Engine *engine) {
     return read.throw_amt * depth;
 }
 
+static void deck_peak_note(Engine *engine, int now, float left, float right) {
+    if (!engine->deck_peak_l || !engine->deck_peak_r || now < 0) return;
+    int hop = (now >> 7) & (DECK_PEAKS - 1);
+    if ((now & (DECK_HOP - 1)) == 0) {
+        engine->deck_peak_l[hop] = 0.0f;
+        engine->deck_peak_r[hop] = 0.0f;
+    }
+    float al = fabsf(left);
+    float ar = fabsf(right);
+    if (al > engine->deck_peak_l[hop]) engine->deck_peak_l[hop] = al;
+    if (ar > engine->deck_peak_r[hop]) engine->deck_peak_r[hop] = ar;
+}
+
 static void deck_hear(Engine *engine, float *l, float *r) {
     int now = engine->clock;
     int mask = engine->deck_mask;
@@ -2127,6 +2156,7 @@ static void deck_hear(Engine *engine, float *l, float *r) {
         engine->deck_l[now & mask] = *l;
         engine->deck_r[now & mask] = *r;
         if (now + 1 > engine->deck_filled) engine->deck_filled = now + 1;
+        deck_peak_note(engine, now, *l, *r);
     }
     if (engine->deck_gesture < 0) return;
     DeckRead read = deck_read(engine);
@@ -2158,6 +2188,20 @@ static void deck_hear(Engine *engine, float *l, float *r) {
     *l = *l * (1.0f - depth) + wet_l * depth;
     *r = *r * (1.0f - depth) + wet_r * depth;
     if (engine->deck_up >= 0 && now >= engine->deck_up + DECK_FADE) engine->deck_gesture = -1;
+}
+
+/** Read position the strip should sit on, once per block. */
+static void deck_capture_view(Engine *engine) {
+    int now = engine->clock;
+    DeckRead read = deck_read(engine);
+    float head = (float)now * read.live + read.pos * (1.0f - read.live);
+    engine->deck_view_head = (int)lroundf(head);
+    float tempo = engine->tempo > 1.0f ? engine->tempo : 120.0f;
+    int beat = deck_beat(tempo);
+    int bars = (int)lroundf(engine->deck_bar > 0.5f ? engine->deck_bar : 4.0f);
+    if (bars < 1) bars = 1;
+    if (beat < 1) beat = 1;
+    engine->deck_view_span = bars * beat;
 }
 
 static int deck_name(const char *s) {
@@ -2359,6 +2403,7 @@ static void render(Engine *engine, int16_t *out, int frames) {
             out[i * 2 + 1] = (int16_t)ir;
         }
     }
+    deck_capture_view(engine);
 }
 
 static void *create_instance(const char *module_dir, const char *json_defaults) {
@@ -2455,9 +2500,75 @@ static int cpu_key(const char *key) {
     return strcmp(colon ? colon + 1 : key, "cpu") == 0;
 }
 
+static int wave_key(const char *key) {
+    if (!key) return -1;
+    const char *colon = strrchr(key, ':');
+    const char *name = colon ? colon + 1 : key;
+    if (strcmp(name, "wave0") == 0) return 0;
+    if (strcmp(name, "wave1") == 0) return 1;
+    return -1;
+}
+
+static void wave_column(const Engine *engine, float from, float to, float *pl, float *pr) {
+    *pl = 0.0f;
+    *pr = 0.0f;
+    if (!engine->deck_peak_l || !engine->deck_peak_r) return;
+    int filled = engine->deck_filled;
+    int oldest = filled - (engine->deck_mask + 1);
+    if (oldest < 0) oldest = 0;
+    int s = (int)floorf(from);
+    int end = (int)ceilf(to);
+    if (s < oldest) s = oldest;
+    if (end > filled) end = filled;
+    while (s < end) {
+        int hop = (s >> 7) & (DECK_PEAKS - 1);
+        if (engine->deck_peak_l[hop] > *pl) *pl = engine->deck_peak_l[hop];
+        if (engine->deck_peak_r[hop] > *pr) *pr = engine->deck_peak_r[hop];
+        int next = (s & ~(DECK_HOP - 1)) + DECK_HOP;
+        s = next > s ? next : s + 1;
+    }
+}
+
+static char wave_nibble(float peak) {
+    if (peak < 0.0f) peak = 0.0f;
+    if (peak > 1.0f) peak = 1.0f;
+    int n = (int)lroundf(peak * 15.0f);
+    if (n < 0) n = 0;
+    if (n > 15) n = 15;
+    return "0123456789abcdef"[n];
+}
+
+/** One page of the left half: `page|head|span|` and 32 stereo nibbles. */
+static int wave_page(const Engine *engine, int page, char *buf, int buf_len) {
+    if (!buf || page < 0 || page > 1) return -1;
+    int head = engine->deck_view_head;
+    int span = engine->deck_view_span > 0 ? engine->deck_view_span : 1;
+    char prefix[48];
+    int n = snprintf(prefix, sizeof prefix, "%d|%d|%d|", page, head, span);
+    if (n < 0 || n >= (int)sizeof prefix) return -1;
+    if (buf_len < n + WAVE_PAGE * 2 + 1) return -1;
+    memcpy(buf, prefix, (size_t)n);
+    float start = (float)head - (float)span / 2.0f;
+    float col = ((float)span / 2.0f) / (float)WAVE_COLS;
+    for (int i = 0; i < WAVE_PAGE; i++) {
+        int index = page * WAVE_PAGE + i;
+        float from = start + (float)index * col;
+        float pl = 0.0f;
+        float pr = 0.0f;
+        wave_column(engine, from, from + col, &pl, &pr);
+        buf[n + i * 2] = wave_nibble(pl);
+        buf[n + i * 2 + 1] = wave_nibble(pr);
+    }
+    buf[n + WAVE_PAGE * 2] = 0;
+    return n + WAVE_PAGE * 2;
+}
+
 static int get_param(void *instance, const char *key, char *buf, int buf_len) {
     Engine *engine = instance;
-    if (!engine || !cpu_key(key) || !buf || buf_len < 3) return -1;
+    if (!engine || !buf || buf_len < 1) return -1;
+    int page = wave_key(key);
+    if (page >= 0) return wave_page(engine, page, buf, buf_len);
+    if (!cpu_key(key) || buf_len < 3) return -1;
     int pct = engine->cpu_pct;
     if (pct < 0) pct = 0;
     if (pct > 99) pct = 99;

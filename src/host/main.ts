@@ -22,12 +22,11 @@ import {
   WIDTH,
   VIZ_H,
   cellTextX,
-  deckFrame,
   loadWidth,
   renderScreen,
 } from "../ui/screen.ts";
-import { resetWaveform, serviceWaveform, waveformCovers } from "../ui/wave-audio.ts";
-import type { WaveTape } from "../ui/wave.ts";
+import { resetWaveform, serviceWaveform } from "../ui/wave-audio.ts";
+import { applyWavePages, type WaveTape } from "../ui/wave.ts";
 import { defaultUi, focusVisible, peekKind, rememberPage, settleWheel, type UiState } from "../ui/state.ts";
 import type { Project } from "../core/types.ts";
 
@@ -253,7 +252,6 @@ let paintCapture = false;
 let paintFocus = false;
 let paintPeek: string | null = null;
 let paintDeckFrame = -1;
-let waveReady = true;
 let ledPhase = -1;
 let ledProject: Project | null = null;
 let ledUi: UiState | null = null;
@@ -272,9 +270,7 @@ function screenChanged(): boolean {
   const peek = peekKind(ui);
   const latch = Math.round(session.project.progression.count) <= 0 ? latchStamp() : "";
   const deckFrame = peek === "deck" ? Math.floor(Math.max(0, session.tick)) : -1;
-  const filling = peek === "deck" && !waveReady;
   if (
-    !filling &&
     paintProject === session.project &&
     paintUi === ui &&
     paintPlaying === session.playing &&
@@ -317,13 +313,18 @@ function ledsChanged(): boolean {
   return true;
 }
 
+function readParam(key: string): string | null {
+  const host = globalThis as HostGlobals;
+  const raw = host.host_module_get_param?.(key) ?? host.shadow_get_param?.(0, `overtake_dsp:${key}`);
+  return typeof raw === "string" && raw.length > 0 ? raw : null;
+}
+
 function paintScreen(): void {
   let wave: WaveTape | null = null;
   if (peekKind(session.ui) === "deck") {
-    const picture = deckFrame(session.project, session.ui, session.tick);
-    wave = serviceWaveform(session.project, picture.head, picture.span);
-    waveReady = waveformCovers(picture.head, picture.span);
-  } else waveReady = true;
+    wave = serviceWaveform(session.project);
+    applyWavePages(wave, [readParam("wave0"), readParam("wave1")]);
+  }
   const screen = renderScreen(session.project, session.ui, session.tick, session.playing, Date.now(), frame, audioLoad, wave);
   blit(screen.pixels);
   const host = globalThis as HostGlobals;
@@ -564,7 +565,6 @@ export function init(): void {
   paintFocus = false;
   paintPeek = null;
   paintDeckFrame = -1;
-  waveReady = true;
   resetWaveform();
   ledPhase = -1;
   ledProject = null;

@@ -1,4 +1,4 @@
-import { DECK_PAD, DIV_LABEL, BRAKE_LABEL, SHAPE_LABEL, QUANT_LABEL, deckKnobsFor, deckPicture, lenLabel, samplesPerBeat, type DeckKnobId, type DeckPicture } from "../core/deck.ts";
+import { DECK_PAD, DIV_LABEL, BRAKE_LABEL, SHAPE_LABEL, QUANT_LABEL, deckKnobsFor, deckPicture, lenLabel, type DeckKnobId, type DeckPicture } from "../core/deck.ts";
 import { laneHeard } from "../core/journal.ts";
 import { SIXTEENTH_TICKS, countFromUnit, rateFromUnit, tickToSample } from "../core/clock.ts";
 import { phraseStepsOf } from "../core/events.ts";
@@ -254,21 +254,22 @@ export function deckFrame(project: Project, ui: UiState, tick: number): DeckPict
   });
 }
 
-/** Platter strip. The stylus stays at center and the recorded master scrolls under it. */
+/** Platter strip. Ring peaks sit left of the stylus, the phrase collage sits right. The stylus stays at center. */
 function drawDeck(pixels: Uint8Array, project: Project, ui: UiState, tick: number, wave: WaveTape | null): void {
   const picture = deckFrame(project, ui, tick);
   const yTop = HEADER_H;
   const yBottom = HEADER_H + VIZ_H - 2;
+  const head = wave?.readHead != null ? wave.readHead : picture.head;
+  const span = wave && wave.pastSpan > 0 ? wave.pastSpan : picture.span;
   drawWaveform(pixels, WIDTH, wave ?? emptyWave(), {
     x: 0,
     y: yTop,
     w: WIDTH,
     h: yBottom - yTop + 1,
-    head: picture.head,
-    span: picture.span,
+    head,
+    span,
     gain: picture.gain,
     stylus: true,
-    beat: Math.max(1, Math.round(samplesPerBeat(Math.max(1, project.global.tempo)))),
   });
 }
 

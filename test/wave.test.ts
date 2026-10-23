@@ -1,12 +1,14 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { clone } from "../src/core/clone.ts";
+import { SAMPLE_RATE } from "../src/core/clock.ts";
 import { defaultProject } from "../src/core/defaults.ts";
-import { barSamples, samplesPerBeat } from "../src/core/deck.ts";
+import { LANES, type LaneId } from "../src/core/types.ts";
+import { createDeckRuntime, formatWavePage, noteDeck, parseWavePage, pastColumns } from "../src/dsp/deck.ts";
 import { createEngine, loadPhrase, placeClock, renderDryBlock } from "../src/dsp/voice.ts";
 import { WIDTH } from "../src/ui/screen.ts";
-import { drawWaveform, emptyWave, waveAt, wavePeak, type WaveTape } from "../src/ui/wave.ts";
-import { fillWaveform, resetWaveform, serviceWaveform, waveformCovers, waveformTape } from "../src/ui/wave-audio.ts";
+import { applyWavePages, drawWaveform, emptyWave, waveAt, wavePeak, WAVE_HOP, type WaveTape } from "../src/ui/wave.ts";
+import { resetWaveform, serviceWaveform, waveformTape } from "../src/ui/wave-audio.ts";
 
 function pixelsOf(tape: WaveTape, head: number): Uint8Array {
   const pixels = new Uint8Array(WIDTH * 32);
@@ -24,6 +26,37 @@ function pixelsOf(tape: WaveTape, head: number): Uint8Array {
 
 function lit(pixels: Uint8Array, x: number, y: number): number {
   return pixels[y * WIDTH + x] ?? 0;
+}
+
+function onlyLane(lane: LaneId): ReturnType<typeof defaultProject> {
+  const project = clone(defaultProject());
+  for (const id of LANES) project.mute[id] = id !== lane;
+  return project;
+}
+
+/** Level one moment after the first hit, relative to that hit. */
+function remain(tape: WaveTape, seconds: number): number {
+  const hop = tape.hop;
+  let origin = -1;
+  let peak = 0;
+  for (let s = 0; s < tape.period; s += hop) {
+    const v = (tape.left.get(s) ?? 0) + (tape.right.get(s) ?? 0);
+    if (v > 0.08) {
+      origin = s;
+      peak = v;
+      break;
+    }
+  }
+  if (origin < 0 || !(peak > 0)) return 0;
+  const later = origin + Math.round(seconds * SAMPLE_RATE);
+  const key = Math.floor(fold(later, tape.period) / hop) * hop;
+  const v = (tape.left.get(key) ?? 0) + (tape.right.get(key) ?? 0);
+  return v / peak;
+}
+
+function fold(sample: number, period: number): number {
+  const wrapped = sample % period;
+  return wrapped < 0 ? wrapped + period : wrapped;
 }
 
 describe("waveform", () => {
@@ -62,113 +95,110 @@ describe("waveform", () => {
     assert.ok(moved > 10);
   });
 
-  it("folds the loop so both sides of the needle are the phrase", () => {
+  it("folds the future into the phrase and leaves an empty ring silent", () => {
     const tape = emptyWave(128, 1024);
     tape.left.set(0, 1);
     tape.right.set(0, 0.2);
     tape.left.set(896, 0.4);
     tape.right.set(896, 0.8);
-    const future = wavePeak(tape, 0, 200);
-    const past = wavePeak(tape, -200, -1);
+    const future = wavePeak(tape, 0, 200, 0);
     assert.ok(future.left > future.right);
-    assert.ok(past.right > past.left);
-    assert.equal(wavePeak(tape, 1024, 1200).left, 1);
+    assert.equal(wavePeak(tape, 1024, 1200, 1024).left, 1);
+    assert.equal(wavePeak(tape, -200, -1, 0).left, 0);
+    assert.equal(wavePeak(tape, -200, -1, 0).right, 0);
   });
 
-  it("keeps the past up and copies it onto the next beats", () => {
-    const beat = 1024;
-    const held = emptyWave(128, 8192);
-    held.left.set(0, 1);
-    held.right.set(0, 0.25);
-    held.left.set(512, 0.4);
-    held.right.set(512, 0.8);
-    held.left.set(4096, 0.9);
+  it("packs recorded ring peaks on the left and stays empty before the first write", () => {
+    const deck = createDeckRuntime();
+    const head = 4000;
+    const span = 88200;
+    const silent = pastColumns(deck, head, span);
+    assert.equal(silent.length, 64);
+    assert.ok(silent.every((col) => col.left === 0 && col.right === 0));
+    noteDeck(deck, head - 1000, 0.9, -0.4);
+    const cols = pastColumns(deck, head, span);
+    assert.ok(cols.some((col) => col.left > 0.85 && col.right > 0.35));
+    const far = pastColumns(deck, head + span, span);
+    assert.ok(far.every((col) => col.left === 0 && col.right === 0));
+    const pages = [formatWavePage(0, head, span, cols), formatWavePage(1, head, span, cols)];
+    const parsed = pages.map((text) => parseWavePage(text));
+    assert.ok(parsed[0] && parsed[1]);
+    assert.equal(parsed[0].head, head);
+    assert.equal(parsed[1].span, span);
+    assert.equal(parsed[0].cols.length + parsed[1].cols.length, 64);
+    const restored = [...parsed[0].cols, ...parsed[1].cols];
+    const hot = restored.find((col) => col.left > 0.8);
+    assert.ok(hot);
+    assert.ok(hot.right > 0.3);
+    assert.equal(parseWavePage("0|1|2|abc"), null);
+    const tape = emptyWave(WAVE_HOP, span);
+    tape.left.set(0, 1);
+    applyWavePages(tape, pages);
+    const behind = waveAt(tape, head - 1000, head);
+    assert.ok((behind?.left ?? 0) > 0.8);
+    assert.ok((behind?.left ?? 0) < 1);
+  });
+
+  it("shows the event ahead of the needle and does not copy the previous beat", () => {
     const tape = emptyWave(128, 8192);
-    tape.held = held;
-    const head = 1024;
-    assert.equal(waveAt(tape, head - beat, head, beat)?.left, 1);
-    assert.equal(waveAt(tape, head - beat, head, beat)?.right, 0.25);
-    assert.equal(waveAt(tape, head - 512, head, beat)?.left, 0.4);
-    assert.equal(waveAt(tape, head - 512, head, beat)?.right, 0.8);
-    const ahead = waveAt(tape, head + 512, head, beat);
-    assert.equal(ahead?.left, 0.4);
-    assert.equal(ahead?.right, 0.8);
-    assert.notEqual(waveAt(tape, head + beat, head, beat)?.left, 0.9);
-    tape.left.set(head + 512, 0.15);
-    tape.right.set(head + 512, 0.05);
-    assert.equal(waveAt(tape, head + 512, head, beat)?.left, 0.15);
+    tape.left.set(0, 1);
+    tape.right.set(0, 0.2);
+    tape.left.set(4096, 0.25);
+    tape.right.set(4096, 0.9);
+    const head = 4096;
+    const beat = 1024;
+    assert.equal(waveAt(tape, head, head)?.left, 0.25);
+    assert.equal(waveAt(tape, head, head)?.right, 0.9);
+    assert.equal(waveAt(tape, head - beat, head), null);
+    assert.equal(waveAt(tape, head + beat, head), null);
+    assert.equal(waveAt(tape, head + 4096, head)?.left, 1);
+    resetWaveform();
+    const project = onlyLane("kick");
+    const sketch = serviceWaveform(project);
+    assert.equal(sketch, waveformTape());
+    assert.ok(sketch.period > 0);
+    const ahead = wavePeak(sketch, 0, Math.floor(sketch.period / 2), 0);
+    assert.ok(ahead.left + ahead.right > 0.05, `ahead ${ahead.left} ${ahead.right}`);
+    const behind = wavePeak(sketch, -Math.floor(sketch.period / 4), -1, 0);
+    assert.equal(behind.left, 0);
+    assert.equal(behind.right, 0);
   });
 
-  it("draws the past from the phrase before any block is rendered", () => {
+  it("uses the voice decay, so a short kick is shorter and hat ring lengthens the body", () => {
     resetWaveform();
-    const project = defaultProject();
-    const span = barSamples(project.global.tempo, project.global.bar);
-    const beat = Math.max(1, Math.round(samplesPerBeat(project.global.tempo)));
-    const head = span;
-    const tape = serviceWaveform(project, head, span, 0);
-    const recent = Math.floor((head - beat) / 128) * 128;
-    assert.equal(tape.left.has(recent), false);
-    assert.ok((waveAt(tape, head - beat, head, beat)?.left ?? 0) > 0);
-    const past = wavePeak(tape, head - span / 2, head, head, beat);
-    const future = wavePeak(tape, head, head + Math.floor(span / 2), head, beat);
-    assert.ok(past.left + past.right > 0.15, `past ${past.left} ${past.right}`);
-    assert.ok(future.left + future.right > 0.05, `future ${future.left} ${future.right}`);
-    const pixels = new Uint8Array(WIDTH * 32);
-    drawWaveform(pixels, WIDTH, tape, { x: 0, y: 0, w: WIDTH, h: 32, head, span, beat, stylus: true });
-    const mid = Math.floor(31 / 2);
-    let leftLit = 0;
-    for (let x = 0; x < WIDTH / 2 - 1; x++) {
-      for (let y = 0; y < mid; y++) if ((pixels[y * WIDTH + x] ?? 0) > 0) leftLit++;
-    }
-    assert.ok(leftLit > 20, `left ${leftLit}`);
+    const shortKick = onlyLane("kick");
+    shortKick.working.kick.sound.decay.value = 0;
+    const short = remain(serviceWaveform(shortKick), 0.25);
+    resetWaveform();
+    const longKick = onlyLane("kick");
+    longKick.working.kick.sound.decay.value = 1;
+    const long = remain(serviceWaveform(longKick), 0.25);
+    assert.ok(short < 0.15, `short ${short}`);
+    assert.ok(long > 0.4, `long ${long}`);
+    resetWaveform();
+    const tightHat = onlyLane("hat");
+    tightHat.working.hat.sound.decay.value = 0;
+    tightHat.working.hat.sound.ring.value = 0;
+    const tight = remain(serviceWaveform(tightHat), 0.05);
+    resetWaveform();
+    const openHat = onlyLane("hat");
+    openHat.working.hat.sound.decay.value = 0;
+    openHat.working.hat.sound.ring.value = 1;
+    const open = remain(serviceWaveform(openHat), 0.05);
+    assert.ok(open > tight + 0.15, `tight ${tight} open ${open}`);
   });
 
-  it("builds a continuous loop with audio behind and ahead of the needle", () => {
+  it("keeps the collage when a deck knob moves", () => {
     resetWaveform();
     const project = defaultProject();
-    const span = barSamples(project.global.tempo, project.global.bar);
-    const tape = fillWaveform(project, span / 2, span);
-    assert.equal(tape, waveformTape());
-    assert.ok(waveformCovers());
-    assert.ok(tape.period >= span);
-    const peaks = [...tape.left.values()];
-    assert.ok(peaks.length > 100);
-    const max = Math.max(...peaks);
-    const min = Math.min(...peaks);
-    assert.ok(max > 0.05, `max ${max}`);
-    assert.ok(max > min * 4, `max ${max} min ${min}`);
-    const head = tape.period * 5 + Math.floor(tape.period / 2);
-    const behind = wavePeak(tape, head - span / 2, head);
-    const ahead = wavePeak(tape, head, head + span / 2);
-    assert.ok(behind.left + behind.right > 0.02, `behind ${behind.left} ${behind.right}`);
-    assert.ok(ahead.left + ahead.right > 0.02, `ahead ${ahead.left} ${ahead.right}`);
-    const before = wavePeak(tape, -span / 2, -1);
-    assert.ok(before.left + before.right > 0.02, `before ${before.left} ${before.right}`);
-    const body = peaks.filter((peak) => peak > max * 0.08 && peak < max * 0.85);
-    assert.ok(body.length > 15, `body hops ${body.length} of ${peaks.length}`);
-    const pixels = pixelsOf(tape, head);
-    const mid = Math.floor(31 / 2);
-    let thick = 0;
-    for (let x = 0; x < WIDTH; x++) {
-      if (x === 64) continue;
-      let height = 0;
-      for (let y = 0; y < mid; y++) if (lit(pixels, x, y)) height++;
-      if (height >= 3) thick++;
-    }
-    assert.ok(thick > 12, `thick columns ${thick}`);
-    const beat = Math.max(1, Math.round(samplesPerBeat(project.global.tempo)));
-    const needle = tape.period / 2;
+    const tape = serviceWaveform(project);
     const decked = clone(project);
     decked.deck.div = decked.deck.div === 0 ? 1 : 0;
-    assert.equal(serviceWaveform(decked, needle, span), tape);
-    assert.equal(waveformCovers(), true);
+    assert.equal(serviceWaveform(decked), tape);
     const quieter = clone(project);
     quieter.mixer = { ...quieter.mixer, master: 0 };
-    const rebuilt = serviceWaveform(quieter, needle, span);
-    assert.ok(rebuilt.held);
-    const pastSample = needle - span / 4;
-    assert.deepEqual(waveAt(rebuilt, pastSample, needle, beat), waveAt(tape, pastSample, needle, 0));
-    assert.equal(rebuilt.left.has(Math.floor((needle + beat) / 128) * 128), false);
-    assert.deepEqual(waveAt(rebuilt, needle + beat, needle, beat), waveAt(tape, needle - beat, needle, 0));
+    const rebuilt = serviceWaveform(quieter);
+    assert.notEqual(rebuilt, tape);
+    assert.equal(rebuilt.past, null);
   });
 });

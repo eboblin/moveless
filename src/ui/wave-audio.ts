@@ -2,35 +2,25 @@ import { PPQN, SAMPLE_RATE, SIXTEENTH_TICKS, tickToSample } from "../core/clock.
 import { heardFx, laneHeard } from "../core/journal.ts";
 import { generatePhrase } from "../core/phrase.ts";
 import { LANES, type LaneId, type Phrase, type Project } from "../core/types.ts";
-import { createEngine, loadPhrase, placeClock, renderDryBlock, type Engine } from "../dsp/voice.ts";
 import { phraseLoop, soundMotions, type LoopEvent } from "../dsp/schedule.ts";
+import {
+  hatDecaySeconds,
+  kickDecaySeconds,
+  percDecaySeconds,
+  snareBodyDecaySeconds,
+  snareNoiseDecaySeconds,
+} from "../dsp/voice.ts";
 import { WAVE_HOP, emptyWave, type WaveTape } from "./wave.ts";
 
-let engine: Engine | null = null;
 let bound: Project | null = null;
 let boundStamp = "";
 let tape: WaveTape = emptyWave();
-let period = 0;
-/** Next sample to render. The pass stays continuous so tails cross the block edge. */
-let cursor = 0;
-/** Where this pass began. After the end of the loop, the prefix before it is filled. */
-let restart = 0;
-let prefixEnd = 0;
-let primed = false;
-let phase: "idle" | "main" | "prefix" | "done" = "idle";
 
-/** Drop the rendered tape. The next view starts from the phrase again. */
+/** Drop the collage. The next view builds it again from the phrase. */
 export function resetWaveform(): void {
-  engine = null;
   bound = null;
   boundStamp = "";
   tape = emptyWave();
-  period = 0;
-  cursor = 0;
-  restart = 0;
-  prefixEnd = 0;
-  primed = false;
-  phase = "idle";
 }
 
 export function waveformTape(): WaveTape {
@@ -83,19 +73,97 @@ function bump(map: Map<number, number>, key: number, value: number): void {
   if (value > prev) map.set(key, value);
 }
 
-/** How long this hit still occupies the strip. Drums decay; notes hold their length. */
-function bodySamples(event: LoopEvent, tempo: number): number {
-  const ms = (seconds: number) => Math.max(WAVE_HOP, Math.round(seconds * SAMPLE_RATE));
-  if (event.lane === "kick") return ms(0.14);
-  if (event.lane === "snare") return ms(0.2);
-  if (event.lane === "hat") return ms(0.06);
-  if (event.lane === "perc") return ms(0.1);
-  return Math.max(ms(0.05), tickToSample(Math.max(1, event.lengthTicks), tempo));
+function fold(sample: number, period: number): number {
+  const wrapped = sample % period;
+  return wrapped < 0 ? wrapped + period : wrapped;
+}
+
+function unit(event: LoopEvent, key: string, fallback: number): number {
+  const found = event.params.find((param) => param.id === key || param.id.endsWith(`_${key}`));
+  if (!found) return fallback;
+  return Math.max(0, Math.min(1, found.value));
+}
+
+function gains(lane: LaneId): [number, number] {
+  const pan = SKETCH_PAN[lane] ?? 0;
+  return [Math.sqrt((1 - pan) / 2), Math.sqrt((1 + pan) / 2)];
+}
+
+/** Exponential tail, the same shape as envK: exp(-t / bodySec). */
+function paintDecay(tape: WaveTape, period: number, at: number, amp: number, seconds: number, leftGain: number, rightGain: number): void {
+  if (!(amp > 0) || !(seconds > 0) || !(period > 0)) return;
+  const tau = Math.max(1, seconds * SAMPLE_RATE);
+  const hops = Math.max(1, Math.ceil((seconds * 4 * SAMPLE_RATE) / WAVE_HOP));
+  for (let i = 0; i < hops; i++) {
+    const env = amp * Math.exp((-i * WAVE_HOP) / tau);
+    if (i > 0 && env < amp * 0.02) break;
+    const key = Math.floor(fold(at + i * WAVE_HOP, period) / WAVE_HOP) * WAVE_HOP;
+    bump(tape.left, key, env * leftGain);
+    bump(tape.right, key, env * rightGain);
+  }
+}
+
+/** Plateau for the note, then the release tail. The attack is a short ramp at the start. */
+function paintNote(
+  tape: WaveTape,
+  period: number,
+  at: number,
+  amp: number,
+  holdSamples: number,
+  attackSamples: number,
+  releaseSec: number,
+  leftGain: number,
+  rightGain: number,
+): void {
+  if (!(amp > 0) || !(period > 0)) return;
+  const hold = Math.max(WAVE_HOP, holdSamples);
+  const attack = Math.max(1, attackSamples);
+  const tau = Math.max(1, releaseSec * SAMPLE_RATE);
+  const hops = Math.max(1, Math.ceil((hold + releaseSec * 4 * SAMPLE_RATE) / WAVE_HOP));
+  for (let i = 0; i < hops; i++) {
+    const t = i * WAVE_HOP;
+    let env = amp;
+    if (t < attack) env = amp * Math.min(1, (t + WAVE_HOP) / attack);
+    else if (t >= hold) env = amp * Math.exp(-(t - hold) / tau);
+    if (t >= hold && env < amp * 0.02) break;
+    const key = Math.floor(fold(at + t, period) / WAVE_HOP) * WAVE_HOP;
+    bump(tape.left, key, env * leftGain);
+    bump(tape.right, key, env * rightGain);
+  }
+}
+
+function paintHit(tape: WaveTape, period: number, event: LoopEvent, at: number, amp: number, tempo: number): void {
+  const [leftGain, rightGain] = gains(event.lane);
+  if (event.lane === "kick") {
+    paintDecay(tape, period, at, amp, kickDecaySeconds(unit(event, "decay", 0.4)), leftGain, rightGain);
+    return;
+  }
+  if (event.lane === "snare") {
+    paintDecay(tape, period, at, amp, snareBodyDecaySeconds(unit(event, "bdcy", 0.3)), leftGain, rightGain);
+    paintDecay(tape, period, at, amp, snareNoiseDecaySeconds(unit(event, "ndcy", 0.3)), leftGain, rightGain);
+    const snap = unit(event, "snap", 0.4);
+    const clickSamples = 40 + (1 - snap) ** 1.4 * 700;
+    paintDecay(tape, period, at, amp, clickSamples / SAMPLE_RATE, leftGain, rightGain);
+    return;
+  }
+  if (event.lane === "hat") {
+    const body = hatDecaySeconds(unit(event, "decay", 0.3)) * (1 + unit(event, "ring", 0.3) * 2.8);
+    paintDecay(tape, period, at, amp, body, leftGain, rightGain);
+    return;
+  }
+  if (event.lane === "perc") {
+    paintDecay(tape, period, at, amp, percDecaySeconds(unit(event, "decay", 0.4)), leftGain, rightGain);
+    return;
+  }
+  const release = unit(event, "release", unit(event, "decay", 0.4));
+  const attack = 1 + unit(event, "attack", 0) * 0.2 * SAMPLE_RATE;
+  const hold = tickToSample(Math.max(1, event.lengthTicks), tempo);
+  paintNote(tape, period, at, amp, hold, attack, 0.04 + release * 1.6, leftGain, rightGain);
 }
 
 /**
- * The whole loop as an envelope, with no audio render. The past can use it
- * on the first frame. Real hops replace it as they arrive.
+ * The whole loop as envelopes. One pass over the phrase, no voice.
+ * Drum tails use the same seconds as the sounding voice. Notes hold, then release.
  */
 function buildSketch(project: Project, phrase: Phrase, period: number): WaveTape {
   const sketch = emptyWave(WAVE_HOP, period);
@@ -104,20 +172,9 @@ function buildSketch(project: Project, phrase: Phrase, period: number): WaveTape
     const amp = Math.max(0, Math.min(1, event.velocity / 127));
     if (!(amp > 0)) continue;
     const loop = Math.max(1, event.loop);
-    const span = bodySamples(event, tempo);
-    const pan = SKETCH_PAN[event.lane] ?? 0;
-    const leftGain = Math.sqrt((1 - pan) / 2);
-    const rightGain = Math.sqrt((1 + pan) / 2);
-    const drum = event.lane === "kick" || event.lane === "snare" || event.lane === "hat" || event.lane === "perc";
-    const hops = Math.max(1, Math.ceil(span / WAVE_HOP));
     let at = ((event.sample % loop) + loop) % loop;
     while (at < period) {
-      for (let i = 0; i < hops; i++) {
-        const env = drum ? amp * Math.exp((-3 * i) / hops) : i >= hops - 1 ? amp * 0.4 : amp;
-        const key = Math.floor(((at + i * WAVE_HOP) % period) / WAVE_HOP) * WAVE_HOP;
-        bump(sketch.left, key, env * leftGain);
-        bump(sketch.right, key, env * rightGain);
-      }
+      paintHit(sketch, period, event, at, amp, tempo);
       at += loop;
     }
   }
@@ -125,8 +182,7 @@ function buildSketch(project: Project, phrase: Phrase, period: number): WaveTape
 }
 
 /** Deck knobs are not part of this. Turning them must not rebuild the picture. */
-function audioStamp(project: Project): string {
-  const phrase = generatePhrase(project);
+function audioStamp(project: Project, phrase: Phrase): string {
   return JSON.stringify([
     project.global.tempo,
     project.global.bar,
@@ -146,120 +202,17 @@ function audioStamp(project: Project): string {
   ]);
 }
 
-function bind(project: Project): Engine {
-  if (engine && bound === project) return engine;
-  const stamp = audioStamp(project);
-  if (engine && stamp === boundStamp) {
-    bound = project;
-    return engine;
-  }
-  const next = createEngine();
-  next.fx = heardFx(project);
-  next.bus = project.bus;
-  next.beats = Math.max(1, project.global.bar);
+/** Rebuild the collage when the heard phrase changes. Ring peaks stay on the tape the host fills. */
+export function serviceWaveform(project: Project): WaveTape {
+  if (bound === project) return tape;
   const phrase = generatePhrase(project);
-  loadPhrase(next, phraseLoop(project, phrase), project.global.tempo, true, soundMotions(project, phrase));
-  const nextPeriod = loopPeriod(project, phrase);
-  const previous = tape.period === nextPeriod && tape.left.size > 0 ? tape : undefined;
-  if (previous) previous.held = undefined;
-  period = nextPeriod;
-  tape = emptyWave(WAVE_HOP, period);
-  tape.held = previous;
-  tape.sketch = buildSketch(project, phrase, period);
-  cursor = 0;
-  restart = 0;
-  prefixEnd = 0;
-  primed = false;
-  phase = "idle";
-  engine = next;
+  const stamp = audioStamp(project, phrase);
+  if (stamp === boundStamp) {
+    bound = project;
+    return tape;
+  }
+  tape = buildSketch(project, phrase, loopPeriod(project, phrase));
   bound = project;
   boundStamp = stamp;
-  return next;
-}
-
-/** Start at the left edge of the window so the past is the first audio drawn. */
-function prime(voice: Engine, head: number, span: number): void {
-  if (primed) return;
-  primed = true;
-  phase = "main";
-  let start = 0;
-  if (period > 0 && span > 0) {
-    const left = head - span / 2;
-    const wrapped = left % period;
-    const folded = wrapped < 0 ? wrapped + period : wrapped;
-    start = Math.floor(folded / WAVE_HOP) * WAVE_HOP;
-  }
-  cursor = start;
-  restart = start;
-  if (start > 0) placeClock(voice, start);
-}
-
-/** One continuous block. Seeking each hop would drop every tail and leave a spike. */
-function renderAhead(voice: Engine): boolean {
-  if (phase === "done" || phase === "idle" || !(period > 0)) return false;
-  if (phase === "main" && cursor >= period) {
-    if (restart > 0) {
-      prefixEnd = restart;
-      restart = 0;
-      cursor = 0;
-      phase = "prefix";
-      placeClock(voice, 1);
-    } else {
-      phase = "done";
-      return false;
-    }
-  }
-  if (phase === "prefix" && cursor >= prefixEnd) {
-    phase = "done";
-    prefixEnd = 0;
-    return false;
-  }
-  const room = phase === "prefix" ? prefixEnd - cursor : period - cursor;
-  const frames = Math.min(WAVE_HOP, Math.max(0, room));
-  if (frames <= 0) {
-    phase = "done";
-    return false;
-  }
-  const audio = renderDryBlock(voice, frames);
-  const key = Math.floor(cursor / WAVE_HOP) * WAVE_HOP;
-  let left = tape.left.get(key) ?? 0;
-  let right = tape.right.get(key) ?? 0;
-  for (let i = 0; i < frames; i++) {
-    const l = Math.abs(audio[i * 2] ?? 0);
-    const r = Math.abs(audio[i * 2 + 1] ?? 0);
-    if (l > left) left = l;
-    if (r > right) right = r;
-  }
-  tape.left.set(key, left);
-  tape.right.set(key, right);
-  cursor += frames;
-  return true;
-}
-
-/** True once the whole loop is stored. Until then the past stays up and the future is borrowed. */
-export function waveformCovers(_head = 0, _span = 0): boolean {
-  return phase === "done";
-}
-
-/** Render the loop from the left edge of the window. A few blocks per call. */
-export function serviceWaveform(project: Project, head = 0, span = 0, budgetMs = 8): WaveTape {
-  const voice = bind(project);
-  prime(voice, head, span);
-  const started = Date.now();
-  for (let n = 0; n < 24; n++) {
-    if (!renderAhead(voice)) break;
-    if (Date.now() - started >= budgetMs) break;
-  }
-  return tape;
-}
-
-/** Fill the loop. Tests and a cold screen use this; the host spreads the work. */
-export function fillWaveform(project: Project, head = 0, span = 0): WaveTape {
-  const voice = bind(project);
-  prime(voice, head, span);
-  const guard = Math.ceil(period / WAVE_HOP) + 4;
-  for (let n = 0; n < guard; n++) {
-    if (!renderAhead(voice)) break;
-  }
   return tape;
 }
