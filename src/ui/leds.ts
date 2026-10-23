@@ -17,6 +17,7 @@ import {
 } from "../core/types.ts";
 import { pageCount, pageGroupColor, pagesFor, scopeIncludesPage } from "../core/pages.ts";
 import { depthTouchesPath } from "../core/randomize.ts";
+import { DECK_PAD, DECK_PAD_INDEX } from "../core/deck.ts";
 import { peekKind } from "./state.ts";
 
 export const LED = {
@@ -137,6 +138,11 @@ export interface PadSurface {
   muteLatched?: boolean;
   muteDownMs?: number | null;
   muteDownTick?: number | null;
+  deckHeld?: boolean;
+  deckLatched?: boolean;
+  deckDownMs?: number | null;
+  deckGesture?: string | null;
+  deckLatchedGesture?: string | null;
 }
 
 /**
@@ -157,6 +163,20 @@ export function padLeds(project: Project, mode: "journal" | "set", surface?: Pad
     const shown = surface.heldPage ?? surface.lanePages?.[surface.heldContext] ?? (surface.heldContext === context ? page : -1);
     return pageOverlay(scenes, surface.heldContext, shown);
   }
+  if (kind === "deck") return deckPadLeds(scenes, surface ?? {});
+  return scenes;
+}
+
+const DECK_HUE = 11;
+
+function deckPadLeds(scenes: Led[], surface: PadSurface): Led[] {
+  const heard = surface.deckGesture ?? surface.deckLatchedGesture ?? null;
+  DECK_PAD.forEach((pad, index) => {
+    const at = DECK_PAD_INDEX[index];
+    if (at === undefined) return;
+    const on = heard === pad.id;
+    scenes[at] = { family: "yellow", color: on ? DECK_HUE : offColor(DECK_HUE), blink: false };
+  });
   return scenes;
 }
 

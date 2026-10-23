@@ -159,6 +159,20 @@ typedef struct {
     /* Smoothed render share of the callback slack, 0..99. */
     int cpu_pct;
     int cpu_avg;
+    /* Master platter. lead is samples already rendered past clock. */
+    float *deck_l;
+    float *deck_r;
+    int deck_mask;
+    int deck_filled;
+    int deck_lead;
+    int deck_warm;
+    int deck_gesture;
+    int deck_command;
+    int deck_down;
+    int deck_up;
+    float deck_k[8];
+    int deck_seed;
+    float deck_bar;
 } Engine;
 
 typedef struct {
@@ -1368,10 +1382,30 @@ static int fx_init(Engine *engine) {
     e->rate = 0.3f;
     e->level = 0.7f;
     engine->beats = 4.0f;
+    engine->deck_mask = (1 << 18) - 1;
+    engine->deck_l = calloc((size_t)(engine->deck_mask + 1), sizeof(float));
+    engine->deck_r = calloc((size_t)(engine->deck_mask + 1), sizeof(float));
+    if (!engine->deck_l || !engine->deck_r) return 0;
+    engine->deck_gesture = -1;
+    engine->deck_command = -1;
+    engine->deck_up = -1;
+    engine->deck_k[0] = 2.0f;
+    engine->deck_k[1] = 0.5f;
+    engine->deck_k[2] = 1.0f;
+    engine->deck_k[3] = 2.0f;
+    engine->deck_k[5] = 2.0f;
+    engine->deck_k[6] = 0.5f;
+    engine->deck_k[7] = 0.5f;
+    engine->deck_bar = 4.0f;
+    engine->deck_seed = 1;
     return ok;
 }
 
 static void fx_free(Engine *engine) {
+    free(engine->deck_l);
+    free(engine->deck_r);
+    engine->deck_l = NULL;
+    engine->deck_r = NULL;
     Plate *p = &engine->plate;
     line_free(&p->pre);
     line_free(&p->in0);
@@ -1807,6 +1841,369 @@ static void catch_holding(Engine *engine) {
 
 #define FIRE_CAP 256
 #define FOLLOW_STRIDE 8
+#define DECK_FADE 353
+
+static int deck_pick(float value, int count) {
+    int n = (int)lroundf(value);
+    if (n < 0) return 0;
+    if (n >= count) return count - 1;
+    return n;
+}
+
+static int deck_mod(int n, int m) {
+    if (m <= 1) return 0;
+    int r = n % m;
+    return r < 0 ? r + m : r;
+}
+
+static int deck_beat(float tempo) {
+    float t = tempo > 1.0f ? tempo : 1.0f;
+    return (int)lroundf((SR * 60.0f) / t);
+}
+
+static int deck_div(const Engine *engine) {
+    static const float beats[7] = { 2.0f, 1.0f, 0.5f, 1.0f / 3.0f, 0.25f, 1.0f / 6.0f, 0.125f };
+    return (int)fmaxf(1.0f, lroundf(beats[deck_pick(engine->deck_k[0], 7)] * (float)deck_beat(engine->tempo)));
+}
+
+static int deck_len(const Engine *engine) {
+    int sixteenths = (int)lroundf(engine->deck_bar > 1.0f ? engine->deck_bar : 1.0f) * 4;
+    if (sixteenths < 1) sixteenths = 1;
+    float unit = engine->deck_k[1];
+    if (unit < 0.0f) unit = 0.0f;
+    if (unit > 1.0f) unit = 1.0f;
+    int n = 1 + (int)floorf(unit * (float)sixteenths);
+    if (n > sixteenths) n = sixteenths;
+    return (int)fmaxf(1.0f, lroundf(((float)n * (float)deck_beat(engine->tempo)) / 4.0f));
+}
+
+static int deck_brake(const Engine *engine) {
+    static const float beats[4] = { 0.25f, 0.5f, 1.0f, 2.0f };
+    return (int)fmaxf(1.0f, lroundf(beats[deck_pick(engine->deck_k[3], 4)] * (float)deck_beat(engine->tempo)));
+}
+
+static int deck_bar_samples(const Engine *engine) {
+    float bars = engine->deck_bar > 1.0f ? engine->deck_bar : 1.0f;
+    return (int)fmaxf(1.0f, lroundf(bars * (float)deck_beat(engine->tempo)));
+}
+
+static int deck_quant(const Engine *engine) {
+    int which = deck_pick(engine->deck_k[5], 4);
+    if (which == 0) return 1;
+    if (which == 1) return deck_div(engine);
+    if (which == 2) return deck_beat(engine->tempo);
+    return deck_bar_samples(engine);
+}
+
+static int deck_snap(int sample, int unit) {
+    if (unit <= 1) return sample;
+    int m = deck_mod(sample, unit);
+    return m == 0 ? sample : sample + (unit - m);
+}
+
+typedef struct {
+    float pos;
+    float live;
+    float gain;
+    float throw_amt;
+    float rate;
+} DeckRead;
+
+static DeckRead deck_identity(int now) {
+    DeckRead r = { (float)now, 1.0f, 1.0f, 0.0f, 1.0f };
+    return r;
+}
+
+static DeckRead deck_stopped(float pos) {
+    DeckRead r = { pos, 0.0f, 0.0f, 0.0f, 0.0f };
+    return r;
+}
+
+static float deck_brake_rate(float elapsed, float span) {
+    if (elapsed >= span) return 0.0f;
+    float k = -logf(0.01f) / span;
+    return expf(-k * (elapsed > 0.0f ? elapsed : 0.0f));
+}
+
+static float deck_brake_pos(float elapsed, float span, float origin) {
+    float k = -logf(0.01f) / span;
+    if (elapsed >= span) return origin + span / k;
+    float t = elapsed > 0.0f ? elapsed : 0.0f;
+    return origin + (1.0f - expf(-k * t)) / k;
+}
+
+static DeckRead deck_spin(float origin, float now, float target) {
+    float span = target - origin;
+    if (span < 1.0f) span = 1.0f;
+    float u = (now - origin) / span;
+    if (u < 0.0f) u = 0.0f;
+    if (u > 1.0f) u = 1.0f;
+    float u2 = u * u;
+    float u3 = u2 * u;
+    float h00 = 2.0f * u3 - 3.0f * u2 + 1.0f;
+    float h01 = -2.0f * u3 + 3.0f * u2;
+    float h11 = u3 - u2;
+    float d00 = 6.0f * u2 - 6.0f * u;
+    float d01 = -6.0f * u2 + 6.0f * u;
+    float d11 = 3.0f * u2 - 2.0f * u;
+    DeckRead r;
+    r.pos = h00 * origin + h01 * target + h11 * span;
+    r.rate = (d00 * origin + d01 * target + d11 * span) / span;
+    r.live = 0.0f;
+    r.gain = 1.0f;
+    r.throw_amt = 0.0f;
+    return r;
+}
+
+static DeckRead deck_gesture(const Engine *engine, int gesture, int now) {
+    int div = deck_div(engine);
+    int len = deck_len(engine);
+    int bar = deck_bar_samples(engine);
+    int immediate = gesture == 10 || gesture == 11;
+    int origin = immediate ? engine->deck_down : deck_snap(engine->deck_down, deck_quant(engine));
+    if (now < origin) return deck_identity(now);
+    if (gesture == 10) {
+        float span = (float)deck_brake(engine);
+        float elapsed = (float)(now - origin);
+        float rate = deck_brake_rate(elapsed, span);
+        if (rate < 0.02f) return deck_stopped(deck_brake_pos(span, span, (float)origin));
+        DeckRead r = { deck_brake_pos(elapsed, span, (float)origin), 0.0f, 1.0f, 0.0f, rate };
+        return r;
+    }
+    if (gesture == 11) {
+        int target = deck_snap(origin + 1, bar);
+        if (target - origin < deck_brake(engine)) target += bar;
+        if (now >= target) return deck_identity(now);
+        return deck_spin((float)origin, (float)now, (float)target);
+    }
+    if (gesture == 0 || gesture == 1 || gesture == 14) {
+        int slice = gesture == 1 ? (int)fmaxf(1.0f, lroundf((float)div / 2.0f)) : div;
+        int start = origin - deck_mod(origin, slice) - slice;
+        if (gesture != 14) {
+            DeckRead r = { (float)(start + deck_mod(now - origin, slice)), 0.0f, 1.0f, 0.0f, 1.0f };
+            return r;
+        }
+        float held = (float)(now - origin);
+        float rise = held / (float)bar;
+        if (rise > 1.0f) rise = 1.0f;
+        if (rise < 0.0f) rise = 0.0f;
+        float ramp = engine->deck_k[7] > 0.0f ? engine->deck_k[7] : 0.0f;
+        float rate = 1.0f + ramp * rise * 3.0f;
+        float consumed = held <= (float)bar ? held + (ramp * 3.0f * held * held) / (2.0f * (float)bar) : held * rate;
+        DeckRead r = { (float)start + (float)deck_mod((int)lroundf(consumed), slice), 0.0f, 1.0f, 0.0f, rate };
+        return r;
+    }
+    if (gesture == 2) {
+        DeckRead r = { (float)(origin - len + deck_mod(now - origin, len)), 0.0f, 1.0f, 0.0f, 1.0f };
+        return r;
+    }
+    if (gesture == 3) {
+        int future = engine->deck_lead >= len;
+        if (now >= origin + len) return deck_identity(now);
+        int window_end = future ? origin + len : origin;
+        DeckRead r = { (float)(window_end - (now - origin)), 0.0f, 1.0f, 0.0f, -1.0f };
+        return r;
+    }
+    if (gesture == 4) {
+        int start = origin - deck_mod(origin, bar);
+        DeckRead r = { (float)(start + deck_mod(now - origin, div)), 0.0f, 1.0f, 0.0f, 1.0f };
+        return r;
+    }
+    if (gesture == 5) {
+        int beat = deck_beat(engine->tempo);
+        int future = engine->deck_lead >= beat;
+        int start = future ? origin : origin - beat;
+        int slice = beat / 4;
+        if (slice < 1) slice = 1;
+        int bar_index = origin / bar;
+        int order[4] = { 0, 1, 2, 3 };
+        unsigned state = (unsigned)((engine->deck_seed + 1) * 997 + (bar_index + 1) * 131);
+        for (int i = 3; i > 0; i--) {
+            state = state * 1664525u + 1013904223u;
+            int j = (int)(state % (unsigned)(i + 1));
+            int swap = order[i];
+            order[i] = order[j];
+            order[j] = swap;
+        }
+        int at = (now - origin) / slice;
+        if (at > 3) at = 3;
+        if (at < 0) at = 0;
+        DeckRead r = { (float)(start + order[at] * slice + deck_mod(now - origin, slice)), 0.0f, 1.0f, 0.0f, 1.0f };
+        return r;
+    }
+    if (gesture == 6) {
+        float duty = 0.05f + (engine->deck_k[6] < 0.0f ? 0.0f : engine->deck_k[6] > 1.0f ? 1.0f : engine->deck_k[6]) * 0.9f;
+        int on = deck_mod(now - origin, div) < (int)((float)div * duty);
+        DeckRead r = { (float)now, 1.0f, on ? 1.0f : 0.0f, 0.0f, 1.0f };
+        return r;
+    }
+    if (gesture == 7) {
+        DeckRead r = { (float)now, 1.0f, 0.0f, 0.0f, 1.0f };
+        return r;
+    }
+    if (gesture == 8) {
+        DeckRead r = { (float)origin + (float)(now - origin) * 0.5f, 0.0f, 1.0f, 0.0f, 0.5f };
+        return r;
+    }
+    if (gesture == 9) {
+        int ran = (now - origin) * 2;
+        if (origin + ran <= now + engine->deck_lead) {
+            DeckRead r = { (float)(origin + ran), 0.0f, 1.0f, 0.0f, 2.0f };
+            return r;
+        }
+        DeckRead r = { (float)(origin - div + deck_mod(ran, div)), 0.0f, 1.0f, 0.0f, 2.0f };
+        return r;
+    }
+    if (gesture == 12) {
+        float beat = (float)deck_beat(engine->tempo);
+        float u = (float)(now - origin) / beat;
+        if (u >= 1.0f) return deck_identity(now);
+        DeckRead r;
+        r.pos = (float)origin + beat * (2.0f / 3.14159265f) * (cosf(3.14159265f * u) - 1.0f);
+        r.rate = -2.0f * sinf(3.14159265f * u);
+        r.live = 0.0f;
+        r.gain = 1.0f;
+        r.throw_amt = 0.0f;
+        return r;
+    }
+    if (gesture == 13) {
+        int span = len > 1 ? len : 1;
+        float phase = (float)deck_mod(now - origin, span) / (float)span;
+        float depth = engine->deck_k[2] > 0.0f ? engine->deck_k[2] : 0.0f;
+        float reach = depth * (float)span * 0.25f;
+        if (reach < 1.0f) reach = 1.0f;
+        int which = deck_pick(engine->deck_k[4], 4);
+        if (which == 2) {
+            float gain = phase > 0.35f && phase < 0.65f ? 0.0f : 1.0f;
+            DeckRead r = { (float)origin + phase * reach, 0.0f, gain, 0.0f, reach / (float)span };
+            return r;
+        }
+        float turns = which == 1 ? 2.0f : 1.0f;
+        float wobble = sinf(6.2831853f * turns * phase);
+        float bias = which == 3 ? (phase - 0.5f) * 0.35f : 0.0f;
+        DeckRead r;
+        r.pos = (float)origin + (wobble + bias) * reach;
+        r.rate = ((6.2831853f * turns * cosf(6.2831853f * turns * phase)) / (float)span) * reach;
+        r.live = 0.0f;
+        r.gain = 1.0f;
+        r.throw_amt = 0.0f;
+        return r;
+    }
+    DeckRead r = { (float)now, 1.0f, 1.0f, 1.0f, 1.0f };
+    return r;
+}
+
+static DeckRead deck_read(Engine *engine) {
+    int now = engine->clock;
+    int gesture = engine->deck_gesture;
+    if (gesture < 0) return deck_identity(now);
+    DeckRead wet = deck_gesture(engine, gesture, now);
+    if (engine->deck_up < 0 || now < engine->deck_up) return wet;
+    float t = (float)(now - engine->deck_up) / (float)DECK_FADE;
+    if (t > 1.0f) t = 1.0f;
+    if (t < 0.0f) t = 0.0f;
+    float dry = sinf(t * 1.5707963f);
+    float keep = cosf(t * 1.5707963f);
+    wet.live = wet.live * keep + dry;
+    wet.gain = wet.gain * keep + dry;
+    wet.throw_amt *= keep;
+    wet.rate = wet.rate * keep + dry;
+    return wet;
+}
+
+static float deck_throw(Engine *engine) {
+    if (engine->deck_gesture < 0) return 0.0f;
+    DeckRead read = deck_read(engine);
+    float depth = engine->deck_k[2];
+    if (depth < 0.0f) depth = 0.0f;
+    if (depth > 1.0f) depth = 1.0f;
+    return read.throw_amt * depth;
+}
+
+static void deck_hear(Engine *engine, float *l, float *r) {
+    int now = engine->clock;
+    int mask = engine->deck_mask;
+    if (engine->deck_l && mask > 0) {
+        engine->deck_l[now & mask] = *l;
+        engine->deck_r[now & mask] = *r;
+        if (now + 1 > engine->deck_filled) engine->deck_filled = now + 1;
+    }
+    if (engine->deck_gesture < 0) return;
+    DeckRead read = deck_read(engine);
+    float src_l = *l;
+    float src_r = *r;
+    if (read.live < 1.0f && engine->deck_l) {
+        int i0 = (int)floorf(read.pos);
+        if (i0 >= 0 && i0 < engine->deck_filled) {
+            float frac = read.pos - (float)i0;
+            int a = i0 & mask;
+            int b = (i0 + 1) & mask;
+            int b_ok = i0 + 1 < engine->deck_filled;
+            float l0 = engine->deck_l[a];
+            float r0 = engine->deck_r[a];
+            float l1 = b_ok ? engine->deck_l[b] : l0;
+            float r1 = b_ok ? engine->deck_r[b] : r0;
+            src_l = l0 * (1.0f - frac) + l1 * frac;
+            src_r = r0 * (1.0f - frac) + r1 * frac;
+        } else {
+            src_l = 0.0f;
+            src_r = 0.0f;
+        }
+    }
+    float wet_l = (*l * read.live + src_l * (1.0f - read.live)) * read.gain;
+    float wet_r = (*r * read.live + src_r * (1.0f - read.live)) * read.gain;
+    float depth = engine->deck_k[2];
+    if (depth < 0.0f) depth = 0.0f;
+    if (depth > 1.0f) depth = 1.0f;
+    *l = *l * (1.0f - depth) + wet_l * depth;
+    *r = *r * (1.0f - depth) + wet_r * depth;
+    if (engine->deck_up >= 0 && now >= engine->deck_up + DECK_FADE) engine->deck_gesture = -1;
+}
+
+static int deck_name(const char *s) {
+    static const char *names[] = {
+        "roll", "stut", "loop", "rev", "jump", "glch", "tran", "drop",
+        "half", "dbl", "stop", "spin", "back", "scr", "hlx", "thrw"
+    };
+    if (s[0] == '-' && s[1] == 0) return -1;
+    for (int i = 0; i < 16; i++) {
+        if (strcmp(s, names[i]) == 0) return i;
+    }
+    return -2;
+}
+
+static void deck_apply_text(Engine *engine, const char *text) {
+    if (!text || text[0] != 'D') return;
+    char name[16];
+    float k0, k1, k2, k3, k4, k5, k6, k7;
+    int warm = 0, seed = 0, bar = 4;
+    if (sscanf(text, "D|%15[^|]|%f,%f,%f,%f,%f,%f,%f,%f|%d|%d|%d",
+            name, &k0, &k1, &k2, &k3, &k4, &k5, &k6, &k7, &warm, &seed, &bar) != 12) return;
+    int gesture = deck_name(name);
+    if (gesture < -1) return;
+    engine->deck_k[0] = k0;
+    engine->deck_k[1] = k1;
+    engine->deck_k[2] = k2;
+    engine->deck_k[3] = k3;
+    engine->deck_k[4] = k4;
+    engine->deck_k[5] = k5;
+    engine->deck_k[6] = k6;
+    engine->deck_k[7] = k7;
+    engine->deck_warm = warm ? 1 : 0;
+    engine->deck_seed = seed;
+    engine->deck_bar = bar > 1 ? (float)bar : 1.0f;
+    if (gesture == engine->deck_command) return;
+    engine->deck_command = gesture;
+    if (gesture >= 0) {
+        engine->deck_gesture = gesture;
+        engine->deck_down = engine->clock;
+        engine->deck_up = -1;
+        return;
+    }
+    if (engine->deck_gesture >= 0 && engine->deck_up < 0) engine->deck_up = engine->clock;
+}
+
+
 
 typedef struct {
     int offset;
@@ -1936,12 +2333,18 @@ static void render(Engine *engine, int16_t *out, int frames) {
             dlyR += nr * engine->notes[n].delay;
         }
         float wetL = 0, wetR = 0, delL = 0, delR = 0;
+        if (engine->phrase_on && engine->deck_gesture >= 0) {
+            float thrown = deck_throw(engine);
+            dlyL += left * thrown;
+            dlyR += right * thrown;
+        }
         plate_sample(engine, revL, revR, &wetL, &wetR);
         echo_sample(engine, dlyL, dlyR, &delL, &delR);
         float l = left + wetL + delL;
         float r = right + wetR + delR;
         tilt_mix(engine, &l, &r);
         glue_mix(engine, &l, &r);
+        if (engine->phrase_on) deck_hear(engine, &l, &r);
         l = soft(l);
         r = soft(r);
         decay_pump(engine);
@@ -1986,6 +2389,10 @@ static void set_param(void *instance, const char *key, const char *val) {
     Engine *engine = instance;
     if (!key || !val) return;
     if (strcmp(key, "block") != 0 && strcmp(key, "overtake_dsp:block") != 0) return;
+    if (val[0] == 'D') {
+        deck_apply_text(engine, val);
+        return;
+    }
     if (val[0] == 'P' || val[0] == 'S') {
         snprintf(engine->phrase_text, PHRASE_TEXT, "%s", val);
         engine->phrase_pending = 1;

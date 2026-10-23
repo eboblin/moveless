@@ -11,8 +11,9 @@ import { bindingFor, lanePages, pageCount, pageGroup, pageGroupColor, pagesFor, 
 import { LED, advancePulseClock, blinkHalfMs, directionLit, dropLed, ledColorAt, menuLed, modeButtonLed, offColor, offerLed, padBlinkSteps, padLeds, padPackets, PLAY_LED_ON, playLed, PULSE_CLOCK_IDLE, shadeColor, stepLed, stepLeds, takeLeds, trackLeds } from "../src/ui/leds.ts";
 import { DIGIT_H, displayAmount, plotAmount } from "../src/ui/digits.ts";
 import { CHAR_W, DIGIT_Y, FONT_H, HEADER_H, HEIGHT, NAME_Y, PAGER_Y, PARAM_COL_W, PARAM_H, SEP_Y, TITLE_Y, VALUE_Y, VIZ_H, WIDTH, loadWidth, pixel, renderScreen, type Screen } from "../src/ui/screen.ts";
+import { WAVE_HOP, emptyWave, type WaveTape } from "../src/ui/wave.ts";
 import { defaultUi, HOLD_MS, HOLD_TICKS, openSetMode, settleWheel, WHEEL_RELEASE_MS, type DetentHold } from "../src/ui/state.ts";
-import { reduce, relDelta, type Session } from "../src/ui/input.ts";
+import { midiMessage, reduce, relDelta, type Session } from "../src/ui/input.ts";
 import { DETENT_CLICKS, DETENT_REST_MS, stepKnob, writeControl } from "../src/ui/controls.ts";
 
 function session(): Session {
@@ -2150,6 +2151,57 @@ function litRuns(screen: Screen): number {
   return runs;
 }
 
+function vizLit(screen: Screen): number {
+  let count = 0;
+  for (let y = HEADER_H; y < HEADER_H + VIZ_H - 1; y++) {
+    for (let x = 0; x < WIDTH; x++) if (pixel(screen, x, y)) count++;
+  }
+  return count;
+}
+
+function pixelsMoved(a: Screen, b: Screen): number {
+  let count = 0;
+  for (let i = 0; i < a.pixels.length; i++) if (a.pixels[i] !== b.pixels[i]) count++;
+  return count;
+}
+
+function grooveTape(): WaveTape {
+  const tape = emptyWave();
+  const beat = Math.floor(22050 / WAVE_HOP) * WAVE_HOP;
+  for (let hop = 0; hop < 8; hop++) {
+    tape.left.set(hop * WAVE_HOP, 1);
+    tape.right.set(hop * WAVE_HOP, 0.35);
+    tape.left.set(beat + hop * WAVE_HOP, 0.4);
+    tape.right.set(beat + hop * WAVE_HOP, 1);
+  }
+  return tape;
+}
+
+function paintDeck(project: ReturnType<typeof session>["project"], ui: ReturnType<typeof session>["ui"], tick: number, tape: WaveTape = grooveTape()): Screen {
+  return renderScreen(project, ui, tick, true, undefined, undefined, undefined, tape);
+}
+
+function tallGap(screen: Screen): number {
+  const yBottom = HEADER_H + VIZ_H - 2;
+  const mid = HEADER_H + Math.floor((yBottom - HEADER_H) / 2);
+  const cols: number[] = [];
+  for (let x = 0; x < WIDTH; x++) {
+    if (x === WIDTH / 2) continue;
+    let n = 0;
+    for (let y = HEADER_H; y < mid; y++) if (pixel(screen, x, y)) n++;
+    if (n >= 6) cols.push(x);
+  }
+  const groups: number[][] = [];
+  for (const x of cols) {
+    const last = groups[groups.length - 1];
+    if (!last || x - last[last.length - 1] > 8) groups.push([x]);
+    else last.push(x);
+  }
+  if (groups.length < 2) return -1;
+  const mean = (group: number[]) => group.reduce((sum, x) => sum + x, 0) / group.length;
+  return mean(groups[1]) - mean(groups[0]);
+}
+
 function columnSpan(screen: Screen, x: number): number {
   let count = 0;
   for (let y = HEADER_H; y < HEADER_H + VIZ_H - 1; y++) if (pixel(screen, x, y)) count++;
@@ -2251,6 +2303,156 @@ describe("virtual detents", () => {
     assert.equal(rested.hold, null);
     const flick = stepKnob(4, cycle, 7, caught.hold, DETENT_REST_MS + 1);
     assert.equal(flick.value, 8);
+  });
+});
+
+describe("deck screen", () => {
+  function openDeck(state: Session): Session {
+    const held = reduce(state, { kind: "cc", data1: 118, data2: 127 });
+    return reduce(held, { kind: "cc", data1: 118, data2: 0 });
+  }
+
+  it("latches from the sample button without writing a scene", () => {
+    assert.equal(pageCount("aux"), 4);
+    assert.equal(pagesFor("aux")[3]?.title, "MIX");
+    const before = session();
+    const open = openDeck(before);
+    assert.equal(open.ui.deckLatched, true);
+    assert.equal(open.project.journal.length, 0);
+    assert.equal(open.project.nextSceneId, before.project.nextSceneId);
+    const screen = renderScreen(open.project, open.ui, 0);
+    assert.equal(screen.viz, "deck");
+    assert.equal(screen.header, "DECK");
+    assert.equal(screen.labels.some((label) => label.text === "ROL"), false);
+    assert.equal(screen.labels.some((label) => label.y >= HEADER_H && label.y < SEP_Y), false);
+    assert.equal(screen.labels.some((label) => label.text === "1/8"), true);
+    assert.ok(vizLit(screen) > 40);
+    const held = reduce(session(), { kind: "cc", data1: 118, data2: 127 });
+    const late = { ...held, ui: { ...held.ui, deckDownMs: Date.now() - HOLD_MS - 1 } };
+    assert.equal(reduce(late, { kind: "cc", data1: 118, data2: 0 }).ui.deckLatched, false);
+  });
+
+  it("takes the top pads for a gesture and leaves scenes on the bottom", () => {
+    let state = session();
+    state = { ...state, project: record(record(state.project)) };
+    const first = state.project.journal[0]?.id;
+    const second = state.project.journal[1]?.id;
+    state = { ...state, project: launchScene(state.project, first ?? "", 0) };
+    assert.equal(state.project.morph?.targetId, first);
+    state = openDeck(state);
+    const top = reduce(state, { kind: "note", data1: 92, data2: 127 });
+    assert.equal(top.ui.deckGesture, "roll");
+    assert.equal(top.ui.deckGestureTick, top.tick);
+    assert.equal(top.project.morph?.targetId, first);
+    assert.equal(renderScreen(top.project, top.ui, 0).header, "BEAT REPEAT");
+    const idle = padLeds(top.project, "journal", { ...top.ui, deckGesture: null });
+    const lit = padLeds(top.project, "journal", top.ui);
+    assert.equal(idle[24]?.color, offColor(11));
+    assert.equal(lit[24]?.color, 11);
+    const up = reduce(top, { kind: "note", data1: 92, data2: 0 });
+    assert.equal(up.ui.deckGesture, null);
+    assert.equal(up.ui.deckGestureTick, null);
+    const bottom = reduce(up, { kind: "note", data1: 69, data2: 127 });
+    assert.equal(bottom.project.morph?.targetId, second);
+    const turned = reduce(openDeck(session()), { kind: "cc", data1: 71, data2: 1 });
+    assert.equal(turned.project.deck.div, 3);
+  });
+
+  it("checkers knobs the sounding gesture is not using", () => {
+    const open = openDeck(session());
+    const idle = renderScreen(open.project, open.ui, 0);
+    assert.deepEqual(idle.dim, []);
+    assert.equal(idle.labels.some((label) => label.text === "SCR"), true);
+    const names = (state: Session) =>
+      renderScreen(state.project, state.ui, 0).labels.filter((label) => label.y === NAME_Y).map((label) => label.text);
+    const roll = reduce(open, { kind: "note", data1: 92, data2: 127 });
+    const rolled = renderScreen(roll.project, roll.ui, 0);
+    assert.deepEqual(names(roll), ["DIV", "LEN", "DEP", "BRK", "SCR", "QNT", "TRN", "HLX"]);
+    assert.deepEqual(rolled.dim, [1, 3, 4, 6, 7]);
+    const scratch = reduce(open, { kind: "note", data1: 89, data2: 127 });
+    assert.deepEqual(renderScreen(scratch.project, scratch.ui, 0).dim, [0, 3, 6, 7]);
+    const still = reduce(roll, { kind: "cc", data1: 75, data2: 1 });
+    assert.equal(still.project.deck.shape, 1);
+  });
+
+  it("walks the recorded master under a fixed stylus", () => {
+    const roll = reduce(openDeck(session()), { kind: "note", data1: 92, data2: 127 });
+    const tape = grooveTape();
+    const start = paintDeck(roll.project, roll.ui, 0, tape);
+    const mid = paintDeck(roll.project, roll.ui, 48, tape);
+    const again = paintDeck(roll.project, roll.ui, 96, tape);
+    assert.ok(pixelsMoved(start, mid) > 10);
+    assert.equal(pixelsMoved(start, again), 0);
+    assert.equal(start.header, "BEAT REPEAT");
+  });
+
+  it("draws the master in stereo from the center and keeps the bar scale under a pad", () => {
+    const open = openDeck(session());
+    const tape = grooveTape();
+    const idle = paintDeck(open.project, open.ui, 0, tape);
+    const roll = reduce(open, { kind: "note", data1: 92, data2: 127 });
+    const held = paintDeck(roll.project, roll.ui, 0, tape);
+    const yBottom = HEADER_H + VIZ_H - 2;
+    const h = yBottom - HEADER_H + 1;
+    const mid = HEADER_H + Math.floor((h - 1) / 2);
+    let above = 0;
+    let below = 0;
+    let differ = 0;
+    for (let x = 0; x < WIDTH; x++) {
+      for (let y = HEADER_H; y < mid; y++) if (pixel(idle, x, y)) above++;
+      for (let y = mid + 1; y <= yBottom; y++) if (pixel(idle, x, y)) below++;
+      for (let d = 1; d <= 12; d++) if (mid - d >= HEADER_H && mid + d <= yBottom && pixel(idle, x, mid - d) !== pixel(idle, x, mid + d)) differ++;
+    }
+    assert.ok(above > 20);
+    assert.ok(below > 20);
+    assert.ok(differ > 10);
+    assert.ok(Math.abs(tallGap(idle) - 32) <= 2);
+    assert.ok(Math.abs(tallGap(held) - 32) <= 2);
+    const later = paintDeck(open.project, open.ui, 48, tape);
+    const cursor = WIDTH / 2;
+    assert.equal(pixel(later, cursor, mid), 0);
+    assert.equal(pixel(later, cursor - 1, mid), 1);
+    assert.ok(pixelsMoved(idle, later) > 10);
+  });
+
+  it("keeps pad pressure on the second row from opening the mixer", () => {
+    const pressure = midiMessage(0xa0, 88, 40);
+    assert.equal(pressure, null);
+    assert.equal(midiMessage(0xa0, 86, 20), null);
+    assert.equal(midiMessage(0xa0, 85, 20), null);
+    const note = midiMessage(0x90, 88, 127);
+    assert.deepEqual(note, { kind: "note", data1: 88, data2: 127 });
+    const mute = midiMessage(0xb0, 88, 127);
+    assert.deepEqual(mute, { kind: "cc", data1: 88, data2: 127 });
+    const open = reduce(reduce(session(), { kind: "cc", data1: 118, data2: 127 }), { kind: "cc", data1: 118, data2: 0 });
+    const pad = reduce(open, note ?? { kind: "note", data1: 88, data2: 127 });
+    assert.equal(pad.ui.deckGesture, "back");
+    assert.equal(pad.ui.muteHeld, false);
+    assert.equal(pad.ui.muteLatched, false);
+    const mixed = reduce(session(), mute ?? { kind: "cc", data1: 88, data2: 127 });
+    assert.equal(mixed.ui.muteHeld, true);
+  });
+
+  it("latches a gesture with shift, and mute and the wheel still win", () => {
+    let state = openDeck(session());
+    state = reduce(state, { kind: "cc", data1: 49, data2: 127 });
+    state = reduce(state, { kind: "note", data1: 92, data2: 127 });
+    state = reduce(state, { kind: "note", data1: 92, data2: 0 });
+    state = reduce(state, { kind: "cc", data1: 49, data2: 0 });
+    assert.equal(state.ui.deckLatchedGesture, "roll");
+    assert.equal(state.ui.deckLatchTick, state.tick);
+    assert.equal(state.ui.deckGesture, null);
+    assert.equal(state.ui.deckGestureTick, null);
+    const again = reduce(reduce(state, { kind: "cc", data1: 49, data2: 127 }), { kind: "note", data1: 92, data2: 127 });
+    assert.equal(again.ui.deckLatchedGesture, null);
+    assert.equal(again.ui.deckLatchTick, null);
+    const muted = reduce(state, { kind: "cc", data1: 88, data2: 127 });
+    const pad = reduce(muted, { kind: "note", data1: 92, data2: 127 });
+    assert.equal(pad.ui.deckGesture, null);
+    assert.equal(pad.project.mute.kick, true);
+    const wheeled = reduce({ ...state, ui: { ...state.ui, wheelTouch: true } }, { kind: "note", data1: 92, data2: 127 });
+    assert.equal(wheeled.ui.deckGesture, null);
+    assert.equal(wheeled.ui.deckLatchedGesture, "roll");
   });
 });
 

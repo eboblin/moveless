@@ -1,3 +1,5 @@
+import type { DeckKnobs } from "./deck.ts";
+
 export const LANES = ["kick", "snare", "hat", "perc", "bass", "lead", "chords"] as const;
 export type LaneId = (typeof LANES)[number];
 
@@ -241,6 +243,11 @@ export const JOG_CLICK_CC = 3;
 export const PLAY_CC = 85;
 /** Large circle beside Play. Press writes a new scene. */
 export const RECORD_CC = 86;
+/**
+ * Small Rec button on the right, under the volume knob beside Capture.
+ * Press opens the deck screen and does not write a scene.
+ */
+export const SAMPLE_CC = 118;
 /** Mute peek. White button, bright while the peek is held or latched. */
 export const MUTE_CC = 88;
 /** Capture peek. White button, bright while the peek is held or latched. */
@@ -308,6 +315,8 @@ export interface Project {
   macros: Record<string, number>;
   /** Heard after the voices and the fx returns. Record does not bake it. */
   bus: Bus;
+  /** Deck screen knobs. Not part of a scene. */
+  deck: DeckKnobs;
   bookmarks: (PageRef | null)[];
   /** Voices and the fx lane. Mute on fx silences the wet returns. */
   mute: Record<PatternId, boolean>;

@@ -1,3 +1,4 @@
+import { defaultDeck } from "./deck.ts";
 import { homeOctave, unitForOctave } from "./phrase.ts";
 import { modulated } from "./modulate.ts";
 import { MOTIF_BANK_VERSION } from "./motif.ts";
@@ -19,6 +20,8 @@ import {
   type Bus,
   type Fx,
 } from "./types.ts";
+
+export { defaultDeck };
 
 /** Pattern, cycle and amount sit at rest. Cycle 1 is the bottom of the knob; amount 0 keeps it silent. */
 function home(value: number) {
@@ -293,6 +296,7 @@ export function defaultProject(): Project {
     global: defaultGlobal(),
     macros: {},
     bus: defaultBus(),
+    deck: defaultDeck(),
     bookmarks: [null, null, null, null],
     mute,
     solo,

@@ -1,7 +1,9 @@
 import { SAMPLE_RATE, SIXTEENTH_TICKS, tickToSample } from "../core/clock.ts";
+import { formatDeckCommand, type DeckCommand } from "../core/deck.ts";
 import { defaultBus, defaultFx } from "../core/defaults.ts";
 import { evalModulated } from "../core/modulate.ts";
 import { isDrum, LANES, type Bus, type Fx, type LaneId } from "../core/types.ts";
+import { commandDeck, createDeckRuntime, deckTargetLead, deckThrow, hearDeck, writeDeckBlock, type DeckRuntime } from "./deck.ts";
 import type { EngineParam } from "./map.ts";
 import type { BlockEvent, LoopEvent, Motion } from "./schedule.ts";
 import { clearEcho, clearTank, createEcho, createTank, echoSample, tankSample, type Echo, type Tank } from "./fx.ts";
@@ -89,6 +91,9 @@ export interface Engine {
   /** Pitched-note timing of the phrase last loaded. Same grid must not re-attack. */
   holdSig: string;
   lanes: LaneBox[];
+  /** Master platter. The shadow is a second voice kept ahead of this clock. */
+  deck: DeckRuntime;
+  deckShadow: Engine | null;
 }
 
 interface DrumVoice {
@@ -217,6 +222,8 @@ export function createEngine(): Engine {
     echo: createEcho(),
     holdSig: "",
     lanes: emptyLanes(),
+    deck: createDeckRuntime(),
+    deckShadow: null,
   };
 }
 
@@ -230,8 +237,14 @@ export function loadPhrase(engine: Engine, events: LoopEvent[], tempo: number, r
   engine.holdSig = sig;
   bucketMotions(engine, motions);
   stampHeld(engine);
+  engine.deckShadow = null;
+  engine.deck.lead = 0;
   if (reset) {
     engine.clock = 0;
+    engine.deck.filled = 0;
+    engine.deck.gesture = null;
+    engine.deck.command = null;
+    engine.deck.up = null;
     clearTank(engine.tank);
     clearEcho(engine.echo);
     clearBusState(engine);
@@ -307,6 +320,37 @@ const FOLLOW_STRIDE = 8;
 
 /** Advance the voice clock by real audio frames and retrigger the stored phrase. */
 export function renderClock(engine: Engine, frames = 128): Float32Array {
+  const out = playBlock(engine, frames, false);
+  fillDeckAhead(engine, frames);
+  return out;
+}
+
+/**
+ * One block of the master the platter stores: after the bus, before the deck
+ * and the soft clip. The first frame is sample `clock + 1`.
+ */
+export function renderDryBlock(engine: Engine, frames = 128): Float32Array {
+  return playBlock(engine, frames, true);
+}
+
+/**
+ * Arm whatever is already sounding at `sample`, then leave the clock so the
+ * next rendered frame is stored at that index. The live engine's first frame is index 1.
+ */
+export function placeClock(engine: Engine, sample: number): void {
+  const at = Math.max(1, Math.floor(sample));
+  for (const drum of engine.drums) drum.on = false;
+  for (const note of engine.notes) note.on = false;
+  engine.clock = at;
+  catchHolding(engine);
+  engine.clock = at - 1;
+  clearTank(engine.tank);
+  clearEcho(engine.echo);
+  clearBusState(engine);
+}
+
+/** One block of the phrase clock. `ahead` skips the platter and the soft clip so the cushion can be stored raw. */
+function playBlock(engine: Engine, frames: number, ahead: boolean): Float32Array {
   const tempo = engine.tempo;
   const fires: { offset: number; event: (typeof engine.phrase)[number] }[] = [];
   const C = engine.clock;
@@ -325,10 +369,10 @@ export function renderClock(engine: Engine, frames = 128): Float32Array {
       fi += 1;
     }
     engine.clock += 1;
-  });
+  }, ahead);
 }
 
-function renderFrames(engine: Engine, frames: number, at: (frame: number) => void): Float32Array {
+function renderFrames(engine: Engine, frames: number, at: (frame: number) => void, ahead = false): Float32Array {
   const out = new Float32Array(frames * 2);
   for (let i = 0; i < frames; i++) {
     at(i);
@@ -370,14 +414,77 @@ function renderFrames(engine: Engine, frames: number, at: (frame: number) => voi
       dlyL += pair[0] * note.delay;
       dlyR += pair[1] * note.delay;
     }
+    const thrown = ahead ? 0 : deckThrow(engine.deck, engine.clock, engine.tempo);
+    if (thrown > 0) {
+      dlyL += left * thrown;
+      dlyR += right * thrown;
+    }
     const wetR = tankSample(engine.tank, engine.fx.reverb, revL, revR);
     const wetD = echoSample(engine.echo, engine.fx.delay, engine.beats, engine.tempo, dlyL, dlyR);
     const mixed = glueMix(engine, tiltMix(engine, left + wetR[0] + wetD[0], right + wetR[1] + wetD[1]));
-    out[i * 2] = soft(mixed[0]);
-    out[i * 2 + 1] = soft(mixed[1]);
+    const heard = ahead ? mixed : hearDeck(engine.deck, engine.clock, engine.tempo, mixed[0], mixed[1]);
+    out[i * 2] = ahead ? heard[0] : soft(heard[0]);
+    out[i * 2 + 1] = ahead ? heard[1] : soft(heard[1]);
     decayPump(engine);
   }
   return out;
+}
+
+/**
+ * While the deck screen is up, render at most two extra blocks into the ring
+ * so a reverse or a double can read audio that has not been heard yet.
+ * One of those blocks keeps pace with the live clock; the other grows the lead
+ * until it covers a bar. The shadow is dropped when the screen and the gesture are both gone.
+ */
+function fillDeckAhead(engine: Engine, frames: number): void {
+  const deck = engine.deck;
+  if (deck.bypass) return;
+  if (!deck.warm && !deck.gesture) {
+    engine.deckShadow = null;
+    deck.lead = 0;
+    return;
+  }
+  if (!engine.deckShadow) engine.deckShadow = cloneDeckShadow(engine);
+  const target = deckTargetLead(engine.tempo, deck.barBeats);
+  const extra = deck.lead + frames < target ? 2 : 1;
+  const shadow = engine.deckShadow;
+  for (let n = 0; n < extra; n++) {
+    const start = shadow.clock + 1;
+    const audio = playBlock(shadow, frames, true);
+    writeDeckBlock(deck, start, audio);
+  }
+  deck.lead = Math.max(0, shadow.clock - engine.clock);
+}
+
+function cloneDeckShadow(engine: Engine): Engine {
+  const savedShadow = engine.deckShadow;
+  const ringL = engine.deck.ringL;
+  const ringR = engine.deck.ringR;
+  engine.deckShadow = null;
+  engine.deck.ringL = new Float32Array(0);
+  engine.deck.ringR = new Float32Array(0);
+  const copy = structuredClone(engine);
+  engine.deckShadow = savedShadow;
+  engine.deck.ringL = ringL;
+  engine.deck.ringR = ringR;
+  copy.deckShadow = null;
+  copy.deck.bypass = true;
+  copy.deck.ringL = ringL;
+  copy.deck.ringR = ringR;
+  return copy;
+}
+
+/** Apply a `D|...` record. The same text is what `dsp.so` reads. */
+export function applyDeckCommand(engine: Engine, command: DeckCommand): void {
+  engine.deck.knobs = command.knobs;
+  engine.deck.warm = command.warm;
+  engine.deck.seed = command.seed;
+  engine.deck.barBeats = command.barBeats;
+  commandDeck(engine.deck, command.gesture, engine.clock);
+}
+
+export function formatDeck(command: DeckCommand): string {
+  return formatDeckCommand(command);
 }
 
 function clearHaas(voice: { haas: Float32Array; haasI: number }): void {

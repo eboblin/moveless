@@ -1,4 +1,5 @@
 import { clone } from "./clone.ts";
+import { defaultDeck } from "./deck.ts";
 import { defaultBus, defaultGlobal, defaultProgression, defaultProject } from "./defaults.ts";
 import { nodeAt, setPath } from "./fields.ts";
 import { hash01 } from "./hash.ts";
@@ -253,7 +254,7 @@ function globalFromRecord(record: Record<string, number>): GlobalSettings {
  * Reroll one surface page. Mixer homes are 1. Macro and bus homes are 0.
  * Progression and global homes are the factory project. Each call spends one page budget.
  */
-export function randomizeSurface(project: Project, kind: "mix" | "perf" | "progression" | "global" | "bus", paths: string[]): Project {
+export function randomizeSurface(project: Project, kind: "mix" | "perf" | "progression" | "global" | "bus" | "deck", paths: string[]): Project {
   const depth = project.randomizeDepth;
   const eligible = [...new Set(paths)].filter((path) => depthAllows(path, depth) && knobSpec(path));
   if (!eligible.length) return project;
@@ -282,6 +283,13 @@ export function randomizeSurface(project: Project, kind: "mix" | "perf" | "progr
     if (intensity === "clear") restoreFactory(numbers, homes, eligible, "all");
     else applySplitBudget(numbers, homes, eligible, roll, intensity);
     return { ...project, global: globalFromRecord(numbers), randomizeNonce: nonce };
+  }
+  if (kind === "deck") {
+    const deck = { ...defaultDeck(), ...project.deck };
+    const homes = { deck: defaultDeck() };
+    if (intensity === "clear") restoreFactory({ deck }, homes, eligible, "all");
+    else applySplitBudget({ deck }, homes, eligible, roll, intensity);
+    return { ...project, deck, randomizeNonce: nonce };
   }
   if (kind === "bus") {
     const bus = { ...defaultBus(), ...project.bus };

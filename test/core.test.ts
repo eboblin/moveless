@@ -6,7 +6,7 @@ import { defaultProject } from "../src/core/defaults.ts";
 import { euclidPattern, phraseStepsOf } from "../src/core/events.ts";
 import { applyMorph } from "../src/core/morph.ts";
 import { motif, MOTIF_COUNT } from "../src/core/motif.ts";
-import { modulated } from "../src/core/modulate.ts";
+import { evalModulated, modulated } from "../src/core/modulate.ts";
 import {
   addSceneToSet,
   advance,
@@ -336,6 +336,29 @@ describe("euclid generator", () => {
     }
     assert.equal(kickPartial, true);
     assert.equal(bassPartial, true);
+  });
+
+  it("reads generator velocity after count and rate have placed each note", () => {
+    const project = bar(defaultProject());
+    project.working.kick.gen1 = { ...project.working.kick.gen1, length: 16, hits: 1, rotate: 0, probability: 1 };
+    project.working.kick.gen2.hits = 0;
+    project.working.kick.ratchet.count = modulated(0.4);
+    project.working.kick.ratchet.rate = modulated(unitForIndex(3, 6));
+    project.working.kick.gen1.velocity = modulated(0.5, 0, 16, 0.5);
+    const kicks = generatePhrase(project).lanes.kick;
+    const kickCurve = (step: number) => evalModulated(project.working.kick.gen1.velocity, step);
+    assert.deepEqual(kicks.map((event) => event.tick), [0, 24, 48, 72]);
+    assert.deepEqual(kicks.map((event) => event.velocity), [0, 0.5, 1, 1.5].map(kickCurve));
+    assert.notEqual(kicks[0].velocity, kicks[1].velocity);
+
+    project.working.bass.gen1 = { ...project.working.bass.gen1, length: 16, hits: 1, rotate: 0, probability: 1 };
+    project.working.bass.gen2.hits = 0;
+    project.working.bass.repeat = modulated(0.4);
+    project.working.bass.gen1.velocity = modulated(0.5, 0, 16, 0.5);
+    const bass = generatePhrase(project).lanes.bass.filter((event) => event.step === 0);
+    const bassCurve = (step: number) => evalModulated(project.working.bass.gen1.velocity, step);
+    assert.equal(bass.length, 4);
+    assert.deepEqual(bass.map((event) => event.velocity), [0, 1, 2, 3].map(bassCurve));
   });
 
   it("reads a modulator at the note time rather than the note count", () => {

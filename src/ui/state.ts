@@ -1,3 +1,4 @@
+import type { DeckGesture } from "../core/deck.ts";
 import { pageCount } from "../core/pages.ts";
 import { STEPS, type ContextId, type PageRef } from "../core/types.ts";
 
@@ -94,6 +95,20 @@ export interface UiState {
   captureWasLatched: boolean;
   captureDownTick: number | null;
   captureDownMs: number | null;
+  /** Sample button. Same latch as Mute: a short tap stays, a long hold ends on release. */
+  deckHeld: boolean;
+  deckLatched: boolean;
+  deckWasLatched: boolean;
+  deckDownTick: number | null;
+  deckDownMs: number | null;
+  /** Pad currently under a finger. */
+  deckGesture: DeckGesture | null;
+  /** Transport tick when that finger went down. The picture counts the gesture from here. */
+  deckGestureTick: number | null;
+  /** Shift+pad keeps the gesture after the finger lifts. */
+  deckLatchedGesture: DeckGesture | null;
+  /** Transport tick when the latch was taken. */
+  deckLatchTick: number | null;
   heldContext: ContextId | null;
   heldPage: number | null;
   focus: Focus | null;
@@ -133,7 +148,7 @@ export function holdIsShort(downTick: number | null, downMs: number | null, tick
   return heldTicks < HOLD_TICKS && heldMs < HOLD_MS;
 }
 
-export type PeekKind = "mute" | "capture";
+export type PeekKind = "mute" | "capture" | "deck";
 
 export interface PeekFlags {
   muteHeld?: boolean;
@@ -142,19 +157,25 @@ export interface PeekFlags {
   captureHeld?: boolean;
   captureLatched?: boolean;
   captureDownMs?: number | null;
+  deckHeld?: boolean;
+  deckLatched?: boolean;
+  deckDownMs?: number | null;
 }
 
-/** The peek on screen. A held button beats either latch. A latched mixer covers a latched Capture. */
+/** The peek on screen. A held button beats any latch. The latest hold wins. A latched mixer covers a latched Capture, and either covers a latched deck. */
 export function peekKind(ui: PeekFlags): PeekKind | null {
-  const captureHeld = ui.captureHeld ?? false;
-  const muteHeld = ui.muteHeld ?? false;
-  if (captureHeld && muteHeld) {
-    return (ui.captureDownMs ?? 0) >= (ui.muteDownMs ?? 0) ? "capture" : "mute";
+  const rank: Record<PeekKind, number> = { deck: 0, mute: 1, capture: 2 };
+  const held: { kind: PeekKind; at: number }[] = [];
+  if (ui.captureHeld) held.push({ kind: "capture", at: ui.captureDownMs ?? 0 });
+  if (ui.muteHeld) held.push({ kind: "mute", at: ui.muteDownMs ?? 0 });
+  if (ui.deckHeld) held.push({ kind: "deck", at: ui.deckDownMs ?? 0 });
+  if (held.length) {
+    held.sort((a, b) => a.at - b.at || rank[a.kind] - rank[b.kind]);
+    return held[held.length - 1].kind;
   }
-  if (captureHeld) return "capture";
-  if (muteHeld) return "mute";
   if (ui.muteLatched) return "mute";
   if (ui.captureLatched) return "capture";
+  if (ui.deckLatched) return "deck";
   return null;
 }
 
@@ -237,6 +258,15 @@ export function defaultUi(): UiState {
     captureWasLatched: false,
     captureDownTick: null,
     captureDownMs: null,
+    deckHeld: false,
+    deckLatched: false,
+    deckWasLatched: false,
+    deckDownTick: null,
+    deckDownMs: null,
+    deckGesture: null,
+    deckGestureTick: null,
+    deckLatchedGesture: null,
+    deckLatchTick: null,
     heldContext: null,
     heldPage: null,
     focus: null,

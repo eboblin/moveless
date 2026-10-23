@@ -1,4 +1,5 @@
 import { clone } from "../core/clone.ts";
+import { setDeck } from "../core/journal.ts";
 import { punch } from "../core/morph.ts";
 import { bindingFor, type Binding } from "../core/pages.ts";
 import { setBus, setMacro, setMixer } from "../core/performance.ts";
@@ -114,6 +115,8 @@ function storeControl(project: Project, context: ContextId, binding: Binding, ra
       return writeGlobal(project, binding.path, value);
     case "bus":
       return setBus(project, binding.path.slice("bus.".length) as keyof Bus, value);
+    case "deck":
+      return setDeck(project, binding.path.slice("deck.".length) as keyof Project["deck"], value);
   }
 }
 
@@ -130,6 +133,8 @@ function readStored(project: Project, binding: Binding): number {
       return project.global[binding.path as keyof typeof project.global] as number;
     case "bus":
       return project.bus[binding.path.slice("bus.".length) as keyof Bus];
+    case "deck":
+      return project.deck[binding.path.slice("deck.".length) as keyof Project["deck"]];
     case "lane":
       return 0;
   }

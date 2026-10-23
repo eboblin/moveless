@@ -6,7 +6,6 @@ import type { EuclidGen, LaneId } from "./types.ts";
 export interface Hit {
   step: number;
   generators: (1 | 2)[];
-  velocity: number;
 }
 
 export function phraseStepsOf(gen1: EuclidGen, gen2: EuclidGen): number {
@@ -35,12 +34,7 @@ export function rotatePattern(pattern: readonly boolean[], rotate: number): bool
 }
 
 /** Union of two Euclidean rings. Phrase length is max(length1, length2). */
-export function generateHits(
-  gen1: EuclidGen,
-  gen2: EuclidGen,
-  steps: number,
-  velocityMacro = 0,
-): Hit[] {
+export function generateHits(gen1: EuclidGen, gen2: EuclidGen, steps: number): Hit[] {
   // Span may exceed a single Euclidean ring — rings tile via step % length so
   // pitched lanes can cover the full chord phrase.
   const span = Math.max(1, Math.round(steps));
@@ -55,7 +49,6 @@ export function generateHits(
   const hits: Hit[] = [];
   for (let step = 0; step < span; step++) {
     const fired: (1 | 2)[] = [];
-    let velocity = 0;
     for (const which of [1, 2] as const) {
       const gen = which === 1 ? gen1 : gen2;
       const pattern = rings[which - 1];
@@ -64,14 +57,17 @@ export function generateHits(
       const local = ((step % length) + length) % length;
       if (!pattern[local]) continue;
       fired.push(which);
-      velocity = Math.max(velocity, evalModulated(withMacro(gen.velocity, velocityMacro), step));
     }
-    if (fired.length) hits.push({ step, generators: fired, velocity });
+    if (fired.length) hits.push({ step, generators: fired });
   }
   return hits;
 }
 
-/** Probability is the last gate: each ratchet and each repeat rolls on its own. */
+/**
+ * Probability is the last gate: each ratchet and each repeat rolls on its own,
+ * keyed by the source step. The velocity curve is read after count/rate,
+ * at the step the note was actually placed.
+ */
 export function keptVelocity(
   gen1: EuclidGen,
   gen2: EuclidGen,
@@ -82,6 +78,7 @@ export function keptVelocity(
   index: number,
   velocityMacro = 0,
   probabilityMacro = 0,
+  at = step,
 ): number | null {
   let velocity = 0;
   let any = false;
@@ -91,7 +88,7 @@ export function keptVelocity(
     if (probability <= 0) continue;
     if (probability < 1 && hash01(seed, lane, which, "prob", step, index) >= probability) continue;
     any = true;
-    velocity = Math.max(velocity, evalModulated(withMacro(gen.velocity, velocityMacro), step));
+    velocity = Math.max(velocity, evalModulated(withMacro(gen.velocity, velocityMacro), at));
   }
   return any ? velocity : null;
 }

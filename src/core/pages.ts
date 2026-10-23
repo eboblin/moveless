@@ -15,7 +15,7 @@ import {
 } from "./types.ts";
 
 export type MorphKind = "lerp" | "switch";
-export type KnobStore = "lane" | "progression" | "global" | "mixer" | "macro" | "bus";
+export type KnobStore = "lane" | "progression" | "global" | "mixer" | "macro" | "bus" | "deck";
 /** How the screen draws a knob. `number` is the plain 0..99 cell. */
 export type KnobDisplay = "number" | "pitch" | "octave" | "note" | "scale" | "division" | "chordTone" | "slice" | "count";
 
@@ -81,6 +81,16 @@ const TITLE_WORD: Record<string, string> = {
   TRANS: "TRANSPOSE",
   PMP: "PUMP",
   TLT: "TILT",
+  DIV: "DIVISION",
+  DEP: "DEPTH",
+  BRK: "BRAKE",
+  SHP: "SHAPE",
+  QNT: "QUANT",
+  DUT: "DUTY",
+  RMP: "RAMP",
+  SCR: "SCRATCH",
+  TRN: "TRANSFORM",
+  HLX: "HELIX",
   KCK: "KICK",
   SNR: "SNARE",
   PRC: "PERC",
@@ -523,6 +533,22 @@ const FX_PAGES: Page[] = [
   ], "lerp"),
 ];
 
+/** One screen for the deck. Not an aux page; the Sample button edits these knobs. */
+export function deckPage(): Page {
+  const knob = (path: string, label: string, min: number, max: number, step: number, integer = false) =>
+    plain(`deck.${path}`, label, min, max, step, integer, "deck");
+  return page("deck", "DECK", ["TIME", "DECK"], "bus", [
+    knob("div", "DIV", 0, 6, 1, true),
+    knob("len", "LEN", 0, 1, 0.01),
+    knob("depth", "DEP", 0, 1, 0.01),
+    knob("brake", "BRK", 0, 3, 1, true),
+    knob("shape", "SCR", 0, 3, 1, true),
+    knob("quant", "QNT", 0, 3, 1, true),
+    knob("duty", "TRN", 0, 1, 0.01),
+    knob("ramp", "HLX", 0, 1, 0.01),
+  ]);
+}
+
 function mixPage(): Page {
   return page("mix", "MIXER", [null, null], "mix", [
     ...LANES.map((lane) => plain(lane, LANE_CODE[lane], 0, 1, 0.01, false, "mixer")),
@@ -711,4 +737,4 @@ export function bindingFor(path: string): Binding | null {
 }
 
 for (const context of STEPS) pagesFor(context);
-remember([mixerPage()]);
+remember([mixerPage(), deckPage()]);

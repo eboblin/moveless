@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
+import { defaultDeck } from "../src/core/deck.ts";
 import { defaultFx, defaultProject } from "../src/core/defaults.ts";
 import { record, setRandomizeDepth, setRandomizeIntensity, setRandomizeScope } from "../src/core/performance.ts";
 import {
@@ -119,6 +120,24 @@ describe("project persist", () => {
     assert.ok(clamped);
     assert.equal(clamped.project.bus.tilt, 1);
     assert.equal(clamped.project.bus.glue, 0);
+  });
+
+  it("keeps deck knobs on the project and fills a missing deck from the factory", () => {
+    const stored = JSON.parse(serializeStored(defaultProject(), { context: "aux", page: 0, mode: "journal", playing: true })) as {
+      project: { deck?: unknown };
+    };
+    delete stored.project.deck;
+    const missing = parseStored(JSON.stringify(stored));
+    assert.ok(missing);
+    assert.deepEqual(missing.project.deck, defaultDeck());
+    const project = defaultProject();
+    project.deck = { ...defaultDeck(), div: 4, depth: 0.25 };
+    const parsed = parseStored(serializeStored(project, { context: "aux", page: 0, mode: "journal", playing: true }));
+    assert.ok(parsed);
+    assert.deepEqual(parsed.project.deck, project.deck);
+    const recorded = record(project);
+    assert.equal("deck" in recorded.journal[0], false);
+    assert.deepEqual(recorded.deck, project.deck);
   });
 
   it("clears morph and wander origin on parse", () => {

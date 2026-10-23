@@ -330,6 +330,10 @@ export function commitMacro(project: Project, key: string): Project {
   return { ...project, working, macros, morph: { ...project.morph, punched } };
 }
 
+export function setDeck(project: Project, id: keyof Project["deck"], value: number): Project {
+  return { ...project, deck: { ...project.deck, [id]: value } };
+}
+
 export function setBus(project: Project, id: keyof Bus, value: number): Project {
   return { ...project, bus: { ...project.bus, [id]: value } };
 }

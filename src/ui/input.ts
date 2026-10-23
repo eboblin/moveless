@@ -23,9 +23,10 @@ import {
   toggleLock,
   toggleMute,
 } from "../core/performance.ts";
-import { CAPTURE_CC, contextAtStep, DOWN_CC, isLane, JOG_CLICK_CC, LANES, LOOP_CC, MENU_CC, MUTE_CC, PLAY_CC, RANDOMIZE_DEPTHS, RANDOMIZE_SCOPES, RECORD_CC, TRANSITIONS, UP_CC, WANDERS, type ContextId, type PatternId, type Project } from "../core/types.ts";
+import { DECK_PAD, DECK_PAD_INDEX } from "../core/deck.ts";
+import { CAPTURE_CC, contextAtStep, DOWN_CC, isLane, JOG_CLICK_CC, LANES, LOOP_CC, MENU_CC, MUTE_CC, PLAY_CC, RANDOMIZE_DEPTHS, RANDOMIZE_SCOPES, RECORD_CC, SAMPLE_CC, TRANSITIONS, UP_CC, WANDERS, type ContextId, type PatternId, type Project } from "../core/types.ts";
 import { resetControl, writeControl } from "./controls.ts";
-import { bindingFor, bindingPaths, mixerPage, pageCount, pageGroup, pagesFor, scopeIncludesPage } from "../core/pages.ts";
+import { bindingFor, bindingPaths, deckPage, mixerPage, pageCount, pageGroup, pagesFor, scopeIncludesPage } from "../core/pages.ts";
 import { applyBookmark, FOCUS_HOLD_MS, focusHoldTicks, HOLD_MS, HOLD_TICKS, holdIsShort, MACRO_RETURN_MS, mutePeekOpen, peekKind, RANDOMIZE_HINT_MS, rememberPage, settleWheel, type CaptureLine, type MacroReturn, type Notice, type RandomizeLine, type UiState } from "./state.ts";
 import { journalPageCount } from "../core/journal.ts";
 
@@ -43,6 +44,19 @@ export interface Session {
 }
 
 const SHIFT = 49;
+
+/**
+ * Notes and control changes only. Pad pressure is polyphonic aftertouch on the
+ * same note number, and the second pad row includes the Mute, Play and Record
+ * controllers. Reading that pressure as a CC opens the mixer mid-gesture.
+ */
+export function midiMessage(status: number, data1: number, data2: number): MidiMsg | null {
+  const hi = status & 0xf0;
+  if (hi === 0x80) return { kind: "note", data1, data2: 0 };
+  if (hi === 0x90) return { kind: "note", data1, data2 };
+  if (hi === 0xb0) return { kind: "cc", data1, data2 };
+  return null;
+}
 
 export function reduce(session: Session, msg: MidiMsg): Session {
   session = { ...session, ui: settleWheel(session.ui) };
@@ -72,6 +86,7 @@ function onCc(session: Session, cc: number, value: number, press: boolean): Sess
   if (cc === 60) return onCopy(session, press);
   if (cc === 119) return { ...session, ui: { ...session.ui, deleteHeld: press } };
   if (cc === CAPTURE_CC) return onCapture(session, press);
+  if (cc === SAMPLE_CC) return onDeck(session, press);
   if (cc === JOG_CLICK_CC && press) {
     return { ...session, ui: { ...session.ui, randomizeLatched: !session.ui.randomizeLatched } };
   }
@@ -112,7 +127,7 @@ function onStep(session: Session, index: number, press: boolean): Session {
 }
 
 function onPad(session: Session, index: number, press: boolean): Session {
-  if (!press) return session;
+  if (!press) return onPadRelease(session, index);
   const kind = peekKind(session.ui);
   if (kind === "mute") return onMutePad(session, index);
   const row = Math.floor(index / 8);
@@ -128,7 +143,35 @@ function onPad(session: Session, index: number, press: boolean): Session {
     if (page >= pageCount(held)) return session;
     return { ...session, ui: { ...rememberPage(session.ui, held, page), heldContext: held, heldPage: page } };
   }
+  if (kind === "deck" && (top || second)) return pressDeckPad(session, index);
   return onScenePad(session, index);
+}
+
+function onPadRelease(session: Session, index: number): Session {
+  if (peekKind(session.ui) !== "deck" || session.ui.deckGesture === null) return session;
+  const which = DECK_PAD_INDEX.indexOf(index);
+  if (which < 0 || DECK_PAD[which]?.id !== session.ui.deckGesture) return session;
+  return { ...session, ui: { ...session.ui, deckGesture: null, deckGestureTick: null } };
+}
+
+function pressDeckPad(session: Session, index: number): Session {
+  const which = DECK_PAD_INDEX.indexOf(index);
+  const pad = which < 0 ? null : DECK_PAD[which];
+  if (!pad) return session;
+  if (session.ui.shiftHeld) {
+    const latched = session.ui.deckLatchedGesture === pad.id ? null : pad.id;
+    return {
+      ...session,
+      ui: {
+        ...session.ui,
+        deckLatchedGesture: latched,
+        deckLatchTick: latched ? session.tick : null,
+        deckGesture: null,
+        deckGestureTick: null,
+      },
+    };
+  }
+  return { ...session, ui: { ...session.ui, deckGesture: pad.id, deckGestureTick: session.tick } };
 }
 
 /** Patterns of the journal or the active set. */
@@ -340,6 +383,7 @@ export function modulatedBase(path: string): string | null {
 
 function currentBinding(session: Session, index: number) {
   if (mutePeekOpen(session.ui)) return mixerPage().bindings[index] ?? null;
+  if (peekKind(session.ui) === "deck") return deckPage().bindings[index] ?? null;
   const pages = pagesFor(session.ui.context);
   const page = pages[Math.min(session.ui.page, pages.length - 1)];
   return page?.bindings[index] ?? null;
@@ -390,6 +434,39 @@ function onMutePad(session: Session, index: number): Session {
   return session;
 }
 
+function onDeck(session: Session, press: boolean): Session {
+  if (press) {
+    return {
+      ...session,
+      ui: {
+        ...session.ui,
+        deckHeld: true,
+        deckWasLatched: session.ui.deckLatched,
+        deckDownTick: session.tick,
+        deckDownMs: Date.now(),
+      },
+    };
+  }
+  const short = holdIsShort(session.ui.deckDownTick, session.ui.deckDownMs, session.tick);
+  const latched = short ? !session.ui.deckWasLatched : session.ui.deckWasLatched;
+  return {
+    ...session,
+    ui: {
+      ...session.ui,
+      deckHeld: false,
+      deckLatched: latched,
+      muteLatched: short && latched ? false : session.ui.muteLatched,
+      captureLatched: short && latched ? false : session.ui.captureLatched,
+      deckGesture: latched ? session.ui.deckGesture : null,
+      deckGestureTick: latched ? session.ui.deckGestureTick : null,
+      deckLatchedGesture: latched ? session.ui.deckLatchedGesture : null,
+      deckLatchTick: latched ? session.ui.deckLatchTick : null,
+      deckDownTick: null,
+      deckDownMs: null,
+    },
+  };
+}
+
 function onCapture(session: Session, press: boolean): Session {
   if (press) {
     return {
@@ -423,6 +500,7 @@ function applyRandomize(session: Session): Session {
   const { context, page } = randomizeTarget(session);
   let project = session.project;
   if (mutePeekOpen(session.ui)) project = randomizeSurface(project, "mix", bindingPaths(mixerPage()));
+  else if (peekKind(session.ui) === "deck") project = randomizeSurface(project, "deck", bindingPaths(deckPage()));
   else if (context === "aux") project = rerollAux(project, page);
   else if (isLane(context)) project = rerollLane(project, context, page);
   return { ...session, project };

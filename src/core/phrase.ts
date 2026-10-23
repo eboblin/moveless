@@ -299,15 +299,15 @@ function place(
 }
 
 function drumEvents(lane: DrumLane, id: LaneId, global: GlobalSettings, macros: Record<string, number>, steps: number): TimedEvent[] {
-  const hits = generateHits(lane.gen1, lane.gen2, steps, macro(macros, "velocity"));
+  const hits = generateHits(lane.gen1, lane.gen2, steps);
   const out: TimedEvent[] = [];
   hits.forEach((hit) => {
     const count = countFromUnit(evalModulated(withMacro(lane.ratchet.count, macro(macros, "count")), hit.step));
     const rate = rateFromUnit(evalModulated(withMacro(lane.ratchet.rate, macro(macros, "rate")), hit.step));
     for (let i = 0; i < count; i++) {
-      const velocity = keptVelocity(lane.gen1, lane.gen2, hit.generators, global.seed, id, hit.step, i, macro(macros, "velocity"), macro(macros, "probability"));
-      if (velocity === null) continue;
       const step = hit.step + (i * rate.ticks) / SIXTEENTH_TICKS;
+      const velocity = keptVelocity(lane.gen1, lane.gen2, hit.generators, global.seed, id, hit.step, i, macro(macros, "velocity"), macro(macros, "probability"), step);
+      if (velocity === null) continue;
       const sound = soundValues(lane.sound, step, macros);
       const filter = filterValues(lane.filter, step, macros);
       const send = sendValues(lane.send, step, macros);
@@ -325,7 +325,7 @@ function pitchedEvents(
   harmony: HarmonicEvent[],
   steps: number,
 ): TimedEvent[] {
-  const hits = generateHits(lane.gen1, lane.gen2, steps, macro(macros, "velocity"));
+  const hits = generateHits(lane.gen1, lane.gen2, steps);
   const scale = scaleOf(global.scale);
   const rootPc = mod(global.root + global.transpose, 12);
   const out: TimedEvent[] = [];
@@ -333,9 +333,9 @@ function pitchedEvents(
     const reps = countFromUnit(evalModulated(withMacro(lane.repeat, macro(macros, "repeat")), hit.step));
     const shift = Math.round(bipolarFromUnit(evalModulated(withMacro(lane.step, macro(macros, "step")), hit.step), 7));
     for (let r = 0; r < reps; r++) {
-      const velocity = keptVelocity(lane.gen1, lane.gen2, hit.generators, global.seed, id, hit.step, r, macro(macros, "velocity"), macro(macros, "probability"));
-      if (velocity === null) continue;
       const step = hit.step + r;
+      const velocity = keptVelocity(lane.gen1, lane.gen2, hit.generators, global.seed, id, hit.step, r, macro(macros, "velocity"), macro(macros, "probability"), step);
+      if (velocity === null) continue;
       const pitchU = evalModulated(withMacro(lane.pitch, macro(macros, "pitch")), step);
       const octaveU = evalModulated(withMacro(lane.octave, macro(macros, "octave")), step);
       const degree = scaleOffset(pitchU) + r * shift;

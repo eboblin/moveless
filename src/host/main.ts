@@ -6,9 +6,10 @@ import { generatePhrase } from "../core/phrase.ts";
 import { loadStoredProject, saveStoredProject, type HostFiles, type StoredUi } from "../core/persist.ts";
 import { phraseLoop, soundMotions } from "../dsp/schedule.ts";
 import { formatFx } from "../dsp/fx.ts";
+import { formatDeckCommand } from "../core/deck.ts";
 import { formatBus, packPhraseBody } from "../dsp/voice.ts";
-import { reduce, type MidiMsg, type Session } from "../ui/input.ts";
-import { CAPTURE_CC, DOWN_CC, MENU_CC, MUTE_CC, PLAY_CC, UP_CC } from "../core/types.ts";
+import { midiMessage, reduce, type Session } from "../ui/input.ts";
+import { CAPTURE_CC, DOWN_CC, MENU_CC, MUTE_CC, PLAY_CC, SAMPLE_CC, UP_CC } from "../core/types.ts";
 import { advancePulseClock, blinkHalfMs, directionLit, dropLed, ledColorAt, menuLed, modeButtonLed, offerLed, padBlinkSteps, padLeds, padPackets, playLed, PULSE_CLOCK_IDLE, stepLeds, takeLeds, trackLeds, type PulseClock } from "../ui/leds.ts";
 import { plotAmount, plotMinus } from "../ui/digits.ts";
 import {
@@ -21,9 +22,12 @@ import {
   WIDTH,
   VIZ_H,
   cellTextX,
+  deckFrame,
   loadWidth,
   renderScreen,
 } from "../ui/screen.ts";
+import { resetWaveform, serviceWaveform, waveformCovers } from "../ui/wave-audio.ts";
+import type { WaveTape } from "../ui/wave.ts";
 import { defaultUi, focusVisible, peekKind, rememberPage, settleWheel, type UiState } from "../ui/state.ts";
 import type { Project } from "../core/types.ts";
 
@@ -83,6 +87,7 @@ let sentMs = 0;
 let phraseProject: Project | null = null;
 let phraseBody = "";
 let phraseSent = "";
+let deckSent = "";
 let phraseLatch = "";
 let voiceStep = -1;
 let voiceMorph = false;
@@ -148,6 +153,7 @@ function syncVoice(reset: boolean): void {
     if (voiceOn) sendBlock(`S|${tempo}`);
     voiceOn = false;
     phraseSent = "";
+    deckSent = "";
     return;
   }
   const step = Math.floor(session.tick / 48);
@@ -170,12 +176,37 @@ function syncVoice(reset: boolean): void {
   voiceStep = step;
   voiceMorph = morphing;
   const now = Date.now();
-  if (reset || phraseSent !== phraseBody || now - sentMs > 400) {
+  const deck = deckCommand();
+  const phraseDue = reset || phraseSent !== phraseBody || now - sentMs > 400;
+  if (phraseDue) {
     sendBlock(`P|${tempo}|${reset ? 1 : 0}|${phraseBody}`);
     phraseSent = phraseBody;
     sentMs = now;
   }
+  if (phraseDue || deck !== deckSent) {
+    sendBlock(deck);
+    deckSent = deck;
+  }
   voiceOn = true;
+}
+
+function deckEdge(before: UiState, after: UiState): boolean {
+  return before.deckGesture !== after.deckGesture
+    || before.deckLatchedGesture !== after.deckLatchedGesture
+    || before.deckHeld !== after.deckHeld
+    || before.deckLatched !== after.deckLatched;
+}
+
+function deckCommand(): string {
+  const gesture = session.ui.deckGesture ?? session.ui.deckLatchedGesture;
+  const open = peekKind(session.ui) === "deck";
+  return formatDeckCommand({
+    gesture: open ? gesture : null,
+    knobs: session.project.deck,
+    warm: open,
+    seed: session.project.global.seed,
+    barBeats: session.project.global.bar,
+  });
 }
 
 function blit(pixels: Uint8Array): void {
@@ -205,6 +236,7 @@ let sentMenu = -1;
 let sentPlay = -1;
 let sentMute = -1;
 let sentCapture = -1;
+let sentSample = -1;
 let sentUp = -1;
 let sentDown = -1;
 const TRACK_CC = 40;
@@ -220,6 +252,8 @@ let paintHint = false;
 let paintCapture = false;
 let paintFocus = false;
 let paintPeek: string | null = null;
+let paintDeckFrame = -1;
+let waveReady = true;
 let ledPhase = -1;
 let ledProject: Project | null = null;
 let ledUi: UiState | null = null;
@@ -237,7 +271,10 @@ function screenChanged(): boolean {
   const focus = focusVisible(ui.focus, session.tick, now);
   const peek = peekKind(ui);
   const latch = Math.round(session.project.progression.count) <= 0 ? latchStamp() : "";
+  const deckFrame = peek === "deck" ? Math.floor(Math.max(0, session.tick)) : -1;
+  const filling = peek === "deck" && !waveReady;
   if (
+    !filling &&
     paintProject === session.project &&
     paintUi === ui &&
     paintPlaying === session.playing &&
@@ -248,6 +285,7 @@ function screenChanged(): boolean {
     paintFocus === focus &&
     paintPeek === peek &&
     paintLatch === latch &&
+    paintDeckFrame === deckFrame &&
     paintLoad === audioLoad
   ) {
     return false;
@@ -262,6 +300,7 @@ function screenChanged(): boolean {
   paintFocus = focus;
   paintPeek = peek;
   paintLatch = latch;
+  paintDeckFrame = deckFrame;
   paintLoad = audioLoad;
   return true;
 }
@@ -279,7 +318,13 @@ function ledsChanged(): boolean {
 }
 
 function paintScreen(): void {
-  const screen = renderScreen(session.project, session.ui, session.tick, session.playing, Date.now(), frame, audioLoad);
+  let wave: WaveTape | null = null;
+  if (peekKind(session.ui) === "deck") {
+    const picture = deckFrame(session.project, session.ui, session.tick);
+    wave = serviceWaveform(session.project, picture.head, picture.span);
+    waveReady = waveformCovers(picture.head, picture.span);
+  } else waveReady = true;
+  const screen = renderScreen(session.project, session.ui, session.tick, session.playing, Date.now(), frame, audioLoad, wave);
   blit(screen.pixels);
   const host = globalThis as HostGlobals;
   const invertedCells = new Set<number>();
@@ -321,6 +366,14 @@ function paintScreen(): void {
     const y1 = Math.min(HEIGHT, label.y + height + 1);
     host.fill_rect?.(x0, y0, x1 - x0, y1 - y0, 1);
     host.print?.(x, label.y, label.text, 0);
+  }
+  for (const cell of screen.dim) {
+    const x0 = cell * PARAM_COL_W;
+    for (let y = cellTop; y < HEIGHT; y++) {
+      for (let x = x0; x < x0 + PARAM_COL_W; x++) {
+        if ((x + y) % 2 !== 0) host.set_pixel?.(x, y, 0);
+      }
+    }
   }
 }
 
@@ -398,6 +451,11 @@ function paintLeds(): void {
     sentCapture = capture;
     offerLed(ledOut, [0x0b, 0xb0, CAPTURE_CC, capture]);
   }
+  const sample = peekKind(session.ui) === "deck" ? 11 : 0;
+  if (sentSample !== sample) {
+    sentSample = sample;
+    offerLed(ledOut, [0x0b, 0xb0, SAMPLE_CC, sample]);
+  }
 }
 
 function paintPulseClock(): void {
@@ -472,6 +530,7 @@ export function init(): void {
   phraseProject = null;
   phraseBody = "";
   phraseSent = "";
+  deckSent = "";
   phraseLatch = "";
   paintLatch = "";
   voiceStep = -1;
@@ -492,6 +551,7 @@ export function init(): void {
   sentPlay = -1;
   sentMute = -1;
   sentCapture = -1;
+  sentSample = -1;
   sentUp = -1;
   sentDown = -1;
   paintProject = null;
@@ -503,6 +563,9 @@ export function init(): void {
   paintCapture = false;
   paintFocus = false;
   paintPeek = null;
+  paintDeckFrame = -1;
+  waveReady = true;
+  resetWaveform();
   ledPhase = -1;
   ledProject = null;
   ledUi = null;
@@ -540,14 +603,12 @@ export function onMidiMessageExternal(data: number[]): void {
 }
 
 export function onMidiMessageInternal(data: number[]): void {
-  const status = data[0] ?? 0;
-  const hi = status & 0xf0;
-  const kind: MidiMsg["kind"] = hi === 0x90 || hi === 0x80 ? "note" : "cc";
-  const data2 = hi === 0x80 ? 0 : (data[2] ?? 0);
+  const msg = midiMessage(data[0] ?? 0, data[1] ?? 0, data[2] ?? 0);
+  if (!msg) return;
   const before = session.project;
   const beforeUi = session.ui;
   const beforePlaying = session.playing;
-  session = reduce(session, { kind, data1: data[1] ?? 0, data2 });
+  session = reduce(session, msg);
   markDirty(before);
   if (
     session.ui.context !== beforeUi.context ||
@@ -558,7 +619,7 @@ export function onMidiMessageInternal(data: number[]): void {
     projectDirty = true;
     dirtySinceMs = Date.now();
   }
-  if (session.project !== before) syncVoice(false);
+  if (session.project !== before || deckEdge(beforeUi, session.ui)) syncVoice(false);
   paint();
 }
 

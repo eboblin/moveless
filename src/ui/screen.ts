@@ -1,5 +1,6 @@
+import { DECK_PAD, DIV_LABEL, BRAKE_LABEL, SHAPE_LABEL, QUANT_LABEL, deckKnobsFor, deckPicture, lenLabel, samplesPerBeat, type DeckKnobId, type DeckPicture } from "../core/deck.ts";
 import { laneHeard } from "../core/journal.ts";
-import { SIXTEENTH_TICKS, countFromUnit, rateFromUnit } from "../core/clock.ts";
+import { SIXTEENTH_TICKS, countFromUnit, rateFromUnit, tickToSample } from "../core/clock.ts";
 import { phraseStepsOf } from "../core/events.ts";
 import { chordSymbol, degreeNumeral, pitchClassName, scaleShort, scaleTitle } from "../core/harmony.ts";
 import { chordFigure, generatePhrase, laneSteps, octaveNumber, restingChordToneLabel, restingPitchLabel, restingSliceLabel } from "../core/phrase.ts";
@@ -7,8 +8,9 @@ import { evalModulated } from "../core/modulate.ts";
 import { RANDOMIZE_DEPTHS, RANDOMIZE_INTENSITIES, RANDOMIZE_SCOPES, TRANSITIONS, WANDERS, isPitched, isVoice, LANES, LANE_CODE, type RandomizeDepth, type RandomizeIntensity, type RandomizeScope, type ContextId, type HarmonicEvent, type LaneId, type Phrase, type Project, type TimedEvent } from "../core/types.ts";
 import { DIGIT_H, displayAmount, type BigAmount, type DisplayAmount } from "./digits.ts";
 import { readControl } from "./controls.ts";
-import { bindingFor, pagesFor, type Binding, type Page } from "../core/pages.ts";
+import { bindingFor, deckPage, pagesFor, type Binding, type Page } from "../core/pages.ts";
 import { focusVisible, macroReturnValue, peekKind, type CaptureLine, type RandomizeLine, type UiState } from "./state.ts";
+import { drawWaveform, emptyWave, type WaveTape } from "./wave.ts";
 
 export const WIDTH = 128;
 export const HEIGHT = 64;
@@ -55,6 +57,8 @@ export interface Screen {
   pixels: Uint8Array;
   labels: Label[];
   digits: DigitCell[];
+  /** Knob columns whose gesture is not using them. The host punches a checker through the cell. */
+  dim: number[];
 }
 
 /** Lit pixels of the 1 px load bar. 0 is empty, 99 fills the width. */
@@ -72,6 +76,7 @@ export function renderScreen(
   now = Date.now(),
   pixels: Uint8Array = new Uint8Array(WIDTH * HEIGHT),
   cpu = 0,
+  wave: WaveTape | null = null,
 ): Screen {
   const peek = ui.heldContext;
   const context = peek ?? ui.context;
@@ -87,15 +92,20 @@ export function renderScreen(
   const focus = focusState?.label ?? null;
   const focusBinding = focusState ? bindingFor(focusState.path) : null;
   const mixer = !notice && kind === "mute";
+  const decking = !notice && kind === "deck";
+  const heard = ui.deckGesture ?? ui.deckLatchedGesture;
+  const deckTitle = DECK_PAD.find((pad) => pad.id === heard)?.title ?? "DECK";
   const header = mixer
     ? (focusBinding?.title ?? focus ?? "MIXER")
+    : decking
+      ? (focusBinding?.title ?? focus ?? deckTitle)
     : (focusBinding ? figureHeader(project, context, focusBinding) : null) ??
       focusBinding?.title ??
       (focus ? focus : laneHeader(project, context, page));
   const vizLane: LaneId | null = isVoice(context) ? context : null;
   const generator = vizLane && focusState?.generator ? focusState.generator : null;
-  const bars = !notice && !mixer && page?.id === "prog";
-  const viz = notice ? "notice" : mixer ? "mixer" : generator ? "generator" : vizLane || bars ? "phrase" : "none";
+  const bars = !notice && !mixer && !decking && page?.id === "prog";
+  const viz = notice ? "notice" : mixer ? "mixer" : decking ? "deck" : generator ? "generator" : vizLane || bars ? "phrase" : "none";
   pixels.fill(0);
   const laneMark = (LANES as readonly ContextId[]).indexOf(context);
   const pageMark = mixer ? laneMark : Math.min(pageIndex, Math.max(0, pages.length - 1));
@@ -104,7 +114,7 @@ export function renderScreen(
   else drawLoad(pixels, cpu);
   if (!mixer) drawParamSeparator(pixels);
   const chordRoll = vizLane === "chords";
-  const showPhrase = !notice && !mixer && (vizLane !== null || bars);
+  const showPhrase = !notice && !mixer && !decking && (vizLane !== null || bars);
   const phrase = showPhrase ? generatePhrase(project) : null;
   const playhead = playing ? stepAt(project, tick) : -1;
   if (notice) fillViz(pixels);
@@ -114,11 +124,16 @@ export function renderScreen(
     else drawPhrase(pixels, project, phrase, vizLane, -1);
     dimPattern(pixels);
     drawGenerator(pixels, project, context, generator, focusState?.showPattern ?? false, playhead);
-  } else if (bars && phrase) drawChordBars(pixels, phrase, playhead);
+  }   else if (bars && phrase) drawChordBars(pixels, phrase, playhead);
   else if (chordRoll && phrase) drawChordRoll(pixels, phrase, playhead);
   else if (vizLane && phrase) drawPhrase(pixels, project, phrase, vizLane, playhead);
+  else if (decking) drawDeck(pixels, project, ui, tick, wave);
+  const deckFocus = decking && !focus && heard ? deckTitle : focus;
+  const deck = decking ? deckPage() : null;
   const labels = mixer
     ? [{ x: 1, y: TITLE_Y, text: header.slice(0, LINE_LIMIT) }, ...mixerChannelLabels(project, focus)]
+    : decking
+      ? drawLabels(project, context, deck ?? undefined, deckFocus, header, ui, now)
     : drawLabels(project, context, page, focus, header, ui, now);
   const menu = hint && !notice && !mixer ? menuLineLabels(project, hint.line) : null;
   if (phrase && bars) {
@@ -131,8 +146,9 @@ export function renderScreen(
     clearLinePlate(pixels, menu);
     labels.push(...menu);
   }
-  const digits = mixer || !page ? [] : paramDigits(project, context, page, focus, ui, now);
-  return { header, viz, pixels, labels, digits };
+  const digits = mixer ? [] : deck ? paramDigits(project, context, deck, focus, ui, now) : !page ? [] : paramDigits(project, context, page, focus, ui, now);
+  const dim = decking ? deckDimCells(project, ui) : [];
+  return { header, viz, pixels, labels, digits, dim };
 }
 
 function fillViz(pixels: Uint8Array): void {
@@ -195,6 +211,65 @@ function drawMixer(pixels: Uint8Array, project: Project, focus: string | null): 
       }
     }
   }
+}
+
+/** Columns a sounding gesture does not read. Empty when every knob is in play. */
+function deckDimCells(project: Project, ui: UiState): number[] {
+  const heard = ui.deckGesture ?? ui.deckLatchedGesture;
+  const keys = deckKnobsFor(heard, project.deck);
+  if (!keys) return [];
+  const allow = new Set<string>(keys);
+  const dim: number[] = [];
+  deckPage().bindings.forEach((binding, index) => {
+    if (!binding || index >= PARAM_COLS) return;
+    const id = binding.path.slice("deck.".length) as DeckKnobId;
+    if (!allow.has(id)) dim.push(index);
+  });
+  return dim;
+}
+
+function deckHeardTick(ui: UiState): number | null {
+  if (ui.deckGesture) return ui.deckGestureTick;
+  if (ui.deckLatchedGesture) return ui.deckLatchTick;
+  return null;
+}
+
+/** Where the deck strip is looking. The host renders real audio for this window. */
+export function deckFrame(project: Project, ui: UiState, tick: number): DeckPicture {
+  const tempo = Math.max(1, project.global.tempo);
+  const heard = ui.deckGesture ?? ui.deckLatchedGesture;
+  const motion = deckHeardTick(ui);
+  const now = tickToSample(Math.max(0, tick), tempo);
+  const down = motion == null ? now : tickToSample(Math.max(0, motion), tempo);
+  return deckPicture({
+    gesture: heard,
+    down,
+    up: null,
+    now,
+    tempo,
+    barBeats: project.global.bar,
+    knobs: project.deck,
+    ahead: 0,
+    seed: project.global.seed,
+  });
+}
+
+/** Platter strip. The stylus stays at center and the recorded master scrolls under it. */
+function drawDeck(pixels: Uint8Array, project: Project, ui: UiState, tick: number, wave: WaveTape | null): void {
+  const picture = deckFrame(project, ui, tick);
+  const yTop = HEADER_H;
+  const yBottom = HEADER_H + VIZ_H - 2;
+  drawWaveform(pixels, WIDTH, wave ?? emptyWave(), {
+    x: 0,
+    y: yTop,
+    w: WIDTH,
+    h: yBottom - yTop + 1,
+    head: picture.head,
+    span: picture.span,
+    gain: picture.gain,
+    stylus: true,
+    beat: Math.max(1, Math.round(samplesPerBeat(Math.max(1, project.global.tempo)))),
+  });
 }
 
 function mixerChannelLabels(project: Project, focus: string | null): Label[] {
@@ -853,9 +928,31 @@ function knobAmount(project: Project, context: ContextId, binding: Binding, ui: 
     default:
       break;
   }
+  if (binding.store === "deck") {
+    const text = deckKnobText(project, binding.path);
+    if (text) return { kind: "wide", text, negative: false };
+  }
   const ret = binding.store === "macro" ? ui.macroReturns.find((item) => item.path === binding.path) : undefined;
   const coasting = ret ? macroReturnValue(ret, now) : null;
   return displayAmount(coasting ?? readControl(project, context, binding.path), binding);
+}
+
+function deckKnobText(project: Project, path: string): string | null {
+  const deck = project.deck;
+  switch (path) {
+    case "deck.div":
+      return DIV_LABEL[deck.div] ?? null;
+    case "deck.len":
+      return lenLabel(deck, project.global.bar);
+    case "deck.brake":
+      return BRAKE_LABEL[deck.brake] ?? null;
+    case "deck.shape":
+      return SHAPE_LABEL[deck.shape] ?? null;
+    case "deck.quant":
+      return QUANT_LABEL[deck.quant] ?? null;
+    default:
+      return null;
+  }
 }
 
 function stepAt(_project: Project, tick: number): number {

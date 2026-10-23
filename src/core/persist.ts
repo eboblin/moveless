@@ -1,3 +1,4 @@
+import { defaultDeck } from "./deck.ts";
 import { defaultProject } from "./defaults.ts";
 import { clone } from "./clone.ts";
 import { ensureTrailingEmpty } from "./journal.ts";
@@ -125,6 +126,7 @@ function mergeProject(raw: Record<string, unknown>): Project {
     global: mergeGlobal(base.global, raw.global),
     macros: isRecord(raw.macros) ? { ...base.macros, ...(raw.macros as Record<string, number>) } : base.macros,
     bus: mergeBus(base.bus, raw.bus),
+    deck: mergeDeck(base.deck, raw.deck),
     bookmarks,
     mute: { ...base.mute, ...(isRecord(raw.mute) ? (raw.mute as Project["mute"]) : {}) },
     solo: { ...base.solo, ...(isRecord(raw.solo) ? (raw.solo as Project["solo"]) : {}) },
@@ -192,6 +194,21 @@ function mergeProgression(base: Progression, raw: unknown): Progression {
     merged[key] = clamp(n, min, max);
   }
   return merged;
+}
+
+function mergeDeck(base: Project["deck"], raw: unknown): Project["deck"] {
+  if (!isRecord(raw)) return { ...base };
+  const home = defaultDeck();
+  return {
+    div: clamp(asInt(raw.div, home.div), 0, 6),
+    len: clamp(asNumber(raw.len, home.len), 0, 1),
+    depth: clamp(asNumber(raw.depth, home.depth), 0, 1),
+    brake: clamp(asInt(raw.brake, home.brake), 0, 3),
+    shape: clamp(asInt(raw.shape, home.shape), 0, 3),
+    quant: clamp(asInt(raw.quant, home.quant), 0, 3),
+    duty: clamp(asNumber(raw.duty, home.duty), 0, 1),
+    ramp: clamp(asNumber(raw.ramp, home.ramp), 0, 1),
+  };
 }
 
 function mergeBus(base: Project["bus"], raw: unknown): Project["bus"] {
