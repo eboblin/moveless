@@ -11,9 +11,10 @@ import { generatePhrase } from "../src/core/phrase.ts";
 import { bindingFor, lanePages, pageCount, pageGroup, pageGroupColor, pagesFor, scopeIncludesPage } from "../src/core/pages.ts";
 import { LED, advancePulseClock, blinkHalfMs, directionLit, dropLed, ledColorAt, menuLed, modeButtonLed, offColor, offerLed, padBlinkSteps, padLeds, padPackets, PLAY_LED_ON, playLed, PULSE_CLOCK_IDLE, shadeColor, stepLed, stepLeds, takeLeds, trackLeds } from "../src/ui/leds.ts";
 import { DIGIT_H, displayAmount, plotAmount } from "../src/ui/digits.ts";
-import { CHAR_W, DIGIT_Y, FONT_H, HEADER_H, HEIGHT, NAME_Y, PAGER_Y, PARAM_COL_W, PARAM_H, SEP_Y, TITLE_Y, VALUE_Y, VIZ_H, WIDTH, loadWidth, pixel, renderScreen, type Screen } from "../src/ui/screen.ts";
+import { lettersWidth, plotLetters } from "../src/ui/letters.ts";
+import { CHAR_W, DIGIT_Y, FONT_H, HEADER_H, HEIGHT, NAME_Y, PAGE_TITLE_BAND_H, PAGE_TITLE_PAD, PAGE_TITLE_Y, PAGER_Y, PARAM_COL_W, PARAM_H, SEP_Y, TITLE_Y, VALUE_Y, VIZ_H, WIDTH, loadWidth, pageTitleTravel, pixel, renderScreen, type Screen } from "../src/ui/screen.ts";
 import { WAVE_HOP, emptyWave, type WaveTape } from "../src/ui/wave.ts";
-import { defaultUi, HOLD_MS, HOLD_TICKS, openSetMode, settleWheel, WHEEL_RELEASE_MS, type DetentHold } from "../src/ui/state.ts";
+import { defaultUi, HOLD_MS, HOLD_TICKS, openSetMode, PAGE_TITLE_MS, PAGE_TITLE_SLIDE_MS, settleWheel, WHEEL_RELEASE_MS, type DetentHold } from "../src/ui/state.ts";
 import { midiMessage, reduce, relDelta, settleTrackPeek, type Session } from "../src/ui/input.ts";
 import { DETENT_CLICKS, DETENT_REST_MS, stepKnob, writeControl } from "../src/ui/controls.ts";
 
@@ -74,7 +75,7 @@ describe("pages and leds", () => {
     assert.equal(pageGroupColor("chords", 2), 3);
     assert.equal(pageGroup("chords", 3), "notes");
     assert.equal(pageGroupColor("chords", 3), 14);
-    assert.equal(lanePages("chords")[0]?.title, "GEN 1");
+    assert.equal(lanePages("chords")[0]?.title, "GENERATOR 1");
     assert.deepEqual(lanePages("chords")[0]?.groups, ["GEN 1", "SIZE"]);
     assert.equal(lanePages("chords")[0]?.bindings[4]?.label, "SIZE V");
     assert.deepEqual(lanePages("chords")[2]?.groups, ["VEL", "PRB"]);
@@ -87,12 +88,12 @@ describe("pages and leds", () => {
     assert.equal(lanePages("bass").at(-1)?.groups[1], "DLY");
     assert.equal(lanePages("bass").at(-2)?.groups[0], "FLT CUTOFF");
     assert.equal(lanePages("bass").at(-2)?.groups[1], "FLT RESO");
-    assert.equal(lanePages("kick")[0].title, "GEN 1");
+    assert.equal(lanePages("kick")[0].title, "GENERATOR 1");
     assert.deepEqual(lanePages("kick")[0].groups, ["GEN 1", "VEL"]);
     assert.deepEqual(lanePages("kick")[2].groups, ["COUNT", "RATE"]);
-    assert.equal(lanePages("kick")[1].title, "GEN 2");
+    assert.equal(lanePages("kick")[1].title, "GENERATOR 2");
     assert.equal(lanePages("kick")[0].bindings[3]?.label, "G1 PRB");
-    assert.equal(lanePages("kick")[2].title.includes("COUNT"), true);
+    assert.equal(lanePages("kick")[2].title, "COUNT / RATE");
     assert.equal(lanePages("bass")[2].bindings[0]?.label, "REPEAT V");
     assert.equal(lanePages("bass")[2].groups[1], "STEP");
     assert.equal(lanePages("bass")[3].bindings[0]?.label, "PITCH V");
@@ -119,12 +120,13 @@ describe("pages and leds", () => {
     assert.equal(fxScreen.header.startsWith("FX"), true);
     const aux = pagesFor("aux");
     assert.equal(pageCount("aux"), 6);
-    assert.deepEqual(aux.map((page) => page.id), ["prog", "settings", "play", "bus", "mixer", "deck"]);
-    assert.equal(aux[0].bindings[0]?.label, "START");
-    assert.equal(pageGroup("aux", 0), "notes");
-    assert.equal(pageGroupColor("aux", 0), 14);
-    assert.equal(pageGroup("aux", 1), "global");
-    assert.equal(pageGroupColor("aux", 1), 8);
+    assert.deepEqual(aux.map((page) => page.id), ["settings", "prog", "play", "bus", "mixer", "deck"]);
+    assert.equal(aux[0].bindings[0]?.label, "TEMPO");
+    assert.equal(pageGroup("aux", 0), "global");
+    assert.equal(pageGroupColor("aux", 0), 8);
+    assert.equal(aux[1].bindings[0]?.label, "START");
+    assert.equal(pageGroup("aux", 1), "notes");
+    assert.equal(pageGroupColor("aux", 1), 14);
     assert.deepEqual(aux[2].groups, ["PLAY", "TONE"]);
     assert.deepEqual(
       aux[2].bindings.map((binding) => binding?.label),
@@ -132,7 +134,7 @@ describe("pages and leds", () => {
     );
     assert.equal(pageGroup("aux", 2), "macro");
     assert.equal(pageGroupColor("aux", 2), 22);
-    assert.equal(aux[3].title, "MIX");
+    assert.equal(aux[3].title, "BUS");
     assert.deepEqual(aux[3].groups, ["MIX", null]);
     assert.equal(pageGroup("aux", 3), "bus");
     assert.equal(pageGroupColor("aux", 3), 16);
@@ -535,7 +537,7 @@ describe("surface", () => {
     assert.equal(cleared.project.macros.cutoff, 0);
     assert.equal(cleared.project.macros.noise, 0.8);
 
-    let parked = openAux(session(), 0);
+    let parked = openAux(session(), 1);
     parked.project.macros = { probability: 0.8, cutoff: 0.8 };
     parked.project.progression = { ...parked.project.progression, start: 7, mood: 1 };
     parked.project.global = { ...parked.project.global, tempo: 200, scale: "major" };
@@ -574,7 +576,7 @@ describe("surface", () => {
     assert.equal(parked.project.global.tempo, 120);
     assert.equal(parked.project.global.scale, "minor");
 
-    let globalPage = openAux(session(), 1);
+    let globalPage = openAux(session(), 0);
     globalPage.project.global = { ...globalPage.project.global, tempo: 90, scale: "dorian" };
     globalPage.project.progression = { ...globalPage.project.progression, start: 5 };
     globalPage.project.randomizeScope = "page";
@@ -658,7 +660,7 @@ describe("surface", () => {
     assert.equal(state.ui.heldContext, "aux");
     assert.equal(state.ui.context, "kick");
     const held = padLeds(state.project, "journal", state.ui);
-    assert.deepEqual(held.slice(24, 32).map((led) => led.color), [14, 8, 22, 16, 18, 11, 0, 0]);
+    assert.deepEqual(held.slice(24, 32).map((led) => led.color), [8, 14, 22, 16, 18, 11, 0, 0]);
     assert.equal(held[24].blink, true);
     state = reduce(state, { kind: "note", data1: 93, data2: 127 });
     assert.equal(state.ui.page, 1);
@@ -672,7 +674,7 @@ describe("surface", () => {
     state = reduce(state, { kind: "note", data1: 9, data2: 127 });
     const wheel = padLeds(state.project, "journal", state.ui);
     assert.equal(state.ui.wheelTouch, true);
-    assert.deepEqual(wheel.slice(24, 32).map((led) => led.color), [14, 8, 22, 16, 18, 11, 0, 0]);
+    assert.deepEqual(wheel.slice(24, 32).map((led) => led.color), [8, 14, 22, 16, 18, 11, 0, 0]);
     assert.equal(wheel[25].blink, true);
     assert.equal(wheel[0].color, face[0].color);
     assert.notEqual(wheel[8].color, LED.purple);
@@ -680,11 +682,11 @@ describe("surface", () => {
 
   it("keeps the purple page face under the jog page row", () => {
     const project = defaultProject();
-    const settings = { context: "aux" as const, page: 1 };
+    const settings = { context: "aux" as const, page: auxIndex("settings") };
     const settingsFace = padLeds(project, "journal", settings);
     const settingsWheel = padLeds(project, "journal", { ...settings, wheelTouch: true });
-    assert.deepEqual(settingsWheel.slice(24, 32).map((led) => led.color), [14, 8, 22, 16, 18, 11, 0, 0]);
-    assert.equal(settingsWheel[25].blink, true);
+    assert.deepEqual(settingsWheel.slice(24, 32).map((led) => led.color), [8, 14, 22, 16, 18, 11, 0, 0]);
+    assert.equal(settingsWheel[24].blink, true);
     assert.equal(settingsWheel[8].color, settingsFace[8].color);
     assert.notEqual(settingsWheel[8].color, LED.purple);
     const mixer = { context: "aux" as const, page: auxIndex("mixer") };
@@ -704,7 +706,7 @@ describe("surface", () => {
     let held = reduce(session(), { kind: "note", data1: 31, data2: 127 });
     held = reduce(held, { kind: "note", data1: 9, data2: 127 });
     const both = padLeds(held.project, held.ui.mode, held.ui);
-    assert.deepEqual(both.slice(24, 32).map((led) => led.color), [14, 8, 22, 16, 18, 11, 0, 0]);
+    assert.deepEqual(both.slice(24, 32).map((led) => led.color), [8, 14, 22, 16, 18, 11, 0, 0]);
     assert.notEqual(both[8].color, LED.purple);
 
     let state = openMixer(session());
@@ -732,7 +734,7 @@ describe("surface", () => {
     state = session();
     state.project.global.tempo = 140;
     state.ui.context = "aux";
-    state.ui.page = 1;
+    state.ui.page = 0;
     state = reduce(state, { kind: "cc", data1: 49, data2: 127 });
     state = reduce(state, { kind: "note", data1: 0, data2: 127 });
     assert.equal(state.project.global.tempo, 40);
@@ -1092,7 +1094,7 @@ describe("surface", () => {
     const bass = renderScreen(bassProject, { ...defaultUi(), context: "bass" }, 0);
     assert.ok(columnSpan(bass, 0) <= VIZ_H / 2);
     assert.ok(pitchSpread(bass) > columnSpan(bass, 0));
-    const chords = renderScreen(defaultProject(), { ...defaultUi(), context: "aux" }, 0);
+    const chords = renderScreen(defaultProject(), { ...defaultUi(), context: "aux", page: 1 }, 0);
     const chordNames = chords.labels.filter((label) => label.y === NAME_Y).map((label) => label.text);
     assert.deepEqual(chordNames, ["STA", "COU", "LEN", "MOT", "VAR", "MOO", "TEN", "WAY"]);
     const midi = defaultProject();
@@ -1100,6 +1102,7 @@ describe("surface", () => {
     const held = renderScreen(midi, {
       ...defaultUi(),
       context: "aux",
+      page: 1,
       focus: { label: "COUNT", path: "count", generator: null, showPattern: false, held: true, untilTick: 0, untilMs: 0 },
     }, 0);
     assert.equal(held.header, "MIDI");
@@ -1145,7 +1148,7 @@ describe("surface", () => {
     project.progression.count = 3;
     project.progression.length = 4;
     project.progression.variation = 0;
-    const bars = renderScreen(project, { ...defaultUi(), context: "aux", page: 0 }, 0);
+    const bars = renderScreen(project, { ...defaultUi(), context: "aux", page: 1 }, 0);
     const chordName = bars.labels.find((label) => label.text === "C" && label.y >= HEADER_H && label.y < HEADER_H + VIZ_H);
     assert.ok(chordName);
     const degree = bars.labels.find((label) => label.text === "I" && label.x === chordName.x);
@@ -1224,7 +1227,7 @@ describe("surface", () => {
     const ui = {
       ...defaultUi(),
       context: "aux" as const,
-      page: 0,
+      page: 1,
       randomizeHint: { line: "depth" as const, untilMs: 1_000 },
     };
     const plain = renderScreen(project, { ...ui, randomizeHint: null }, 0);
@@ -1354,7 +1357,7 @@ describe("surface", () => {
     plotAmount(0, PARAM_COL_W, DIGIT_Y, { kind: "big", n: 7, negative: true }, (x, y) => dash.push([x, y]));
     assert.ok(dash.some(([, y]) => y === DIGIT_Y - 2));
     assert.ok(dash.some(([, y]) => y >= DIGIT_Y));
-    const global = renderScreen(defaultProject(), { ...defaultUi(), context: "aux", page: 1 }, 0);
+    const global = renderScreen(defaultProject(), { ...defaultUi(), context: "aux", page: 0 }, 0);
     assert.equal(global.digits.some((d) => d.cell === 0), false);
     assert.ok(global.labels.some((label) => label.y === VALUE_Y && label.text === "120" && label.cell === 0));
     assert.ok(global.labels.some((label) => label.y === VALUE_Y && label.text === "C" && label.cell === 2));
@@ -1365,7 +1368,7 @@ describe("surface", () => {
     const mode = renderScreen(keyed, {
       ...defaultUi(),
       context: "aux",
-      page: 1,
+      page: 0,
       focus: { label: "SCALE", path: "scale", generator: null, showPattern: false, held: true, untilTick: 0, untilMs: 0 },
     }, 0);
     assert.ok(mode.labels.some((label) => label.y === VALUE_Y && label.text === "D" && label.cell === 2));
@@ -1530,7 +1533,7 @@ describe("surface", () => {
     assert.equal(state.ui.context, "kick");
     assert.equal(state.ui.randomizeLatched, false);
     assert.equal(state.ui.randomizeParked, true);
-    assert.equal(padLeds(state.project, state.ui.mode, state.ui)[24].color, 14);
+    assert.equal(padLeds(state.project, state.ui.mode, state.ui)[24].color, 8);
     assert.notEqual(padLeds(state.project, state.ui.mode, state.ui)[8].color, LED.purple);
     state = reduce(state, { kind: "note", data1: 16, data2: 127 });
     assert.equal(state.ui.heldContext, "kick");
@@ -1572,7 +1575,7 @@ describe("surface", () => {
     state = reduce(state, { kind: "note", data1: 92 + auxIndex("deck"), data2: 127 });
     const deck = padLeds(state.project, state.ui.mode, state.ui);
     assert.equal(state.ui.heldContext, "aux");
-    assert.equal(deck[24].color, 14);
+    assert.equal(deck[24].color, 8);
     assert.equal(deck[24 + auxIndex("deck")].color, 11);
     assert.equal(deck[24 + auxIndex("deck")].blink, true);
     assert.equal(deck[16].color, offColor(9));
@@ -1960,7 +1963,7 @@ describe("surface", () => {
     assert.deepEqual(line.map((label) => label.text), ["ALL", "GENS", "VALUES"]);
     assert.equal(line.find((label) => label.text === "GENS")?.invert, true);
     assert.equal(line[0].y, HEADER_H + Math.floor((VIZ_H - 1 - FONT_H) / 2));
-    const plain = renderScreen(state.project, { ...state.ui, randomizeHint: null }, 0);
+    const plain = renderScreen(state.project, { ...state.ui, randomizeHint: null }, 0, false, state.ui.pageTitleUntilMs ?? 0);
     const left = Math.min(...line.map((label) => label.x));
     const right = Math.max(...line.map((label) => label.x + label.text.length * CHAR_W));
     const top = line[0].y;
@@ -2369,7 +2372,7 @@ function grooveTape(): WaveTape {
 }
 
 function paintDeck(project: ReturnType<typeof session>["project"], ui: ReturnType<typeof session>["ui"], tick: number, tape: WaveTape = grooveTape()): Screen {
-  return renderScreen(project, ui, tick, true, undefined, undefined, undefined, tape);
+  return renderScreen(project, ui, tick, true, ui.pageTitleUntilMs ?? Date.now(), undefined, undefined, tape);
 }
 
 function tallGap(screen: Screen): number {
@@ -2500,7 +2503,7 @@ describe("virtual detents", () => {
 describe("deck screen", () => {
   it("opens on the purple lane and ignores the sample button", () => {
     assert.equal(pageCount("aux"), 6);
-    assert.equal(pagesFor("aux")[3]?.title, "MIX");
+    assert.equal(pagesFor("aux")[3]?.title, "BUS");
     assert.equal(pagesFor("aux")[auxIndex("deck")]?.id, "deck");
     const before = session();
     const tapped = reduce(reduce(before, { kind: "cc", data1: 118, data2: 127 }), { kind: "cc", data1: 118, data2: 0 });
@@ -2687,6 +2690,133 @@ describe("deck screen", () => {
     assert.equal(left.ui.context, "kick");
     assert.equal(left.ui.deckLatchedGesture, null);
     assert.equal(left.ui.deckGesture, null);
+  });
+});
+
+describe("page title", () => {
+  function titleLeft(text: string): number {
+    return Math.floor((WIDTH - lettersWidth(text)) / 2);
+  }
+
+  /** Lit pixels of the title band. The band itself is cleared, so this is only the glyphs. */
+  function band(screen: Screen): number[] {
+    const out: number[] = [];
+    for (let y = PAGE_TITLE_Y; y < PAGE_TITLE_Y + PAGE_TITLE_BAND_H; y++) {
+      for (let x = 0; x < WIDTH; x++) out.push(pixel(screen, x, y));
+    }
+    return out;
+  }
+
+  function stamped(parts: { text: string; x: number }[]): number[] {
+    const pixels = new Uint8Array(WIDTH * HEIGHT);
+    for (const part of parts) {
+      plotLetters(part.text, part.x, PAGE_TITLE_Y + PAGE_TITLE_PAD, (px, py) => {
+        if (px < 0 || py < 0 || px >= WIDTH || py >= HEIGHT) return;
+        pixels[py * WIDTH + px] = 1;
+      });
+    }
+    const out: number[] = [];
+    for (let y = PAGE_TITLE_Y; y < PAGE_TITLE_Y + PAGE_TITLE_BAND_H; y++) {
+      for (let x = 0; x < WIDTH; x++) out.push(pixels[y * WIDTH + x] ?? 0);
+    }
+    return out;
+  }
+
+  it("prints the page title over the phrase for half a second after a jog touch", () => {
+    let ysMin = DIGIT_H;
+    let ysMax = 0;
+    plotLetters("GENERATOR 1", 0, 0, (_x, y) => {
+      ysMin = Math.min(ysMin, y);
+      ysMax = Math.max(ysMax, y);
+    });
+    assert.equal(ysMax - ysMin + 1, DIGIT_H);
+    assert.ok(PAGE_TITLE_Y >= HEADER_H);
+    assert.ok(PAGE_TITLE_Y + PAGE_TITLE_BAND_H <= SEP_Y);
+    assert.ok(SEP_Y < DIGIT_Y);
+
+    let state = reduce(session(), { kind: "note", data1: 9, data2: 127 });
+    assert.equal(state.ui.pageTitleSlide, null);
+    const until = state.ui.pageTitleUntilMs ?? 0;
+    assert.ok(until - Date.now() <= PAGE_TITLE_MS && until - Date.now() > PAGE_TITLE_MS - 1000);
+    const shown = renderScreen(state.project, state.ui, 0, false, until - 1);
+    assert.deepEqual(band(shown), stamped([{ text: "GENERATOR 1", x: titleLeft("GENERATOR 1") }]));
+    for (let y = DIGIT_Y; y < DIGIT_Y + DIGIT_H; y++) {
+      for (let x = 0; x < WIDTH; x++) assert.equal(pixel(shown, x, y), 0);
+    }
+    const bare = renderScreen(state.project, { ...state.ui, pageTitleUntilMs: null }, 0, false, until);
+    const ended = renderScreen(state.project, state.ui, 0, false, until);
+    assert.deepEqual(ended.pixels, bare.pixels);
+
+    const released = reduce(state, { kind: "note", data1: 9, data2: 0 });
+    assert.equal(released.ui.pageTitleUntilMs, until);
+    const still = renderScreen(released.project, released.ui, 0, false, until - 1);
+    assert.deepEqual(band(still), stamped([{ text: "GENERATOR 1", x: titleLeft("GENERATOR 1") }]));
+  });
+
+  it("slides the title when the jog changes page and snaps when a pad does", () => {
+    let state = reduce(session(), { kind: "note", data1: 9, data2: 127 });
+    const touchedUntil = state.ui.pageTitleUntilMs ?? 0;
+    const stuck = reduce(state, { kind: "cc", data1: 14, data2: 127 });
+    assert.equal(stuck.ui.page, 0);
+    assert.equal(stuck.ui.pageTitleUntilMs, touchedUntil);
+    assert.equal(stuck.ui.pageTitleSlide, null);
+
+    state = reduce(state, { kind: "cc", data1: 14, data2: 1 });
+    assert.equal(state.ui.page, 1);
+    assert.ok((state.ui.pageTitleUntilMs ?? 0) >= touchedUntil);
+    assert.equal(state.ui.pageTitleSlide?.from, "GENERATOR 1");
+    assert.equal(state.ui.pageTitleSlide?.dir, 1);
+    const started = state.ui.pageTitleSlide?.startedMs ?? 0;
+    const travel = pageTitleTravel(PAGE_TITLE_SLIDE_MS / 2);
+    const fromX = titleLeft("GENERATOR 1") - travel;
+    const toX = titleLeft("GENERATOR 2") + (WIDTH - travel);
+    assert.ok(toX > titleLeft("GENERATOR 2"));
+    const mid = renderScreen(state.project, state.ui, 0, false, started + PAGE_TITLE_SLIDE_MS / 2);
+    assert.deepEqual(
+      band(mid),
+      stamped([
+        { text: "GENERATOR 1", x: fromX },
+        { text: "GENERATOR 2", x: toX },
+      ]),
+    );
+    const settled = renderScreen(state.project, state.ui, 0, false, started + PAGE_TITLE_SLIDE_MS);
+    assert.deepEqual(band(settled), stamped([{ text: "GENERATOR 2", x: titleLeft("GENERATOR 2") }]));
+
+    const until = state.ui.pageTitleUntilMs ?? 0;
+    state = reduce(state, { kind: "note", data1: 94, data2: 127 });
+    assert.equal(state.ui.page, 2);
+    assert.equal(state.ui.pageTitleSlide, null);
+    assert.ok((state.ui.pageTitleUntilMs ?? 0) >= until);
+    const next = pagesFor("kick")[2]?.title ?? "";
+    const snapped = renderScreen(state.project, state.ui, 0, false, (state.ui.pageTitleUntilMs ?? 0) - 1);
+    assert.deepEqual(band(snapped), stamped([{ text: next, x: titleLeft(next) }]));
+  });
+
+  it("shows the lane's own page without a slide when a step or a page pad is pressed", () => {
+    let state = reduce(session(), { kind: "note", data1: 20, data2: 127 });
+    assert.equal(state.ui.heldContext, "bass");
+    assert.equal(state.ui.pageTitleSlide, null);
+    const bass = pagesFor("bass")[0]?.title ?? "";
+    let shown = renderScreen(state.project, state.ui, 0, false, (state.ui.pageTitleUntilMs ?? 0) - 1);
+    assert.deepEqual(band(shown), stamped([{ text: bass, x: titleLeft(bass) }]));
+
+    state = reduce(state, { kind: "note", data1: 93, data2: 127 });
+    assert.equal(state.ui.page, 1);
+    assert.equal(state.ui.pageTitleSlide, null);
+    const page = pagesFor("bass")[1]?.title ?? "";
+    shown = renderScreen(state.project, state.ui, 0, false, (state.ui.pageTitleUntilMs ?? 0) - 1);
+    assert.deepEqual(band(shown), stamped([{ text: page, x: titleLeft(page) }]));
+
+    state = reduce(state, { kind: "note", data1: 20, data2: 0 });
+    assert.equal(state.ui.context, "bass");
+    assert.equal(state.ui.page, 1);
+    state = reduce(state, { kind: "note", data1: 16, data2: 127 });
+    state = reduce(state, { kind: "note", data1: 16, data2: 0 });
+    assert.equal(state.ui.context, "kick");
+    state = reduce(state, { kind: "note", data1: 20, data2: 127 });
+    assert.equal(state.ui.pageTitleSlide, null);
+    shown = renderScreen(state.project, state.ui, 0, false, (state.ui.pageTitleUntilMs ?? 0) - 1);
+    assert.deepEqual(band(shown), stamped([{ text: page, x: titleLeft(page) }]));
   });
 });
 

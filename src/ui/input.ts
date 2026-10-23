@@ -26,8 +26,8 @@ import {
 import { DECK_GROUPS, fieldAt, focusedGroup, groupAt, recallGroup, setGroupCell, type DeckGroup } from "../core/deck.ts";
 import { CAPTURE_CC, contextAtStep, DOWN_CC, isLane, JOG_CLICK_CC, LANES, LOOP_CC, MENU_CC, PLAY_CC, RANDOMIZE_DEPTHS, RANDOMIZE_SCOPES, RECORD_CC, TRANSITIONS, UP_CC, WANDERS, type ContextId, type PatternId, type Project } from "../core/types.ts";
 import { resetControl, writeControl } from "./controls.ts";
-import { bindingFor, bindingPaths, deckPage, livePage, pageCount, pageGroup, pageId, pagesFor, scopeIncludesPage } from "../core/pages.ts";
-import { applyBookmark, auxHidesRandomize, FOCUS_HOLD_MS, focusHoldTicks, HOLD_MS, HOLD_TICKS, holdIsShort, MACRO_RETURN_MS, patternPadsVisible, RANDOMIZE_HINT_MS, rememberPage, restoreTrackPlace, screenPlace, settleRandomize, settleWheel, toggleRandomize, type CaptureLine, type MacroReturn, type Notice, type RandomizeLine, type UiState } from "./state.ts";
+import { bindingFor, bindingPaths, deckPage, livePage, pageCount, pageGroup, pageId, pageTitle, pagesFor, scopeIncludesPage } from "../core/pages.ts";
+import { applyBookmark, auxHidesRandomize, FOCUS_HOLD_MS, focusHoldTicks, HOLD_MS, HOLD_TICKS, holdIsShort, MACRO_RETURN_MS, PAGE_TITLE_MS, patternPadsVisible, RANDOMIZE_HINT_MS, rememberPage, restoreTrackPlace, screenPlace, settleRandomize, settleWheel, showPageTitle, toggleRandomize, type CaptureLine, type MacroReturn, type Notice, type RandomizeLine, type UiState } from "./state.ts";
 import { journalPageCount } from "../core/journal.ts";
 
 export interface MidiMsg {
@@ -107,7 +107,7 @@ function onStep(session: Session, index: number, press: boolean): Session {
       return {
         ...session,
         project: resetLane(session.project, step),
-        ui: { ...session.ui, heldContext: step, focus: null },
+        ui: showPageTitle({ ...session.ui, heldContext: step, focus: null }),
       };
     }
   }
@@ -121,11 +121,13 @@ function onStep(session: Session, index: number, press: boolean): Session {
   }
   return {
     ...session,
-    ui: settleRandomize({
-      ...session.ui,
-      heldContext: step,
-      focus: step === session.ui.context ? session.ui.focus : null,
-    }),
+    ui: showPageTitle(
+      settleRandomize({
+        ...session.ui,
+        heldContext: step,
+        focus: step === session.ui.context ? session.ui.focus : null,
+      }),
+    ),
   };
 }
 
@@ -316,7 +318,16 @@ function selectPage(session: Session, page: number): Session {
 function touchWheel(session: Session, press: boolean): Session {
   if (press) {
     if (session.ui.wheelTouch && session.ui.wheelReleaseMs === null) return session;
-    return { ...session, ui: { ...session.ui, wheelTouch: true, wheelReleaseMs: null } };
+    const fresh = !session.ui.wheelTouch;
+    return {
+      ...session,
+      ui: {
+        ...session.ui,
+        wheelTouch: true,
+        wheelReleaseMs: null,
+        ...(fresh ? { pageTitleUntilMs: Date.now() + PAGE_TITLE_MS, pageTitleSlide: null } : {}),
+      },
+    };
   }
   if (!session.ui.wheelTouch || session.ui.wheelReleaseMs !== null) return session;
   return { ...session, ui: { ...session.ui, wheelReleaseMs: Date.now() } };
@@ -329,7 +340,18 @@ function turnWheel(session: Session, value: number): Session {
   let page = session.ui.page + (delta > 0 ? 1 : -1);
   if (page < 0) page = 0;
   if (page >= count) page = count - 1;
-  return { ...session, ui: rememberPage(session.ui, session.ui.context, page) };
+  if (page === session.ui.page) return session;
+  const place = screenPlace(session.ui);
+  const from = pageTitle(session.project, place.context, place.page);
+  const ui = rememberPage(session.ui, session.ui.context, page);
+  return {
+    ...session,
+    ui: {
+      ...ui,
+      pageTitleUntilMs: Date.now() + PAGE_TITLE_MS,
+      pageTitleSlide: { from, dir: delta > 0 ? 1 : -1, startedMs: Date.now() },
+    },
+  };
 }
 
 function touchEncoder(session: Session, index: number, press: boolean): Session {

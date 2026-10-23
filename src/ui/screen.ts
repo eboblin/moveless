@@ -8,8 +8,9 @@ import { evalModulated } from "../core/modulate.ts";
 import { RANDOMIZE_DEPTHS, RANDOMIZE_INTENSITIES, RANDOMIZE_SCOPES, TRANSITIONS, WANDERS, isPitched, isVoice, LANES, LANE_CODE, type RandomizeDepth, type RandomizeIntensity, type RandomizeScope, type ContextId, type HarmonicEvent, type LaneId, type Phrase, type Project, type TimedEvent } from "../core/types.ts";
 import { DIGIT_H, displayAmount, type BigAmount, type DisplayAmount } from "./digits.ts";
 import { readControl } from "./controls.ts";
-import { bindingFor, livePage, pagesFor, type Binding, type Page } from "../core/pages.ts";
-import { focusVisible, macroReturnValue, type CaptureLine, type RandomizeLine, type UiState } from "./state.ts";
+import { bindingFor, livePage, pageTitle, pagesFor, type Binding, type Page } from "../core/pages.ts";
+import { focusVisible, macroReturnValue, PAGE_TITLE_SLIDE_MS, screenPlace, type CaptureLine, type RandomizeLine, type UiState } from "./state.ts";
+import { lettersWidth, plotLetters } from "./letters.ts";
 import { drawWaveform, emptyWave, type WaveTape } from "./wave.ts";
 
 export const WIDTH = 128;
@@ -32,6 +33,10 @@ export const VALUE_Y = DIGIT_Y + Math.floor((DIGIT_H - FONT_H) / 2);
 export const VIZ_H = DIGIT_Y - HEADER_H - 3;
 export const SEP_Y = HEADER_H + VIZ_H - 1;
 export const PARAM_H = HEIGHT - HEADER_H - VIZ_H;
+/** Black band behind the page title: glyph height plus padding above and below. */
+export const PAGE_TITLE_PAD = 3;
+export const PAGE_TITLE_BAND_H = DIGIT_H + PAGE_TITLE_PAD * 2;
+export const PAGE_TITLE_Y = HEADER_H + Math.floor((VIZ_H - 1 - PAGE_TITLE_BAND_H) / 2);
 
 export interface Label {
   x: number;
@@ -133,19 +138,58 @@ export function renderScreen(
       ? drawLabels(project, context, page, deckFocus, header, ui, now, "DJ")
     : drawLabels(project, context, page, focus, header, ui, now);
   const menu = hint && !notice && !mixer ? menuLineLabels(project, hint.line) : null;
-  if (phrase && bars) {
+  const titleOn = !notice && ui.pageTitleUntilMs !== null && now < ui.pageTitleUntilMs;
+  if (phrase && bars && !titleOn) {
     const names = chordNameLabels(project, phrase);
     // Names are host labels, painted after the pixel plate. Drop any that would cover the row.
     labels.push(...(menu ? names.filter((label) => !labelCoversPlate(label, menu)) : names));
   }
   if (notice) labels.push(...noticeLabels(notice.title, notice.value));
-  if (menu) {
+  if (menu && !titleOn) {
     clearLinePlate(pixels, menu);
     labels.push(...menu);
   }
+  if (titleOn) drawPageTitle(pixels, project, ui, now);
   const digits = mixer || !page ? [] : paramDigits(project, context, page, focus, ui, now);
   const dim: number[] = [];
   return { header, viz, pixels, labels, digits, dim };
+}
+
+function drawPageTitle(pixels: Uint8Array, project: Project, ui: UiState, now: number): void {
+  const place = screenPlace(ui);
+  const title = pageTitle(project, place.context, place.page);
+  const y0 = PAGE_TITLE_Y;
+  const y1 = y0 + PAGE_TITLE_BAND_H;
+  for (let y = y0; y < y1; y++) {
+    for (let x = 0; x < WIDTH; x++) set(pixels, x, y, 0);
+  }
+  const glyphY = y0 + PAGE_TITLE_PAD;
+  const slide = ui.pageTitleSlide;
+  const elapsed = slide ? now - slide.startedMs : PAGE_TITLE_SLIDE_MS;
+  if (slide && elapsed < PAGE_TITLE_SLIDE_MS) {
+    const travel = pageTitleTravel(elapsed);
+    paintTitle(pixels, slide.from, titleLeft(slide.from) - slide.dir * travel, glyphY);
+    paintTitle(pixels, title, titleLeft(title) + slide.dir * (WIDTH - travel), glyphY);
+    return;
+  }
+  paintTitle(pixels, title, titleLeft(title), glyphY);
+}
+
+function titleLeft(text: string): number {
+  return Math.floor((WIDTH - lettersWidth(text)) / 2);
+}
+
+function paintTitle(pixels: Uint8Array, text: string, x: number, y: number): void {
+  plotLetters(text, x, y, (px, py) => set(pixels, px, py, 1));
+}
+
+/** Pixels the jog slide has travelled. Ease-out, full screen width by `PAGE_TITLE_SLIDE_MS`. */
+export function pageTitleTravel(elapsedMs: number): number {
+  if (elapsedMs <= 0) return 0;
+  if (elapsedMs >= PAGE_TITLE_SLIDE_MS) return WIDTH;
+  const t = elapsedMs / PAGE_TITLE_SLIDE_MS;
+  const eased = 1 - (1 - t) ** 3;
+  return Math.round(eased * WIDTH);
 }
 
 function fillViz(pixels: Uint8Array): void {

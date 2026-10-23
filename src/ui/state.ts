@@ -21,6 +21,13 @@ export interface Notice {
   untilMs: number;
 }
 
+/** One jog step of the page title. `dir` +1 is the next page, and the line travels left. */
+export interface PageTitleSlide {
+  from: string;
+  dir: -1 | 1;
+  startedMs: number;
+}
+
 export type RandomizeLine = "depth" | "scope" | "intensity";
 
 /** One randomize row, shown over the lane picture after its pad is pressed. */
@@ -116,6 +123,10 @@ export interface UiState {
   /** Display-only glides back to zero. The project values are already zero. */
   macroReturns: MacroReturn[];
   notice: Notice | null;
+  /** Wall-clock end of the page-title overlay. Null when the phrase is uncovered. */
+  pageTitleUntilMs: number | null;
+  /** Horizontal slide from the page the jog just left. Buttons leave this null. */
+  pageTitleSlide: PageTitleSlide | null;
   trackDownTick: (number | null)[];
   trackDownMs: (number | null)[];
   /** Short press that stays on its bookmark until the same button is pressed again. */
@@ -133,6 +144,11 @@ export interface TrackPlace {
   page: number;
   mode: UiMode;
 }
+
+/** How long the page title stays over the phrase after a jog touch or a page step. */
+export const PAGE_TITLE_MS = 500;
+/** How long the jog slide takes to bring the new title to center. */
+export const PAGE_TITLE_SLIDE_MS = 200;
 
 /** How long a jog release must stay up before the page layer drops. */
 export const WHEEL_RELEASE_MS = 80;
@@ -248,13 +264,18 @@ export function toggleRandomize(ui: UiState): UiState {
   return { ...settled, randomizeLatched: !settled.randomizeLatched };
 }
 
+/** Show the current page name in place. A jog turn replaces this with a slide. */
+export function showPageTitle(ui: UiState, now = Date.now()): UiState {
+  return { ...ui, pageTitleUntilMs: now + PAGE_TITLE_MS, pageTitleSlide: null };
+}
+
 /** Keep `page` and that step's memory on the same clamped index. Leaving DJ FX stops its gesture. */
 export function rememberPage(ui: UiState, context: ContextId, page: number): UiState {
   const count = Math.max(1, pageCount(context));
   const clamped = Math.min(Math.max(0, page), count - 1);
   const moved = context !== ui.context || clamped !== ui.page;
   const deckLive = pageId(context, clamped) === "deck";
-  return {
+  const next: UiState = {
     ...ui,
     context,
     page: clamped,
@@ -266,7 +287,10 @@ export function rememberPage(ui: UiState, context: ContextId, page: number): UiS
     deckLatchedGesture: deckLive ? ui.deckLatchedGesture : null,
     deckLatchTick: deckLive ? ui.deckLatchTick : null,
     deckPads: deckLive ? ui.deckPads : 0,
+    pageTitleSlide: null,
   };
+  if (!moved) return next;
+  return showPageTitle(next);
 }
 
 export function defaultUi(): UiState {
@@ -308,6 +332,8 @@ export function defaultUi(): UiState {
     macroGesture: [],
     macroReturns: [],
     notice: null,
+    pageTitleUntilMs: null,
+    pageTitleSlide: null,
     trackDownTick: [null, null, null, null],
     trackDownMs: [null, null, null, null],
     trackLatch: null,

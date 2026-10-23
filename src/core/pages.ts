@@ -48,6 +48,7 @@ export type PageGroup = "pattern" | "notes" | "sound" | "fx" | "global" | "macro
 
 export interface Page {
   id: string;
+  /** Jog overlay name. The header uses `groups`; a knob's own name is `Binding.title`. */
   title: string;
   /** Names for the left and right knob fours; shown right-aligned in each header half. */
   groups: [string | null, string | null];
@@ -353,7 +354,7 @@ function page(id: string, title: string, groups: [string | null, string | null],
 }
 
 function pair(aPath: string, a: FieldSpec, bPath: string, b: FieldSpec, group: PageGroup): Page {
-  return page(aPath, `${a.label} ${b.label}`, [a.label, b.label], group, [...vpca(aPath, a, group), ...vpca(bPath, b, group)]);
+  return page(aPath, `${a.label} / ${b.label}`, [a.label, b.label], group, [...vpca(aPath, a, group), ...vpca(bPath, b, group)]);
 }
 
 function euclid(which: 1 | 2, slot: keyof typeof EUCLID): Binding {
@@ -373,7 +374,7 @@ function euclid(which: 1 | 2, slot: keyof typeof EUCLID): Binding {
 
 function genPage(which: 1 | 2): Page {
   const tag = `G${which}`;
-  return page(`gen${which}`, `GEN ${which}`, [`GEN ${which}`, "VEL"], "pattern", [
+  return page(`gen${which}`, `GENERATOR ${which}`, [`GEN ${which}`, "VEL"], "pattern", [
     euclid(which, "length"),
     euclid(which, "hits"),
     euclid(which, "rotate"),
@@ -435,7 +436,7 @@ function pitchedPages(lane: PitchedId): Page[] {
 }
 
 function chordGenPage(): Page {
-  return page("gen1", "GEN 1", ["GEN 1", "SIZE"], "pattern", [
+  return page("gen1", "GENERATOR 1", ["GEN 1", "SIZE"], "pattern", [
     euclid(1, "length"),
     euclid(1, "hits"),
     euclid(1, "rotate"),
@@ -510,7 +511,7 @@ function plainPage(
 }
 
 function progPage(): Page {
-  return page("prog", "PROG", ["WALK", "TONE"], "notes", [
+  return page("prog", "CHORDS", ["WALK", "TONE"], "notes", [
     plain("start", "START", -7, 7, 1, true, "progression"),
     plain("count", "COUNT", 0, 16, 1, true, "progression"),
     plain("length", "LENGTH", 0, 4, 1, true, "progression"),
@@ -567,7 +568,7 @@ export function deckPage(group: DeckGroup, knobs: DeckKnobs): Page {
     const label = slot === "row" ? rowKnobName(group) : face.label;
     return plain(`deck.${slot}`, label, face.min, face.max, face.step, face.integer, "deck");
   });
-  return page("deck", "DECK", [null, null], "bus", bindings);
+  return page("deck", "DJ FX", [null, null], "bus", bindings);
 }
 
 function rememberDeck(): void {
@@ -585,7 +586,7 @@ function mixPage(): Page {
 
 /** Purple-lane slot for DJ FX. Live knobs come from `deckPage` of the focused group. */
 function deckAuxPage(): Page {
-  return page("deck", "DJ", [null, null], "deck", []);
+  return page("deck", "DJ FX", [null, null], "deck", []);
 }
 
 function globalPage(): Page {
@@ -623,7 +624,7 @@ function macroPage(id: string, title: string, groups: [string | null, string | n
 
 /** One performance page. Rhythm on the left, sound on the right. */
 function perfPage(): Page {
-  return macroPage("play", "PLAY", ["PLAY", "TONE"], [
+  return macroPage("play", "MACROS", ["PLAY", "TONE"], [
     ["probability", "DENS", EUCLID.probability.weight],
     ["repeat", "REP"],
     ["rate", "RATE"],
@@ -647,7 +648,7 @@ function busPage(): Page {
       store: "bus",
       ...(min >= 0 ? { detents: [0] } : {}),
     });
-  return page("bus", "MIX", ["MIX", null], "bus", [
+  return page("bus", "BUS", ["MIX", null], "bus", [
     knob("glue", "GLUE", 0, 1),
     knob("pump", "PMP", 0, 1),
     knob("wide", "WIDE", 0, 1),
@@ -655,8 +656,8 @@ function busPage(): Page {
   ]);
 }
 
-/** Progression, global, the macro page, the bus, then mixer and DJ FX. Fx is its own lane. */
-const AUX_PAGES: Page[] = [progPage(), globalPage(), perfPage(), busPage(), mixPage(), deckAuxPage()];
+/** Global, progression, the macro page, the bus, then mixer and DJ FX. Fx is its own lane. */
+const AUX_PAGES: Page[] = [globalPage(), progPage(), perfPage(), busPage(), mixPage(), deckAuxPage()];
 
 /** Eight mixer faders on the purple lane. */
 export function mixerPage(): Page {
@@ -680,6 +681,15 @@ export function livePage(project: Project, context: ContextId, index: number): P
   if (!item) return undefined;
   if (item.id !== "deck") return item;
   return deckPage(focusedGroup(project.deck), project.deck);
+}
+
+/** Name the jog overlay prints. Mixer and DJ FX keep a fixed word even when the deck group changes. */
+export function pageTitle(project: Project, context: ContextId, index: number): string {
+  const item = livePage(project, context, index);
+  if (!item) return "";
+  if (item.id === "mixer") return "MIXER";
+  if (item.id === "deck") return "DJ FX";
+  return item.title;
 }
 
 export function lanePages(lane: PatternId): Page[] {
