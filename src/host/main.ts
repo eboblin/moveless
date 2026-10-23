@@ -23,6 +23,7 @@ import {
   VIZ_H,
   cellTextX,
   loadWidth,
+  pageTitlePaintKey,
   renderScreen,
 } from "../ui/screen.ts";
 import { resetWaveform, serviceWaveform } from "../ui/wave-audio.ts";
@@ -268,6 +269,7 @@ let paintCapture = false;
 let paintFocus = false;
 let paintPeek: string | null = null;
 let paintDeckFrame = -1;
+let paintTitleKey = -1;
 let ledPhase = -1;
 let ledProject: Project | null = null;
 let ledUi: UiState | null = null;
@@ -286,6 +288,7 @@ function screenChanged(): boolean {
   const peek = peekKind(ui);
   const latch = Math.round(session.project.progression.count) <= 0 ? latchStamp() : "";
   const deckFrame = deckVisible(ui) ? Math.floor(Math.max(0, session.tick)) : -1;
+  const titleKey = pageTitlePaintKey(ui, now);
   if (
     paintProject === session.project &&
     paintUi === ui &&
@@ -298,7 +301,8 @@ function screenChanged(): boolean {
     paintPeek === peek &&
     paintLatch === latch &&
     paintDeckFrame === deckFrame &&
-    paintLoad === audioLoad
+    paintLoad === audioLoad &&
+    paintTitleKey === titleKey
   ) {
     return false;
   }
@@ -314,6 +318,7 @@ function screenChanged(): boolean {
   paintLatch = latch;
   paintDeckFrame = deckFrame;
   paintLoad = audioLoad;
+  paintTitleKey = titleKey;
   return true;
 }
 
@@ -580,6 +585,7 @@ export function init(): void {
   paintFocus = false;
   paintPeek = null;
   paintDeckFrame = -1;
+  paintTitleKey = -1;
   resetWaveform();
   ledPhase = -1;
   ledProject = null;

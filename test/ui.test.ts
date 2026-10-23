@@ -13,7 +13,7 @@ import { bindingFor, lanePages, pageCount, pageGroup, pageGroupColor, pagesFor, 
 import { LED, advancePulseClock, blinkHalfMs, directionLit, dropLed, ledColorAt, menuLed, modeButtonLed, offColor, offerLed, padBlinkSteps, padLeds, padPackets, PLAY_LED_ON, playLed, PULSE_CLOCK_IDLE, shadeColor, stepLed, stepLeds, takeLeds, trackLeds } from "../src/ui/leds.ts";
 import { DIGIT_H, displayAmount, fractionFromLabel, plotAmount } from "../src/ui/digits.ts";
 import { lettersWidth, plotLetters } from "../src/ui/letters.ts";
-import { CHAR_W, DIGIT_Y, FONT_H, HEADER_H, HEIGHT, NAME_Y, PAGE_TITLE_BAND_H, PAGE_TITLE_PAD, PAGE_TITLE_Y, PAGER_Y, PARAM_COL_W, PARAM_H, SEP_Y, TITLE_Y, VALUE_Y, VIZ_H, WIDTH, loadWidth, pageTitleTravel, pixel, renderScreen, type Screen } from "../src/ui/screen.ts";
+import { CHAR_W, DIGIT_Y, FONT_H, HEADER_H, HEIGHT, NAME_Y, PAGE_TITLE_BAND_H, PAGE_TITLE_PAD, PAGE_TITLE_Y, PAGER_Y, PARAM_COL_W, PARAM_H, SEP_Y, TITLE_Y, VALUE_Y, VIZ_H, WIDTH, loadWidth, pageTitlePaintKey, pageTitleTravel, pixel, renderScreen, type Screen } from "../src/ui/screen.ts";
 import { WAVE_HOP, emptyWave, type WaveTape } from "../src/ui/wave.ts";
 import { defaultUi, HOLD_MS, HOLD_TICKS, openSetMode, PAGE_TITLE_MS, PAGE_TITLE_SLIDE_MS, settleWheel, WHEEL_RELEASE_MS, type DetentHold } from "../src/ui/state.ts";
 import { midiMessage, reduce, relDelta, settleTrackPeek, type Session } from "../src/ui/input.ts";
@@ -2893,6 +2893,23 @@ describe("page title", () => {
     assert.equal(state.ui.pageTitleSlide, null);
     shown = renderScreen(state.project, state.ui, 0, false, (state.ui.pageTitleUntilMs ?? 0) - 1);
     assert.deepEqual(band(shown), stamped([{ text: page, x: titleLeft(page) }]));
+  });
+
+  it("keeps a repaint key moving through a slide and drops it when the caption ends", () => {
+    let state = reduce(session(), { kind: "note", data1: 9, data2: 127 });
+    const touched = state.ui.pageTitleUntilMs ?? 0;
+    assert.equal(pageTitlePaintKey(state.ui, touched - 1), 0);
+    assert.equal(pageTitlePaintKey(state.ui, touched), -1);
+
+    state = reduce(state, { kind: "cc", data1: 14, data2: 1 });
+    const started = state.ui.pageTitleSlide?.startedMs ?? 0;
+    const until = state.ui.pageTitleUntilMs ?? 0;
+    assert.equal(pageTitlePaintKey(state.ui, started), 0);
+    assert.equal(pageTitlePaintKey(state.ui, started + 40), 40);
+    assert.equal(pageTitlePaintKey(state.ui, started + PAGE_TITLE_SLIDE_MS), PAGE_TITLE_SLIDE_MS);
+    assert.equal(pageTitlePaintKey(state.ui, started + PAGE_TITLE_SLIDE_MS + 50), PAGE_TITLE_SLIDE_MS);
+    assert.ok(until > started + PAGE_TITLE_SLIDE_MS);
+    assert.equal(pageTitlePaintKey(state.ui, until), -1);
   });
 });
 

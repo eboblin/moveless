@@ -183,6 +183,16 @@ function paintTitle(pixels: Uint8Array, text: string, x: number, y: number): voi
   plotLetters(text, x, y, (px, py) => set(pixels, px, py, 1));
 }
 
+/**
+ * Host repaint key. `-1` once the caption is gone. `0` while a still caption is up.
+ * During a jog slide it is the elapsed milliseconds, so a stopped transport still walks the line.
+ */
+export function pageTitlePaintKey(ui: UiState, now: number): number {
+  if (ui.pageTitleUntilMs === null || now >= ui.pageTitleUntilMs) return -1;
+  if (!ui.pageTitleSlide) return 0;
+  return Math.min(PAGE_TITLE_SLIDE_MS, Math.max(0, now - ui.pageTitleSlide.startedMs));
+}
+
 /** Pixels the jog slide has travelled. Ease-out, full screen width by `PAGE_TITLE_SLIDE_MS`. */
 export function pageTitleTravel(elapsedMs: number): number {
   if (elapsedMs <= 0) return 0;
