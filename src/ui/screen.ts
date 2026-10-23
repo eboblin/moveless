@@ -957,7 +957,7 @@ function deckKnobText(project: Project, path: string): string | null {
 }
 
 function stepAt(_project: Project, tick: number): number {
-  return Math.floor(Math.max(0, tick) / 48);
+  return Math.max(0, tick) / SIXTEENTH_TICKS;
 }
 
 const LINE_LIMIT = 24;

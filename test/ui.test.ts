@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { clone } from "../src/core/clone.ts";
-import { unitForIndex } from "../src/core/clock.ts";
+import { SIXTEENTH_TICKS, unitForIndex } from "../src/core/clock.ts";
 import { defaultProject } from "../src/core/defaults.ts";
 import { modulated } from "../src/core/modulate.ts";
 import { applyMorph } from "../src/core/morph.ts";
@@ -900,6 +900,19 @@ describe("surface", () => {
     assert.ok(columnSpan(later, 0) > 0);
     const lead = renderScreen(project, { ...defaultUi(), context: "lead" }, 0, false);
     assert.equal(litRuns(lead), 1);
+  });
+
+  it("walks the lane playhead inside a sixteenth", () => {
+    const project = defaultProject();
+    const ui = { ...defaultUi(), context: "kick" as const };
+    const steps = generatePhrase(project).steps.kick;
+    const column = (tick: number) => playheadColumn(renderScreen(project, ui, tick, false), renderScreen(project, ui, tick, true));
+    const mid = column(SIXTEENTH_TICKS / 2);
+    const next = column(SIXTEENTH_TICKS);
+    const expected = (tick: number) => Math.min(WIDTH - 1, Math.floor(((tick / SIXTEENTH_TICKS) * WIDTH) / steps));
+    assert.equal(mid, expected(SIXTEENTH_TICKS / 2));
+    assert.equal(next, expected(SIXTEENTH_TICKS));
+    assert.ok(mid > 0 && mid < next);
   });
 
   it("fits the morph picture to the lane length and resizes it when that length changes", () => {

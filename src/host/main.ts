@@ -261,7 +261,7 @@ let pulseClock: PulseClock = PULSE_CLOCK_IDLE;
 
 function screenChanged(): boolean {
   const ui = session.ui;
-  const step = Math.floor(Math.max(0, session.tick) / 48);
+  const step = session.playing ? Math.floor(Math.max(0, session.tick)) : Math.floor(Math.max(0, session.tick) / 48);
   const now = Date.now();
   const notice = !!(ui.notice && now < ui.notice.untilMs);
   const hint = !!(ui.randomizeHint && now < ui.randomizeHint.untilMs);
