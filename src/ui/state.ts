@@ -118,6 +118,20 @@ export interface UiState {
   notice: Notice | null;
   trackDownTick: (number | null)[];
   trackDownMs: (number | null)[];
+  /** Short press that stays on its bookmark until the same button is pressed again. */
+  trackLatch: number | null;
+  /** Screen from before that short press. The next press of the same button restores it. */
+  trackOrigin: TrackPlace | null;
+  /** Long hold currently showing its bookmark. Release restores `trackPeekOrigin`. */
+  trackPeek: number | null;
+  trackPeekOrigin: TrackPlace | null;
+}
+
+/** Lane, page, and pad mode (Journal or Set) that a track button can return to. */
+export interface TrackPlace {
+  context: ContextId;
+  page: number;
+  mode: UiMode;
 }
 
 /** How long a jog release must stay up before the page layer drops. */
@@ -126,7 +140,7 @@ export const WHEEL_RELEASE_MS = 80;
 export const RANDOMIZE_HINT_MS = 1000;
 
 export const HOLD_TICKS = 80;
-/** Wall-clock hold, so a bookmark can be stored while the transport is stopped. */
+/** Wall-clock hold, so a track peek starts while the transport is stopped. */
 export const HOLD_MS = 400;
 
 /** Drop the jog layer once a release has stayed up through the bounce window. */
@@ -296,7 +310,18 @@ export function defaultUi(): UiState {
     notice: null,
     trackDownTick: [null, null, null, null],
     trackDownMs: [null, null, null, null],
+    trackLatch: null,
+    trackOrigin: null,
+    trackPeek: null,
+    trackPeekOrigin: null,
   };
+}
+
+/** Lane and page on screen. A held step shows its page before the finger lifts. */
+export function screenPlace(ui: UiState): TrackPlace {
+  const context = ui.heldContext ?? ui.context;
+  const page = ui.heldContext ? (ui.heldPage ?? ui.lanePages[ui.heldContext] ?? 0) : ui.page;
+  return { context, page, mode: ui.mode };
 }
 
 export function openSetMode(ui: UiState): UiState {
@@ -305,4 +330,14 @@ export function openSetMode(ui: UiState): UiState {
 
 export function applyBookmark(ui: UiState, ref: PageRef): UiState {
   return settleRandomize({ ...rememberPage(ui, ref.context, ref.page), heldContext: null, heldPage: null });
+}
+
+/** Back to the lane, page, and Journal/Set mode from before a track button press. */
+export function restoreTrackPlace(ui: UiState, place: TrackPlace): UiState {
+  return settleRandomize({
+    ...rememberPage(ui, place.context, place.page),
+    mode: place.mode,
+    heldContext: null,
+    heldPage: null,
+  });
 }

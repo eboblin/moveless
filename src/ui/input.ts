@@ -27,7 +27,7 @@ import { DECK_GROUPS, fieldAt, focusedGroup, groupAt, recallGroup, setGroupCell,
 import { CAPTURE_CC, contextAtStep, DOWN_CC, isLane, JOG_CLICK_CC, LANES, LOOP_CC, MENU_CC, PLAY_CC, RANDOMIZE_DEPTHS, RANDOMIZE_SCOPES, RECORD_CC, TRANSITIONS, UP_CC, WANDERS, type ContextId, type PatternId, type Project } from "../core/types.ts";
 import { resetControl, writeControl } from "./controls.ts";
 import { bindingFor, bindingPaths, deckPage, livePage, pageCount, pageGroup, pageId, pagesFor, scopeIncludesPage } from "../core/pages.ts";
-import { applyBookmark, auxHidesRandomize, FOCUS_HOLD_MS, focusHoldTicks, HOLD_MS, HOLD_TICKS, holdIsShort, MACRO_RETURN_MS, patternPadsVisible, RANDOMIZE_HINT_MS, rememberPage, settleRandomize, settleWheel, toggleRandomize, type CaptureLine, type MacroReturn, type Notice, type RandomizeLine, type UiState } from "./state.ts";
+import { applyBookmark, auxHidesRandomize, FOCUS_HOLD_MS, focusHoldTicks, HOLD_MS, HOLD_TICKS, holdIsShort, MACRO_RETURN_MS, patternPadsVisible, RANDOMIZE_HINT_MS, rememberPage, restoreTrackPlace, screenPlace, settleRandomize, settleWheel, toggleRandomize, type CaptureLine, type MacroReturn, type Notice, type RandomizeLine, type UiState } from "./state.ts";
 import { journalPageCount } from "../core/journal.ts";
 
 export interface MidiMsg {
@@ -60,6 +60,7 @@ export function midiMessage(status: number, data1: number, data2: number): MidiM
 
 export function reduce(session: Session, msg: MidiMsg): Session {
   session = { ...session, ui: settleWheel(session.ui) };
+  session = settleTrackPeek(session);
   const press = msg.data2 > 0;
   if (msg.kind === "note") return onNote(session, msg.data1, press);
   return onCc(session, msg.data1, msg.data2, press);
@@ -562,30 +563,72 @@ function onCopy(session: Session, press: boolean): Session {
   };
 }
 
+/** Shift stores the screen that is showing, including a purple-lane page under a held step. */
+function storeBookmark(session: Session, index: number): Session {
+  const place = screenPlace(session.ui);
+  const count = Math.max(1, pageCount(place.context));
+  const bookmarks = session.project.bookmarks.slice();
+  bookmarks[index] = { context: place.context, page: Math.min(Math.max(0, place.page), count - 1) };
+  return { ...session, project: { ...session.project, bookmarks } };
+}
+
+/**
+ * A long hold opens its bookmark while the finger is down.
+ * Call this from the frame loop: the threshold can pass with no further MIDI.
+ */
+export function settleTrackPeek(session: Session, now = Date.now()): Session {
+  const ui = session.ui;
+  if (ui.trackPeek !== null) return session;
+  for (let index = 0; index < ui.trackDownTick.length; index++) {
+    const downTick = ui.trackDownTick[index] ?? null;
+    const downMs = ui.trackDownMs[index] ?? null;
+    if (downTick === null && downMs === null) continue;
+    if (holdIsShort(downTick, downMs, session.tick, now)) continue;
+    const ref = session.project.bookmarks[index];
+    if (!ref) continue;
+    const origin = screenPlace(ui);
+    return {
+      ...session,
+      ui: { ...applyBookmark(ui, ref), trackPeek: index, trackPeekOrigin: origin },
+    };
+  }
+  return session;
+}
+
 function onTrack(session: Session, index: number, press: boolean): Session {
-  const downs = session.ui.trackDownTick.slice();
-  const times = session.ui.trackDownMs.slice();
   if (press) {
-    downs[index] = session.tick;
-    times[index] = Date.now();
-    return { ...session, ui: { ...session.ui, trackDownTick: downs, trackDownMs: times } };
+    if (session.ui.shiftHeld) return storeBookmark(session, index);
+    const trackDownTick = session.ui.trackDownTick.slice();
+    const trackDownMs = session.ui.trackDownMs.slice();
+    trackDownTick[index] = session.tick;
+    trackDownMs[index] = Date.now();
+    return { ...session, ui: { ...session.ui, trackDownTick, trackDownMs } };
   }
-  const started = downs[index];
-  const startedMs = times[index];
-  downs[index] = null;
-  times[index] = null;
-  const ui = { ...session.ui, trackDownTick: downs, trackDownMs: times };
+  const trackDownTick = session.ui.trackDownTick.slice();
+  const trackDownMs = session.ui.trackDownMs.slice();
+  const started = trackDownTick[index] ?? null;
+  const startedMs = trackDownMs[index] ?? null;
+  trackDownTick[index] = null;
+  trackDownMs[index] = null;
+  let ui: UiState = { ...session.ui, trackDownTick, trackDownMs };
   if (started === null && startedMs === null) return { ...session, ui };
-  const heldTicks = started === null ? 0 : session.tick - started;
-  const heldMs = startedMs === null ? 0 : Date.now() - startedMs;
-  if (heldTicks >= HOLD_TICKS || heldMs >= HOLD_MS) {
-    const bookmarks = session.project.bookmarks.slice();
-    bookmarks[index] = { context: session.ui.context, page: session.ui.page };
-    return { ...session, project: { ...session.project, bookmarks }, ui };
+  if (ui.trackPeek === index) {
+    const origin = ui.trackPeekOrigin;
+    ui = { ...ui, trackPeek: null, trackPeekOrigin: null };
+    if (origin) ui = restoreTrackPlace(ui, origin);
+    return { ...session, ui };
   }
+  if (!holdIsShort(started, startedMs, session.tick)) return { ...session, ui };
   const ref = session.project.bookmarks[index];
   if (!ref) return { ...session, ui };
-  return { ...session, ui: { ...applyBookmark(ui, ref), trackDownTick: downs, trackDownMs: times } };
+  if (ui.trackLatch === index) {
+    const origin = ui.trackOrigin;
+    ui = { ...ui, trackLatch: null, trackOrigin: null };
+    if (origin) ui = restoreTrackPlace(ui, origin);
+    return { ...session, ui };
+  }
+  const origin = screenPlace(ui);
+  return { ...session, ui: { ...applyBookmark(ui, ref), trackLatch: index, trackOrigin: origin } };
 }
 
 export function relDelta(value: number): number {

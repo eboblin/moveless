@@ -109,7 +109,7 @@ export function playLed(playing: boolean): number {
   return playing ? PLAY_LED_ON : 0;
 }
 
-/** A stored bookmark lights its track button in that page's group colour. The one matching the screen blinks. */
+/** A stored bookmark lights its track button in the same colour as that page's pad. The one matching the screen blinks. */
 export function trackLeds(project: Project, context: ContextId, page: number): Led[] {
   return project.bookmarks.map((ref) => {
     if (!ref) return led("off", false);

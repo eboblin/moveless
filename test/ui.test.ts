@@ -5,6 +5,7 @@ import { SIXTEENTH_TICKS, unitForIndex } from "../src/core/clock.ts";
 import { defaultProject } from "../src/core/defaults.ts";
 import { modulated } from "../src/core/modulate.ts";
 import { applyMorph } from "../src/core/morph.ts";
+import { parseStored, serializeStored } from "../src/core/persist.ts";
 import { createSet, journalPadIds, journalPageCount, launchScene, record } from "../src/core/performance.ts";
 import { generatePhrase } from "../src/core/phrase.ts";
 import { bindingFor, lanePages, pageCount, pageGroup, pageGroupColor, pagesFor, scopeIncludesPage } from "../src/core/pages.ts";
@@ -13,7 +14,7 @@ import { DIGIT_H, displayAmount, plotAmount } from "../src/ui/digits.ts";
 import { CHAR_W, DIGIT_Y, FONT_H, HEADER_H, HEIGHT, NAME_Y, PAGER_Y, PARAM_COL_W, PARAM_H, SEP_Y, TITLE_Y, VALUE_Y, VIZ_H, WIDTH, loadWidth, pixel, renderScreen, type Screen } from "../src/ui/screen.ts";
 import { WAVE_HOP, emptyWave, type WaveTape } from "../src/ui/wave.ts";
 import { defaultUi, HOLD_MS, HOLD_TICKS, openSetMode, settleWheel, WHEEL_RELEASE_MS, type DetentHold } from "../src/ui/state.ts";
-import { midiMessage, reduce, relDelta, type Session } from "../src/ui/input.ts";
+import { midiMessage, reduce, relDelta, settleTrackPeek, type Session } from "../src/ui/input.ts";
 import { DETENT_CLICKS, DETENT_REST_MS, stepKnob, writeControl } from "../src/ui/controls.ts";
 
 function session(): Session {
@@ -43,6 +44,18 @@ function openMixer(state: Session): Session {
 
 function openDeck(state: Session): Session {
   return openAux(state, auxIndex("deck"));
+}
+
+function shiftTrack(state: Session, index: number): Session {
+  let next = reduce(state, { kind: "cc", data1: 49, data2: 127 });
+  next = reduce(next, { kind: "cc", data1: 40 + index, data2: 127 });
+  next = reduce(next, { kind: "cc", data1: 40 + index, data2: 0 });
+  return reduce(next, { kind: "cc", data1: 49, data2: 0 });
+}
+
+function tapTrack(state: Session, index: number): Session {
+  const down = reduce(state, { kind: "cc", data1: 40 + index, data2: 127 });
+  return reduce({ ...down, tick: down.tick + 10 }, { kind: "cc", data1: 40 + index, data2: 0 });
 }
 
 describe("pages and leds", () => {
@@ -1645,8 +1658,10 @@ describe("surface", () => {
     assert.equal(renderScreen(state.project, state.ui, 0).viz, "phrase");
     state = loop(state);
     assert.notDeepEqual(state.project.working.kick.gen1, beforeGen1);
+    state = reduce(state, { kind: "cc", data1: 49, data2: 127 });
     state = reduce(state, { kind: "cc", data1: 40, data2: 127 });
-    state = reduce({ ...state, tick: state.tick + 100 }, { kind: "cc", data1: 40, data2: 0 });
+    state = reduce(state, { kind: "cc", data1: 40, data2: 0 });
+    state = reduce(state, { kind: "cc", data1: 49, data2: 0 });
     assert.deepEqual(state.project.bookmarks[0], { context: "kick", page: 0 });
     assert.equal(trackLeds(state.project, state.ui.context, state.ui.page)[0].color, pageGroupColor("kick", 0));
     assert.equal(trackLeds(state.project, state.ui.context, state.ui.page)[0].blink, true);
@@ -1654,8 +1669,10 @@ describe("surface", () => {
     state = reduce(state, { kind: "note", data1: 20, data2: 127 });
     state = reduce({ ...state, tick: state.tick + 10 }, { kind: "note", data1: 20, data2: 0 });
     for (let n = 0; n < 6; n++) state = reduce(state, { kind: "cc", data1: 14, data2: 1 });
+    state = reduce(state, { kind: "cc", data1: 49, data2: 127 });
     state = reduce(state, { kind: "cc", data1: 41, data2: 127 });
-    state = reduce({ ...state, tick: state.tick + 100 }, { kind: "cc", data1: 41, data2: 0 });
+    state = reduce(state, { kind: "cc", data1: 41, data2: 0 });
+    state = reduce(state, { kind: "cc", data1: 49, data2: 0 });
     assert.deepEqual(state.project.bookmarks[1], { context: "bass", page: 6 });
     assert.equal(trackLeds(state.project, state.ui.context, state.ui.page)[1].color, pageGroupColor("bass", 6));
     assert.notEqual(pageGroupColor("bass", 6), pageGroupColor("kick", 0));
@@ -1665,6 +1682,91 @@ describe("surface", () => {
     assert.equal(state.ui.page, 0);
     assert.equal(trackLeds(state.project, state.ui.context, state.ui.page)[0].blink, true);
     assert.equal(trackLeds(state.project, state.ui.context, state.ui.page)[1].blink, false);
+  });
+
+  it("returns from a short track press and from a long hold", () => {
+    let state = shiftTrack(session(), 0);
+    state = reduce(state, { kind: "note", data1: 20, data2: 127 });
+    state = reduce(state, { kind: "note", data1: 20, data2: 0 });
+    for (let n = 0; n < 3; n++) state = reduce(state, { kind: "cc", data1: 14, data2: 1 });
+    state = reduce(state, { kind: "cc", data1: 50, data2: 127 });
+    assert.equal(state.ui.context, "bass");
+    assert.equal(state.ui.page, 3);
+    assert.equal(state.ui.mode, "set");
+
+    state = tapTrack(state, 0);
+    assert.equal(state.ui.context, "kick");
+    assert.equal(state.ui.page, 0);
+    assert.equal(state.ui.mode, "set");
+    assert.equal(state.ui.trackLatch, 0);
+    state = reduce(state, { kind: "cc", data1: 50, data2: 127 });
+    assert.equal(state.ui.mode, "journal");
+
+    state = tapTrack(state, 0);
+    assert.equal(state.ui.context, "bass");
+    assert.equal(state.ui.page, 3);
+    assert.equal(state.ui.mode, "set");
+    assert.equal(state.ui.trackLatch, null);
+
+    const held = reduce(state, { kind: "cc", data1: 40, data2: 127 });
+    const peeked = settleTrackPeek(held, (held.ui.trackDownMs[0] ?? 0) + HOLD_MS);
+    assert.equal(peeked.ui.context, "kick");
+    assert.equal(peeked.ui.page, 0);
+    assert.equal(peeked.ui.mode, "set");
+    assert.equal(peeked.ui.trackPeek, 0);
+    state = reduce(peeked, { kind: "cc", data1: 40, data2: 0 });
+    assert.equal(state.ui.context, "bass");
+    assert.equal(state.ui.page, 3);
+    assert.equal(state.ui.mode, "set");
+    assert.equal(state.ui.trackLatch, null);
+    assert.equal(state.ui.trackPeek, null);
+
+    state = tapTrack(state, 3);
+    assert.equal(state.ui.context, "bass");
+    assert.equal(state.ui.page, 3);
+    assert.equal(state.project.bookmarks[3], null);
+  });
+
+  it("stores purple-lane pages and matches the page pad colour", () => {
+    for (const item of pagesFor("aux")) {
+      const page = auxIndex(item.id);
+      let state = shiftTrack(openAux(session(), page), 2);
+      assert.equal(state.ui.context, "aux");
+      assert.equal(state.ui.page, page);
+      assert.deepEqual(state.project.bookmarks[2], { context: "aux", page });
+      const pad = padLeds(state.project, state.ui.mode, { heldContext: "aux", heldPage: page, context: "aux", page });
+      assert.equal(trackLeds(state.project, state.ui.context, state.ui.page)[2].color, pad[24 + page]?.color);
+      assert.equal(pad[24 + page]?.color, pageGroupColor("aux", page));
+      state = reduce(state, { kind: "note", data1: 16, data2: 127 });
+      state = reduce(state, { kind: "note", data1: 16, data2: 0 });
+      assert.equal(state.ui.context, "kick");
+      assert.equal(trackLeds(state.project, state.ui.context, state.ui.page)[2].color, pageGroupColor("aux", page));
+      assert.equal(trackLeds(state.project, state.ui.context, state.ui.page)[2].blink, false);
+      state = tapTrack(state, 2);
+      assert.equal(state.ui.context, "aux");
+      assert.equal(state.ui.page, page);
+      state = tapTrack(state, 2);
+      assert.equal(state.ui.context, "kick");
+      assert.equal(state.ui.page, 0);
+    }
+
+    const mixer = auxIndex("mixer");
+    let held = openAux(session(), mixer);
+    held = reduce(held, { kind: "note", data1: 16, data2: 127 });
+    held = reduce(held, { kind: "note", data1: 16, data2: 0 });
+    assert.equal(held.ui.lanePages.aux, mixer);
+    held = reduce(held, { kind: "note", data1: 31, data2: 127 });
+    assert.equal(held.ui.context, "kick");
+    assert.equal(held.ui.heldContext, "aux");
+    held = shiftTrack(held, 1);
+    assert.deepEqual(held.project.bookmarks[1], { context: "aux", page: mixer });
+    assert.equal(held.ui.context, "kick");
+    assert.equal(held.ui.heldContext, "aux");
+    const saved = parseStored(serializeStored(held.project, { context: held.ui.context, page: held.ui.page, mode: held.ui.mode, playing: false }));
+    assert.deepEqual(saved?.project.bookmarks[1], { context: "aux", page: mixer });
+    held = reduce(held, { kind: "note", data1: 31, data2: 0 });
+    assert.equal(held.ui.context, "aux");
+    assert.equal(held.ui.page, mixer);
   });
 
   it("writes the encoder while Capture is held", () => {
