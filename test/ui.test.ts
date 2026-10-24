@@ -1593,6 +1593,22 @@ describe("surface", () => {
     assert.equal(pixel(screen, WIDTH - 1, yBottom), 1);
   });
 
+  it("draws a voice envelope for a generator the phrase does not stamp", () => {
+    const project = defaultProject();
+    project.working.kick.gen1 = { ...project.working.kick.gen1, length: 16, hits: 1, rotate: 0, probability: 1 };
+    project.working.kick.gen2.hits = 0;
+    project.working.kick.ratchet.count = { value: 0, pattern: -1, cycle: 4, amount: 1 };
+    const screen = renderScreen(project, {
+      ...defaultUi(),
+      context: "kick" as const,
+      focus: { label: "COUNT V", path: "ratchet.count.value", generator: "ratchet.count", showPattern: false, held: true, untilTick: 0, untilMs: 0 },
+    }, 0);
+    const yTop = HEADER_H;
+    const yBottom = HEADER_H + VIZ_H - 2;
+    assert.equal(pixel(screen, 0, yTop), 1);
+    assert.equal(pixel(screen, WIDTH - 1, yBottom), 1);
+  });
+
   it("draws a generator over the phrase and darkens the phrase with a 1px checker", () => {
     const project = defaultProject();
     const phrase = renderScreen(project, defaultUi(), 0);

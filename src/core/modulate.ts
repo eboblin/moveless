@@ -15,11 +15,31 @@ export function voiceLane(pattern: number): LaneId | null {
 }
 
 /**
+ * While a phrase is being read, a voice pattern samples the lane envelope at this step.
+ * Outside that pass the call stays at the centre: the notes do not exist yet.
+ */
+let voiceAt: ((pattern: number, step: number) => number) | null = null;
+
+export function hearVoices<T>(envelopeAt: (pattern: number, step: number) => number, read: () => T): T {
+  const previous = voiceAt;
+  voiceAt = envelopeAt;
+  try {
+    return read();
+  } finally {
+    voiceAt = previous;
+  }
+}
+
+/**
  * Cycle is a length in sixteenths. The lane runs on its own; a note reads the value at its step.
- * A voice source has no motif. This call stays at the centre; the phrase stamps the envelope onto the note.
+ * A voice source has no motif. It reads the envelope at that same step.
  */
 export function evalModulated(m: Modulated, step: number): number {
-  if (m.pattern < 0 || m.amount === 0) return clamp01(m.value);
+  if (m.amount === 0) return clamp01(m.value);
+  if (m.pattern < 0) {
+    if (!voiceAt) return clamp01(m.value);
+    return applyVoiceEnvelope(m.value, voiceAt(m.pattern, step), m.amount);
+  }
   const cycle = Math.max(1, Math.round(m.cycle));
   const phase = (((step % cycle) + cycle) % cycle) / cycle;
   return clamp01(m.value + motif(m.pattern, phase) * m.amount);

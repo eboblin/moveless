@@ -3,7 +3,7 @@ import { laneHeard } from "../core/journal.ts";
 import { clamp01, SIXTEENTH_TICKS, countFromUnit, rateFromUnit, tickToSample } from "../core/clock.ts";
 import { phraseStepsOf } from "../core/events.ts";
 import { chordSymbol, degreeNumeral, pitchClassName, scaleShort, scaleTitle } from "../core/harmony.ts";
-import { chordFigure, generatePhrase, laneSteps, octaveNumber, restingChordToneLabel, restingPitchLabel, restingSliceLabel } from "../core/phrase.ts";
+import { chordFigure, generatePhrase, laneEnvelope, laneSteps, octaveNumber, restingChordToneLabel, restingPitchLabel, restingSliceLabel } from "../core/phrase.ts";
 import { applyVoiceEnvelope, evalModulated, voiceLane } from "../core/modulate.ts";
 import { isPitched, isVoice, LANES, LANE_CODE, type RandomizeDepth, type RandomizeIntensity, type RandomizeScope, type ContextId, type HarmonicEvent, type LaneId, type Phrase, type Project, type TimedEvent } from "../core/types.ts";
 import { DIGIT_H, displayAmount, divisionCell, type BigAmount, type DisplayAmount } from "./digits.ts";
@@ -11,8 +11,7 @@ import { readControl } from "./controls.ts";
 import { bindingFor, livePage, pageTitle, pagesFor, type Binding, type Page } from "../core/pages.ts";
 import { focusVisible, macroReturnValue, PAGE_TITLE_SLIDE_MS, screenPlace, type CaptureLine, type RandomizeLine, type UiState } from "./state.ts";
 import { lettersWidth, plotLetters } from "./letters.ts";
-import { envelopeTable, readEnvelope, type EnvelopeTable } from "../dsp/envelope.ts";
-import { phraseLoop } from "../dsp/schedule.ts";
+import { readEnvelope } from "../dsp/envelope.ts";
 import { drawWaveform, emptyWave, type WaveTape } from "./wave.ts";
 
 export const WIDTH = 128;
@@ -483,36 +482,6 @@ function dimPattern(pixels: Uint8Array, y1 = HEADER_H + VIZ_H - 2): void {
   }
 }
 
-let vizEnv: { stamp: number; table: EnvelopeTable } | null = null;
-
-function sourceStamp(project: Project, phrase: Phrase, lane: LaneId): number {
-  let h = Math.imul(Math.round(project.global.tempo * 1000), 16777619);
-  h ^= LANES.indexOf(lane) + 3;
-  const gain = project.mixer[lane] * project.mixer.master;
-  h = Math.imul(h ^ Math.round(gain * 100000), 16777619);
-  h = Math.imul(h ^ (laneHeard(project, lane) ? 1 : 0), 16777619);
-  h = Math.imul(h ^ phrase.steps[lane], 16777619);
-  if (!laneHeard(project, lane)) return h;
-  for (const event of phrase.lanes[lane]) {
-    h = Math.imul(h ^ event.sample, 16777619);
-    h = Math.imul(h ^ event.lengthTicks, 16777619);
-    h = Math.imul(h ^ Math.round(event.velocity * 100000), 16777619);
-    for (const value of Object.values(event.sound)) {
-      h = Math.imul(h ^ Math.round(value * 100000), 16777619);
-    }
-  }
-  return h;
-}
-
-function voiceCurve(project: Project, phrase: Phrase, lane: LaneId, tempo: number): EnvelopeTable {
-  const stamp = sourceStamp(project, phrase, lane);
-  if (vizEnv && vizEnv.stamp === stamp) return vizEnv.table;
-  const events = laneHeard(project, lane) ? phraseLoop(project, phrase) : [];
-  const table = envelopeTable(events, lane, tempo);
-  vizEnv = { stamp, table };
-  return table;
-}
-
 function drawGenerator(pixels: Uint8Array, project: Project, phrase: Phrase, context: ContextId, path: string, playhead: number): void {
   const value = readControl(project, context, `${path}.value`);
   const pattern = readControl(project, context, `${path}.pattern`);
@@ -523,7 +492,7 @@ function drawGenerator(pixels: Uint8Array, project: Project, phrase: Phrase, con
   const source = voiceLane(pattern);
   const tempo = Math.max(1, project.global.tempo);
   const sixteenth = tickToSample(SIXTEENTH_TICKS, tempo);
-  const table = source ? voiceCurve(project, phrase, source, tempo) : null;
+  const table = source && amount !== 0 ? laneEnvelope(project, phrase, source) : null;
   const shown = { value, pattern, cycle, amount };
   const yTop = HEADER_H;
   const yBottom = HEADER_H + VIZ_H - 2;

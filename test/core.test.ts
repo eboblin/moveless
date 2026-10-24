@@ -397,6 +397,16 @@ describe("euclid generator", () => {
     for (const event of kicks) assert.ok(event.sound.pitch > 0.35);
   });
 
+  it("reads a voice envelope at the generator step", () => {
+    const project = bar(defaultProject());
+    project.working.kick.ratchet.count = modulated(0, -1, 4, 1);
+    const kicks = generatePhrase(project).lanes.kick;
+    assert.ok(kicks.length > 1);
+    const quiet = bar(defaultProject());
+    quiet.working.kick.ratchet.count = modulated(0, -1, 4, 0);
+    assert.equal(generatePhrase(quiet).lanes.kick.length, 1);
+  });
+
   it("reads a modulator at the note time rather than the note count", () => {
     const project = bar(defaultProject());
     project.working.kick.gen1 = { ...project.working.kick.gen1, length: 16, hits: 4, rotate: 0, probability: 1 };
