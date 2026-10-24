@@ -2791,7 +2791,7 @@ describe("page title", () => {
     return Math.floor((WIDTH - lettersWidth(text)) / 2);
   }
 
-  it("prints the page title over the phrase for half a second after a jog touch", () => {
+  it("prints the page title over the phrase while the jog is touched and drops it on release", () => {
     let ysMin = DIGIT_H;
     let ysMax = 0;
     plotLetters("GENERATOR 1", 0, 0, (_x, y) => {
@@ -2821,15 +2821,13 @@ describe("page title", () => {
     assertOutline(held, heldBare, [captionAt("GENERATOR 1")]);
 
     const released = reduce(state, { kind: "note", data1: 9, data2: 0 });
-    assert.equal(released.ui.pageTitleUntilMs, until);
-    const still = renderScreen(released.project, released.ui, 0, false, until - 1);
-    const stillBare = renderScreen(released.project, { ...released.ui, pageTitleUntilMs: null }, 0, false, until - 1);
-    assertOutline(still, stillBare, [captionAt("GENERATOR 1")]);
+    assert.equal(released.ui.pageTitleUntilMs, null);
+    assert.equal(released.ui.wheelTouch, true);
+    const gone = renderScreen(released.project, released.ui, 0, false, until - 1);
+    const goneBare = renderScreen(released.project, { ...released.ui, pageTitleUntilMs: null }, 0, false, until - 1);
+    assert.deepEqual(gone.pixels, goneBare.pixels);
     const settled = settleWheel(released.ui, (released.ui.wheelReleaseMs ?? 0) + WHEEL_RELEASE_MS);
     assert.equal(settled.wheelTouch, false);
-    const dropped = renderScreen(released.project, settled, 0, false, until);
-    const droppedBare = renderScreen(released.project, { ...settled, pageTitleUntilMs: null }, 0, false, until);
-    assert.deepEqual(dropped.pixels, droppedBare.pixels);
   });
 
   it("slides the title when the jog changes page and snaps when a pad does", () => {
@@ -2889,6 +2887,10 @@ describe("page title", () => {
     const bass = pagesFor("bass")[0]?.title ?? "";
     let frame = paint(state);
     assertOutline(frame.shown, frame.bare, [captionAt("BASS", CAPTION_LANE_Y), captionAt(bass, CAPTION_PAGE_Y)]);
+    const heldPast = (state.ui.pageTitleUntilMs ?? 0) + PAGE_TITLE_MS;
+    const stillHeld = renderScreen(state.project, state.ui, 0, false, heldPast);
+    const stillHeldBare = renderScreen(state.project, { ...state.ui, pageTitleUntilMs: null }, 0, false, heldPast);
+    assertOutline(stillHeld, stillHeldBare, [captionAt("BASS", CAPTION_LANE_Y), captionAt(bass, CAPTION_PAGE_Y)]);
 
     state = reduce(state, { kind: "note", data1: 93, data2: 127 });
     assert.equal(state.ui.page, 1);
@@ -2901,6 +2903,11 @@ describe("page title", () => {
     state = reduce(state, { kind: "note", data1: 20, data2: 0 });
     assert.equal(state.ui.context, "bass");
     assert.equal(state.ui.page, 1);
+    assert.equal(state.ui.heldContext, null);
+    assert.equal(state.ui.pageTitleUntilMs, null);
+    const dropped = renderScreen(state.project, state.ui, 0, false, Date.now());
+    const droppedBare = renderScreen(state.project, { ...state.ui, pageTitleUntilMs: null }, 0, false, Date.now());
+    assert.deepEqual(dropped.pixels, droppedBare.pixels);
     state = reduce(state, { kind: "note", data1: 20, data2: 127 });
     assert.equal(state.ui.pageTitleLane, false);
     assert.equal(state.ui.pageTitleSlide, null);
@@ -2925,12 +2932,46 @@ describe("page title", () => {
     assertOutline(frame.shown, frame.bare, [captionAt("BASS", CAPTION_LANE_Y), captionAt(next, CAPTION_PAGE_Y)]);
   });
 
+  it("checks the mixer faders and the dj strip while a caption is up", () => {
+    const mix = reduce(openMixer(session()), { kind: "note", data1: 9, data2: 127 });
+    mix.project.mixer.kick = 1;
+    const mixShown = renderScreen(mix.project, mix.ui, 0);
+    const mixBare = renderScreen(mix.project, { ...mix.ui, pageTitleUntilMs: null }, 0);
+    assert.equal(mixShown.viz, "mixer");
+    const faderBottom = HEIGHT - FONT_H - 1 - FONT_H - 1 - 2;
+    const belowCaption = CAPTION_SINGLE_Y + DIGIT_H + CAPTION_OUTLINE;
+    let mixCovered = false;
+    for (let y = belowCaption; y <= faderBottom; y++) {
+      for (let x = 0; x < WIDTH; x++) {
+        if ((x + y) % 2 === 0) continue;
+        assert.equal(pixel(mixShown, x, y), 0);
+        if (pixel(mixBare, x, y) === 1) mixCovered = true;
+      }
+    }
+    assert.ok(mixCovered);
+
+    const deck = reduce(openDeck(session()), { kind: "note", data1: 9, data2: 127 });
+    const deckShown = renderScreen(deck.project, deck.ui, 0);
+    const deckBare = renderScreen(deck.project, { ...deck.ui, pageTitleUntilMs: null }, 0);
+    assert.equal(deckShown.viz, "deck");
+    let deckCovered = false;
+    for (let y = belowCaption; y <= HEADER_H + VIZ_H - 2; y++) {
+      for (let x = 0; x < WIDTH; x++) {
+        if ((x + y) % 2 === 0) continue;
+        assert.equal(pixel(deckShown, x, y), 0);
+        if (pixel(deckBare, x, y) === 1) deckCovered = true;
+      }
+    }
+    assert.ok(deckCovered);
+  });
+
   it("keeps a repaint key moving through a slide and drops it when the caption ends", () => {
     let state = reduce(session(), { kind: "note", data1: 9, data2: 127 });
     const touched = state.ui.pageTitleUntilMs ?? 0;
     assert.equal(pageTitlePaintKey(state.ui, touched - 1), 0);
     assert.equal(pageTitlePaintKey(state.ui, touched), 0);
     const letGo = reduce(state, { kind: "note", data1: 9, data2: 0 });
+    assert.equal(pageTitlePaintKey(letGo.ui, touched - 1), -1);
     const up = settleWheel(letGo.ui, (letGo.ui.wheelReleaseMs ?? 0) + WHEEL_RELEASE_MS);
     assert.equal(pageTitlePaintKey(up, touched), -1);
 
@@ -2944,6 +2985,7 @@ describe("page title", () => {
     assert.ok(until > started + PAGE_TITLE_SLIDE_MS);
     assert.equal(pageTitlePaintKey(state.ui, until), PAGE_TITLE_SLIDE_MS);
     const letGoSlide = reduce(state, { kind: "note", data1: 9, data2: 0 });
+    assert.equal(pageTitlePaintKey(letGoSlide.ui, until), -1);
     const upSlide = settleWheel(letGoSlide.ui, (letGoSlide.ui.wheelReleaseMs ?? 0) + WHEEL_RELEASE_MS);
     assert.equal(pageTitlePaintKey(upSlide, until), -1);
   });

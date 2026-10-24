@@ -114,9 +114,10 @@ function onStep(session: Session, index: number, press: boolean): Session {
   if (!press) {
     if (session.ui.heldContext !== step) return session;
     const page = session.ui.heldPage ?? session.ui.lanePages[step] ?? 0;
+    const placed = rememberPage(session.ui, step, page);
     return {
       ...session,
-      ui: settleRandomize({ ...rememberPage(session.ui, step, page), heldContext: null, heldPage: null }),
+      ui: settleRandomize({ ...placed, heldContext: null, heldPage: null, pageTitleUntilMs: null }),
     };
   }
   return {
@@ -326,12 +327,20 @@ function touchWheel(session: Session, press: boolean): Session {
         ...session.ui,
         wheelTouch: true,
         wheelReleaseMs: null,
-        ...(fresh ? { pageTitleUntilMs: Date.now() + PAGE_TITLE_MS, pageTitleSlide: null, pageTitleLane: false } : {}),
+        pageTitleUntilMs: Date.now() + PAGE_TITLE_MS,
+        ...(fresh ? { pageTitleSlide: null, pageTitleLane: false } : {}),
       },
     };
   }
   if (!session.ui.wheelTouch || session.ui.wheelReleaseMs !== null) return session;
-  return { ...session, ui: { ...session.ui, wheelReleaseMs: Date.now() } };
+  return {
+    ...session,
+    ui: {
+      ...session.ui,
+      wheelReleaseMs: Date.now(),
+      ...(session.ui.heldContext ? {} : { pageTitleUntilMs: null, pageTitleSlide: null }),
+    },
+  };
 }
 
 function turnWheel(session: Session, value: number): Session {

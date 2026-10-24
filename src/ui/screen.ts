@@ -151,7 +151,7 @@ export function renderScreen(
   const titleOn = !notice && pageTitleVisible(ui, now);
   if (phrase && bars && !titleOn && !menu) labels.push(...chordNameLabels(project, phrase));
   if (notice) labels.push(...noticeLabels(notice.title, notice.value));
-  if ((menu || titleOn) && phrase) dimPattern(pixels);
+  if ((menu || titleOn) && (phrase || mixer || decking)) dimPattern(pixels, mixer ? MIX_FADER_BOTTOM : undefined);
   if (menu && !titleOn) drawMenuCaption(pixels, project, menu);
   if (titleOn) drawPageTitle(pixels, project, ui, now);
   const digits = mixer || !page ? [] : paramDigits(project, context, page, focus, ui, now);
@@ -210,10 +210,10 @@ function paintCaption(pixels: Uint8Array, parts: readonly Caption[]): void {
   for (const index of ink) pixels[index] = 1;
 }
 
-/** The page caption is up. A held jog keeps it after the linger timer. */
+/** The page caption is up. A jog touch shows it only while the finger is down. A lane button holds it. A pad step lingers. */
 export function pageTitleVisible(ui: UiState, now: number): boolean {
   if (ui.pageTitleUntilMs === null) return false;
-  return ui.wheelTouch || now < ui.pageTitleUntilMs;
+  return ui.heldContext !== null || ui.wheelTouch || now < ui.pageTitleUntilMs;
 }
 
 /**
@@ -472,9 +472,8 @@ function drawParamSeparator(pixels: Uint8Array): void {
   for (let x = 0; x < WIDTH; x++) set(pixels, x, SEP_Y, 1);
 }
 
-/** Darken the phrase with a 1px black checker so a VPCA curve can sit on top. */
-function dimPattern(pixels: Uint8Array): void {
-  const y1 = HEADER_H + VIZ_H - 2;
+/** Darken the picture with a 1px black checker. Mixer faders run past the phrase band. */
+function dimPattern(pixels: Uint8Array, y1 = HEADER_H + VIZ_H - 2): void {
   for (let y = HEADER_H; y <= y1; y++) {
     for (let x = 0; x < WIDTH; x++) {
       if ((x + y) % 2 !== 0) set(pixels, x, y, 0);

@@ -147,7 +147,7 @@ export interface TrackPlace {
   mode: UiMode;
 }
 
-/** How long the page title stays after the jog is released, or after a button step. A held jog keeps it up. */
+/** How long a pad step keeps the page title. A jog touch drops the caption with the finger, and a lane button keeps it only while the button is down. */
 export const PAGE_TITLE_MS = 500;
 /** How long the jog slide takes to bring the new title to center. */
 export const PAGE_TITLE_SLIDE_MS = 200;
