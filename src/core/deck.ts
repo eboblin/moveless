@@ -164,7 +164,7 @@ const ROW_TEXT: Record<DeckGroup, readonly string[]> = {
   lop: ["FWD", "REV", "PNG", "STP"],
   glc: ["SHF", "JMP", "MNG", "CUT"],
   scr: ["BAB", "TEA", "FLA", "ORB"],
-  gat: ["HLF", "NAR", "MUT", "DRP"],
+  gat: ["HLF", "NAR", "MUT", "AND"],
   pch: ["HLD", "RIS", "FAL", "WOB"],
   stp: ["STP", "SPN", "BCK", "BNC"],
   thr: ["SFT", "EVN", "TAL", "HOT"],
@@ -175,7 +175,7 @@ const ROW_WORD: Record<DeckGroup, readonly string[]> = {
   lop: ["FORWARD", "REVERSE", "PONG", "STEP"],
   glc: ["SHUFFLE", "JUMP", "MANGLE", "CUT"],
   scr: ["BABY", "TEAR", "FLARE", "ORBIT"],
-  gat: ["HALF", "NARROW", "MUTE", "DROP"],
+  gat: ["HALF", "NARROW", "MUTE", "OFFBEAT"],
   pch: ["HOLD", "RISE", "FALL", "WOBBLE"],
   stp: ["STOP", "SPIN", "BACK", "BOUNCE"],
   thr: ["SOFT", "EVEN", "TAIL", "HOT"],
@@ -620,10 +620,11 @@ function readGroup(moment: DeckMoment, group: DeckGroup, y: number): DeckRead {
   if (group === "scr") return readScratch(origin, now, len, knobs, y);
 
   if (group === "gat") {
-    if (y === 3) return { pos: now, live: 1, gain: 0, throw: 0, rate: 1 };
-    const base = [0.5, 0.28, 0.1][y] ?? 0.5;
+    const base = [0.5, 0.28, 0.1, 0.5][y] ?? 0.5;
     const duty = Math.max(0.02, Math.min(0.95, base + (clamp01(knobs.duty) - 0.5) * 0.3));
-    const on = mod(held, div) < div * duty;
+    const into = mod(held, div);
+    // The top row opens on the offbeat: the downbeat stays shut, the and plays.
+    const on = y === 3 ? into >= div * (1 - duty) : into < div * duty;
     return { pos: now, live: 1, gain: on ? 1 : 0, throw: 0, rate: 1 };
   }
 

@@ -50,9 +50,12 @@ describe("deck curves", () => {
     const transform = moment({ gesture: "tran", down: 0, now: chopped, knobs });
     const gate = moment({ gesture: "gat0", down: 0, now: chopped, knobs });
     const drop = moment({ gesture: "drop", now: chopped, knobs });
+    const offbeat = moment({ gesture: "gat3", down: 0, now: Math.floor(div * 0.75), knobs });
     assert.equal(deckRead(transform).gain, 0);
     assert.equal(deckRead(gate).gain, 0);
     assert.equal(deckRead(drop).gain, 0);
+    assert.equal(deckRead(moment({ gesture: "gat3", down: 0, now: 10, knobs })).gain, 0);
+    assert.equal(deckRead(offbeat).gain, 1);
     assert.equal(deckPicture(transform).gain, 1);
     assert.equal(deckPicture(gate).gain, 1);
     assert.equal(deckPicture(drop).gain, 1);

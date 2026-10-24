@@ -2181,14 +2181,14 @@ static DeckRead deck_group(const Engine *engine, int gesture, int now) {
     }
     if (group == 4) {
         float base = y == 1 ? 0.28f : y == 2 ? 0.1f : 0.5f;
-        float duty;
+        float duty = base + (deck_unit(engine->deck_k[6]) - 0.5f) * 0.3f;
+        int into = deck_mod(held, div);
         int on;
         DeckRead r = { (float)now, 1.0f, 0.0f, 0.0f, 1.0f };
-        if (y == 3) return r;
-        duty = base + (deck_unit(engine->deck_k[6]) - 0.5f) * 0.3f;
         if (duty < 0.02f) duty = 0.02f;
         if (duty > 0.95f) duty = 0.95f;
-        on = deck_mod(held, div) < (int)((float)div * duty);
+        if (y == 3) on = into >= (int)((float)div * (1.0f - duty));
+        else on = into < (int)((float)div * duty);
         r.gain = on ? 1.0f : 0.0f;
         return r;
     }
