@@ -1872,6 +1872,62 @@ describe("randomize, wander, sets", () => {
     assert.ok(later.wanderPreviousTarget === "001" || later.wanderPreviousTarget === "002");
   });
 
+  it("holds the wander interval after a transition lands", () => {
+    let project = defaultProject();
+    project = record(project);
+    project = record(punch(project, "kick.gen1.velocity.value", 0));
+    project.wander = "fast";
+    project.transition = "medium";
+    project.wanderOriginTick = 0;
+    const bar = 4 * 192;
+    const gap = 2 * bar;
+    const duration = 4 * bar;
+    const first = advance(project, gap);
+    assert.equal(first.morph?.originTick, gap);
+    assert.equal(first.morph?.durationTicks, duration);
+    assert.equal(first.wanderOriginTick, gap + duration);
+    const overlapped = advance(first, gap + gap);
+    assert.equal(overlapped.morph?.originTick, gap);
+    assert.equal(overlapped.morph?.targetId, first.morph?.targetId);
+    const end = gap + duration;
+    const during = advance(overlapped, end - 1);
+    assert.equal(during.morph?.originTick, gap);
+    const landed = advance(during, end);
+    assert.equal(landed.morph, null);
+    assert.equal(landed.wanderOriginTick, end);
+    const holding = advance(landed, end + gap - 1);
+    assert.equal(holding.morph, null);
+    assert.equal(holding.activeSceneId, landed.activeSceneId);
+    const second = advance(holding, end + gap);
+    assert.equal(second.morph?.originTick, end + gap);
+    assert.equal(second.wanderOriginTick, end + gap + duration);
+    assert.notEqual(second.morph?.targetId, first.morph?.targetId);
+  });
+
+  it("starts the wander gap when a running transition ends", () => {
+    let project = record(defaultProject());
+    project = record(punch(project, "kick.gen1.velocity.value", 0));
+    project.transition = "medium";
+    project = launchScene(project, "002", 0);
+    const bar = 4 * 192;
+    const duration = 4 * bar;
+    const gap = 2 * bar;
+    assert.equal(project.morph?.originTick, 0);
+    assert.equal(project.morph?.durationTicks, duration);
+    project = { ...project, wander: "fast", wanderOriginTick: 0 };
+    const mid = advance(project, duration / 2);
+    assert.equal(mid.morph?.originTick, 0);
+    assert.equal(mid.morph?.targetId, "002");
+    assert.equal(mid.wanderOriginTick, duration);
+    const landed = advance(mid, duration);
+    assert.equal(landed.morph, null);
+    assert.equal(landed.wanderOriginTick, duration);
+    const early = advance(landed, duration + gap - 1);
+    assert.equal(early.morph, null);
+    const next = advance(early, duration + gap);
+    assert.equal(next.morph?.originTick, duration + gap);
+  });
+
   it("rolls a non-empty subset of unlocked lanes and falls back to one", () => {
     const project = defaultProject();
     project.lock.snare = true;

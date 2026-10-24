@@ -331,6 +331,7 @@ export interface Project {
   transition: TransitionId;
   wander: WanderId | null;
   wanderPreviousTarget: string | null;
+  /** Hold before the next wander step. A running morph moves this to its landing tick. */
   wanderOriginTick: number;
   /** Last scene that fully landed; source pad while a morph is running. */
   activeSceneId: string | null;

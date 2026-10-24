@@ -141,22 +141,46 @@ export function pickWanderCandidate(ids: readonly string[], previous: string | n
   return use[index];
 }
 
+/** Tick the morph has fully landed. A zero-length transition lands on its start. */
+function morphEndTick(morph: { originTick: number; durationTicks: number }): number {
+  return morph.originTick + Math.max(0, morph.durationTicks);
+}
+
+/**
+ * Wander speed is the hold after a morph lands, before the next one starts.
+ * The morph's own length is not part of that hold, and a running morph is left alone.
+ */
 export function advance(project: Project, tick: number, candidates?: readonly (string | null)[]): Project {
+  const pending = project.morph;
   let next = applyMorph(project, tick);
   if (!next.wander) return next;
+  if (pending && !next.morph) {
+    const end = morphEndTick(pending);
+    if (end > next.wanderOriginTick) next = { ...next, wanderOriginTick: end };
+  }
+  if (next.morph) {
+    const end = morphEndTick(next.morph);
+    return next.wanderOriginTick === end ? next : { ...next, wanderOriginTick: end };
+  }
   const interval = WANDER_BARS[next.wander] * ticksPerBar(next.global.bar);
-  let origin = next.wanderOriginTick;
+  let ready = next.wanderOriginTick;
   let guard = 0;
-  while (tick - origin >= interval && guard < 8) {
-    origin += interval;
+  while (tick - ready >= interval && guard < 8) {
+    const at = ready + interval;
     const pool = candidates ?? sceneIdsForPads(next);
-    const pick = pickWanderCandidate(pool.filter((id): id is string => id !== null), next.wanderPreviousTarget, next.global.seed, origin);
+    const pick = pickWanderCandidate(pool.filter((id): id is string => id !== null), next.wanderPreviousTarget, next.global.seed, at);
     const scene = pick ? next.journal.find((item) => item.id === pick) : undefined;
-    next = { ...next, wanderOriginTick: origin };
-    if (scene) {
-      next = retarget(next, scene, origin, wanderLanes(next, origin, scene.lanes));
-      next = { ...applyMorph(next, tick), wanderPreviousTarget: scene.id, wanderOriginTick: origin };
+    if (!scene) {
+      ready = at;
+      next = { ...next, wanderOriginTick: ready };
+      guard++;
+      continue;
     }
+    next = retarget(next, scene, at, wanderLanes(next, at, scene.lanes));
+    const end = next.morph ? morphEndTick(next.morph) : at;
+    next = { ...applyMorph(next, tick), wanderPreviousTarget: scene.id, wanderOriginTick: end };
+    ready = end;
+    if (next.morph) break;
     guard++;
   }
   return next;
