@@ -13,7 +13,9 @@ import {
   PATTERN_LANES,
   SET_CAPACITY,
   WANDER_BARS,
+  type EuclidGen,
   type LaneId,
+  type Lanes,
   type PatternId,
   type Project,
   type Scene,
@@ -102,9 +104,27 @@ export function launchScene(project: Project, sceneId: string, tick: number): Pr
   return retarget(current, scene, tick, null);
 }
 
-/** Unlocked lanes this wander step will move. At least one when any lane is open. */
-export function wanderLanes(project: Project, origin: number): PatternId[] {
-  const open = PATTERN_LANES.filter((lane) => !project.lock[lane]);
+/** A generator places a hit only when the ring has hits and probability is open. Length 0 is no hits. */
+function generatorSpeaks(gen: EuclidGen): boolean {
+  const length = Math.max(0, Math.round(gen.length));
+  const hits = length > 0 ? Math.min(length, Math.max(0, Math.round(gen.hits))) : 0;
+  return hits > 0 && gen.probability > 0;
+}
+
+/** Fx has no generators. A voice is silent when every generator is silent. */
+function destinationSpeaks(lanes: Lanes, lane: PatternId): boolean {
+  if (lane === "fx") return true;
+  if (lane === "chords") return generatorSpeaks(lanes.chords.gen1);
+  if (isDrum(lane) || isPitched(lane)) {
+    const part = lanes[lane];
+    return generatorSpeaks(part.gen1) || generatorSpeaks(part.gen2);
+  }
+  return false;
+}
+
+/** Unlocked lanes this wander step will move. A silent destination lane stays on the source. */
+export function wanderLanes(project: Project, origin: number, target: Lanes): PatternId[] {
+  const open = PATTERN_LANES.filter((lane) => !project.lock[lane] && destinationSpeaks(target, lane));
   if (!open.length) return [];
   const picked = open.filter((lane) => hash01(project.global.seed, "wander-lane", origin, lane) < 0.5);
   if (picked.length) return picked;
@@ -134,7 +154,7 @@ export function advance(project: Project, tick: number, candidates?: readonly (s
     const scene = pick ? next.journal.find((item) => item.id === pick) : undefined;
     next = { ...next, wanderOriginTick: origin };
     if (scene) {
-      next = retarget(next, scene, origin, wanderLanes(next, origin));
+      next = retarget(next, scene, origin, wanderLanes(next, origin, scene.lanes));
       next = { ...applyMorph(next, tick), wanderPreviousTarget: scene.id, wanderOriginTick: origin };
     }
     guard++;

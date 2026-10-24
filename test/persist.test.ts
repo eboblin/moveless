@@ -162,6 +162,7 @@ describe("project persist", () => {
       originTick: 100,
       durationTicks: 200,
       punched: [],
+      lanes: null,
       t: 0,
     };
     project.wander = "fast";

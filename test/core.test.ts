@@ -1837,11 +1837,11 @@ describe("randomize, wander, sets", () => {
     const project = defaultProject();
     project.lock.snare = true;
     project.lock.fx = true;
-    const open = PATTERN_LANES.filter((lane) => lane !== "snare" && lane !== "fx");
+    const open: PatternId[] = PATTERN_LANES.filter((lane) => lane !== "snare" && lane !== "fx");
     let sawPartial = false;
     let sawFallback = false;
     for (let origin = 0; origin < 512 && !(sawPartial && sawFallback); origin++) {
-      const lanes = wanderLanes(project, origin);
+      const lanes = wanderLanes(project, origin, project.working);
       assert.ok(lanes.length >= 1);
       assert.equal(lanes.includes("snare"), false);
       assert.equal(lanes.includes("fx"), false);
@@ -1859,7 +1859,7 @@ describe("randomize, wander, sets", () => {
     assert.equal(sawFallback, true);
     const held = defaultProject();
     for (const lane of PATTERN_LANES) held.lock[lane] = true;
-    assert.deepEqual(wanderLanes(held, 0), []);
+    assert.deepEqual(wanderLanes(held, 0, held.working), []);
   });
 
   it("wanders only the rolled lanes, then a pad pulls every unlocked lane", () => {
@@ -1875,12 +1875,12 @@ describe("randomize, wander, sets", () => {
     const open = PATTERN_LANES.filter((lane) => lane !== "hat");
     let origin = 0;
     for (; origin < 512; origin++) {
-      const lanes = wanderLanes(project, origin);
+      const lanes = wanderLanes(project, origin, project.working);
       if (lanes.length > 0 && lanes.length < open.length) break;
     }
     const interval = 2 * 4 * 192;
     project.wanderOriginTick = origin - interval;
-    const rolled = wanderLanes(project, origin);
+    const rolled = wanderLanes(project, origin, project.journal[1].lanes);
     assert.ok(rolled.length < open.length);
     const home = project.journal[0].lanes;
     const target = project.journal[1].lanes;
@@ -1904,6 +1904,68 @@ describe("randomize, wander, sets", () => {
       const from = lane === "hat" ? home : target;
       assert.equal(value, getPath(from, path), lane);
     }
+  });
+
+  it("keeps the source lane when every destination generator is silent", () => {
+    const project = defaultProject();
+    const quiet = clone(project.working);
+    quiet.kick.gen1.hits = 0;
+    quiet.kick.gen2.hits = 0;
+    quiet.snare.gen1.probability = 0;
+    quiet.snare.gen2.probability = 0;
+    quiet.bass.gen1.hits = 0;
+    quiet.bass.gen2.probability = 0;
+    quiet.chords.gen1.hits = 0;
+    quiet.lead.gen1.length = 0;
+    quiet.lead.gen2.length = 0;
+    quiet.hat.gen1.hits = 0;
+    quiet.hat.gen2.hits = 4;
+    let sawHat = false;
+    for (let origin = 0; origin < 64; origin++) {
+      const lanes = wanderLanes(project, origin, quiet);
+      assert.equal(lanes.includes("kick"), false);
+      assert.equal(lanes.includes("snare"), false);
+      assert.equal(lanes.includes("bass"), false);
+      assert.equal(lanes.includes("chords"), false);
+      assert.equal(lanes.includes("lead"), false);
+      if (lanes.includes("hat")) sawHat = true;
+    }
+    assert.equal(sawHat, true);
+    const onlyKick = defaultProject();
+    for (const lane of PATTERN_LANES) if (lane !== "kick") onlyKick.lock[lane] = true;
+    assert.deepEqual(wanderLanes(onlyKick, 1, quiet), []);
+
+    const mark = (lane: PatternId) => lane === "fx" ? "fx.reverb.size" : lane === "chords" ? "chords.velocity.value" : `${lane}.gen1.velocity.value`;
+    let live = record(defaultProject());
+    for (const lane of PATTERN_LANES) live = punch(live, mark(lane), 0.15);
+    live = punch(live, "kick.gen1.hits", 0);
+    live = punch(live, "kick.gen2.hits", 0);
+    live = punch(live, "snare.gen1.probability", 0);
+    live = punch(live, "snare.gen2.probability", 0);
+    live = record(live);
+    const dest = live.journal[1].lanes;
+    live.working = clone(live.journal[0].lanes);
+    live.wander = "fast";
+    live.wanderPreviousTarget = "001";
+    live.transition = "now";
+    let origin = 0;
+    for (; origin < 128; origin++) {
+      if (wanderLanes(live, origin, dest).includes("hat")) break;
+    }
+    assert.ok(origin < 128);
+    const interval = 2 * 4 * 192;
+    live.wanderOriginTick = origin - interval;
+    const home = live.journal[0].lanes;
+    const later = advance(live, origin);
+    assert.equal(getPath(later.working, mark("kick")), getPath(home, mark("kick")));
+    assert.equal(later.working.kick.gen1.hits, home.kick.gen1.hits);
+    assert.equal(getPath(later.working, mark("snare")), getPath(home, mark("snare")));
+    assert.equal(getPath(later.working, mark("hat")), getPath(dest, mark("hat")));
+    const armed = launchScene(later, "002", origin);
+    const pulled = applyMorph(armed, armed.morph?.originTick ?? origin);
+    assert.equal(getPath(pulled.working, mark("kick")), 0.15);
+    assert.equal(pulled.working.kick.gen1.hits, 0);
+    assert.equal(getPath(pulled.working, mark("snare")), 0.15);
   });
 
   it("records fx with the scene and glides it, holding a punched knob", () => {
