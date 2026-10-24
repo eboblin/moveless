@@ -26,6 +26,7 @@ import {
   journalPadIds,
   journalPageCount,
   wanderCandidates,
+  wanderLanes,
   setRandomizeDepth,
   setRandomizeIntensity,
   commitMacro,
@@ -38,8 +39,9 @@ import { chordSymbol, degreeNumeral, pitchClassOfDegree, scaleOf } from "../src/
 import { holdNote, latchedPcs, releaseChannel, resetLatch, settleLatch } from "../src/core/latch.ts";
 import { chordLabels, textPreview } from "../src/core/text-preview.ts";
 import { fieldsOf, getPath } from "../src/core/fields.ts";
+import { hash01 } from "../src/core/hash.ts";
 import { SOUND, bindingFor, macroOffset, pagesFor } from "../src/core/pages.ts";
-import { LANES, PATTERN_LANES, type Project, type ScaleId } from "../src/core/types.ts";
+import { LANES, PATTERN_LANES, type PatternId, type Project, type ScaleId } from "../src/core/types.ts";
 import { hasSoundMap } from "../src/dsp/map.ts";
 import { punch } from "../src/core/morph.ts";
 
@@ -1829,6 +1831,79 @@ describe("randomize, wander, sets", () => {
     project.transition = "now";
     const later = advance(project, 2 * 4 * 192);
     assert.ok(later.wanderPreviousTarget === "001" || later.wanderPreviousTarget === "002");
+  });
+
+  it("rolls a non-empty subset of unlocked lanes and falls back to one", () => {
+    const project = defaultProject();
+    project.lock.snare = true;
+    project.lock.fx = true;
+    const open = PATTERN_LANES.filter((lane) => lane !== "snare" && lane !== "fx");
+    let sawPartial = false;
+    let sawFallback = false;
+    for (let origin = 0; origin < 512 && !(sawPartial && sawFallback); origin++) {
+      const lanes = wanderLanes(project, origin);
+      assert.ok(lanes.length >= 1);
+      assert.equal(lanes.includes("snare"), false);
+      assert.equal(lanes.includes("fx"), false);
+      const coins = open.filter((lane) => hash01(project.global.seed, "wander-lane", origin, lane) < 0.5);
+      if (coins.length === 0) {
+        assert.equal(lanes.length, 1);
+        assert.equal(open.includes(lanes[0]), true);
+        sawFallback = true;
+      } else {
+        assert.deepEqual(lanes, coins);
+        if (coins.length < open.length) sawPartial = true;
+      }
+    }
+    assert.equal(sawPartial, true);
+    assert.equal(sawFallback, true);
+    const held = defaultProject();
+    for (const lane of PATTERN_LANES) held.lock[lane] = true;
+    assert.deepEqual(wanderLanes(held, 0), []);
+  });
+
+  it("wanders only the rolled lanes, then a pad pulls every unlocked lane", () => {
+    const mark = (lane: PatternId) => lane === "fx" ? "fx.reverb.size" : lane === "chords" ? "chords.velocity.value" : `${lane}.gen1.velocity.value`;
+    let project = record(defaultProject());
+    for (const lane of PATTERN_LANES) project = punch(project, mark(lane), 0.15);
+    project = record(project);
+    project.working = clone(project.journal[0].lanes);
+    project.lock.hat = true;
+    project.wander = "fast";
+    project.wanderPreviousTarget = "001";
+    project.transition = "now";
+    const open = PATTERN_LANES.filter((lane) => lane !== "hat");
+    let origin = 0;
+    for (; origin < 512; origin++) {
+      const lanes = wanderLanes(project, origin);
+      if (lanes.length > 0 && lanes.length < open.length) break;
+    }
+    const interval = 2 * 4 * 192;
+    project.wanderOriginTick = origin - interval;
+    const rolled = wanderLanes(project, origin);
+    assert.ok(rolled.length < open.length);
+    const home = project.journal[0].lanes;
+    const target = project.journal[1].lanes;
+    for (const lane of PATTERN_LANES) assert.notEqual(getPath(home, mark(lane)), getPath(target, mark(lane)), lane);
+    const later = advance(project, origin);
+    assert.equal(later.morph, null);
+    assert.equal(later.wanderPreviousTarget, "002");
+    for (const lane of PATTERN_LANES) {
+      const path = mark(lane);
+      const value = getPath(later.working, path);
+      const from = lane === "hat" || !rolled.includes(lane) ? home : target;
+      assert.equal(value, getPath(from, path), lane);
+    }
+    const armed = launchScene(later, "002", origin);
+    assert.equal(armed.morph?.lanes, null);
+    const pulled = applyMorph(armed, armed.morph?.originTick ?? origin);
+    assert.equal(pulled.morph, null);
+    for (const lane of PATTERN_LANES) {
+      const path = mark(lane);
+      const value = getPath(pulled.working, path);
+      const from = lane === "hat" ? home : target;
+      assert.equal(value, getPath(from, path), lane);
+    }
   });
 
   it("records fx with the scene and glides it, holding a punched knob", () => {

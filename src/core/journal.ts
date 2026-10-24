@@ -99,7 +99,17 @@ export function launchScene(project: Project, sceneId: string, tick: number): Pr
   const current = applyMorph(project, tick);
   const scene = current.journal.find((item) => item.id === sceneId);
   if (!scene) return current;
-  return retarget(current, scene, tick);
+  return retarget(current, scene, tick, null);
+}
+
+/** Unlocked lanes this wander step will move. At least one when any lane is open. */
+export function wanderLanes(project: Project, origin: number): PatternId[] {
+  const open = PATTERN_LANES.filter((lane) => !project.lock[lane]);
+  if (!open.length) return [];
+  const picked = open.filter((lane) => hash01(project.global.seed, "wander-lane", origin, lane) < 0.5);
+  if (picked.length) return picked;
+  const index = Math.min(open.length - 1, Math.floor(hash01(project.global.seed, "wander-lane", origin, "fallback") * open.length));
+  return [open[index]];
 }
 
 export function pickWanderCandidate(ids: readonly string[], previous: string | null, seed: number, salt: number): string | null {
@@ -124,7 +134,7 @@ export function advance(project: Project, tick: number, candidates?: readonly (s
     const scene = pick ? next.journal.find((item) => item.id === pick) : undefined;
     next = { ...next, wanderOriginTick: origin };
     if (scene) {
-      next = retarget(next, scene, origin);
+      next = retarget(next, scene, origin, wanderLanes(next, origin));
       next = { ...applyMorph(next, tick), wanderPreviousTarget: scene.id, wanderOriginTick: origin };
     }
     guard++;

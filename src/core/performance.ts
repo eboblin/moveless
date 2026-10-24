@@ -31,6 +31,7 @@ export {
   toggleMute,
   toggleSolo,
   wanderCandidates,
+  wanderLanes,
 } from "./journal.ts";
 export {
   randomizeLane,

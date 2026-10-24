@@ -95,12 +95,13 @@ export function mergeLanes(
   const targetFields = new Map(memoFields(target).map((field) => [field.path, field.value]));
   const origin = morph.originTick;
   const end = origin + Math.max(0, morph.durationTicks);
+  const mask = morph.lanes ? new Set(morph.lanes) : null;
   const periods = new Map<PatternId, number>();
   const writes: { path: string; value: number }[] = [];
   const dirty = new Set<PatternId>();
   for (const field of from) {
     const lane = field.path.split(".")[0] as PatternId;
-    if (lock[lane] || punched.has(field.path)) continue;
+    if (lock[lane] || (mask && !mask.has(lane)) || punched.has(field.path)) continue;
     const to = targetFields.get(field.path);
     if (to === undefined) continue;
     let period = periods.get(lane);
@@ -139,7 +140,7 @@ export function applyMorph(project: Project, tick: number): Project {
   };
 }
 
-export function retarget(project: Project, scene: Scene, tick: number): Project {
+export function retarget(project: Project, scene: Scene, tick: number, lanes: PatternId[] | null = null): Project {
   const origin = quantizeStart(tick, project.transition, project.global.bar);
   const durationTicks = TRANSITION_BARS[project.transition] * ticksPerBar(project.global.bar);
   const start = clone(project.working);
@@ -151,6 +152,7 @@ export function retarget(project: Project, scene: Scene, tick: number): Project 
       originTick: origin,
       durationTicks,
       punched: [],
+      lanes,
       t: 0,
     },
   };
