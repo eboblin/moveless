@@ -129,6 +129,20 @@ describe("waveform", () => {
     assert.equal(wavePeak(tape, -200, -1, 0).right, 0);
   });
 
+  it("opens the past again after the transport restarts", () => {
+    const engine = createEngine();
+    const span = 88200;
+    const hop = 3072;
+    noteDeck(engine.deck, hop, 1, 1);
+    engine.deck.filled = engine.deck.mask + 9000;
+    assert.ok(pastColumns(engine.deck, 4000, span).every((col) => col.left === 0));
+    loadPhrase(engine, [], 120, true);
+    noteDeck(engine.deck, hop + 28, 0.2, 0.1);
+    const cols = pastColumns(engine.deck, 4000, span);
+    assert.ok(cols.some((col) => col.left > 0.15 && col.left < 0.35));
+    assert.ok(cols.every((col) => col.left < 0.5));
+  });
+
   it("packs recorded ring peaks on the left and stays empty before the first write", () => {
     const deck = createDeckRuntime();
     const head = 4000;

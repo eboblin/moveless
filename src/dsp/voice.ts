@@ -242,6 +242,8 @@ export function loadPhrase(engine: Engine, events: LoopEvent[], tempo: number, r
   if (reset) {
     engine.clock = 0;
     engine.deck.filled = 0;
+    engine.deck.peakL.fill(0);
+    engine.deck.peakR.fill(0);
     engine.deck.gesture = null;
     engine.deck.command = null;
     engine.deck.up = null;

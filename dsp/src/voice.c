@@ -1754,6 +1754,11 @@ static void ingest_phrase(Engine *engine) {
     engine->tempo = strtof(tempo + 1, NULL);
     if (atoi(reset + 1)) {
         engine->clock = 0;
+        /* The past strip reads peaks by absolute sample. A leftover filled
+         * watermark sits past the new head, so the left half stays empty. */
+        engine->deck_filled = 0;
+        if (engine->deck_peak_l) memset(engine->deck_peak_l, 0, (size_t)DECK_PEAKS * sizeof(float));
+        if (engine->deck_peak_r) memset(engine->deck_peak_r, 0, (size_t)DECK_PEAKS * sizeof(float));
         fx_clear(engine);
     }
     engine->phrase_on = 1;
