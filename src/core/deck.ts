@@ -29,7 +29,7 @@ export const DECK_GROUPS = ["rpt", "lop", "glc", "scr", "gat", "pch", "stp", "th
 
 export type DeckGroup = (typeof DECK_GROUPS)[number];
 
-/** A legacy name, or a group plus its row: `glc0` is shuffle, `glc3` is freeze. */
+/** A legacy name, or a group plus its row: `glc0` is shuffle, `glc3` is cut. */
 export type DeckGesture = (typeof DECK_GESTURES)[number] | `${DeckGroup}${0 | 1 | 2 | 3}`;
 
 /** Left two columns, top to bottom. The other thirty-two minus these are the variation field. */
@@ -64,7 +64,7 @@ export interface DeckKnobs {
   vary: number;
   /** When the gesture grabs the grid: now, division, beat, bar. */
   quant: number;
-  /** Gate width. At 1/2 a glitch slot plays whole. */
+  /** Gate width of a transform or a scratch hole. */
   duty: number;
   /** 1/2 is straight. Left of centre reverses, right pitches up. */
   ramp: number;
@@ -119,7 +119,7 @@ const SLOT_IDS: readonly DeckSlot[] = ["div", "len", "depth", "brake", "vary", "
 const GROUP_SLOTS: Record<DeckGroup, readonly DeckSlot[]> = {
   rpt: ["row"],
   lop: ["row"],
-  glc: ["row", "len", "vary", "duty", "ramp"],
+  glc: ["row"],
   scr: ["row", "len", "vary", "duty", "ramp"],
   gat: ["row", "duty"],
   pch: ["row", "ramp"],
@@ -162,7 +162,7 @@ export function rowKnobName(group: DeckGroup): string {
 const ROW_TEXT: Record<DeckGroup, readonly string[]> = {
   rpt: ["RPT", "JMP", "REV", "PNG"],
   lop: ["FWD", "REV", "PNG", "STP"],
-  glc: ["SHF", "ORD", "PNG", "FRZ"],
+  glc: ["SHF", "JMP", "MNG", "CUT"],
   scr: ["BAB", "TEA", "FLA", "ORB"],
   gat: ["HLF", "NAR", "MUT", "DRP"],
   pch: ["HLD", "RIS", "FAL", "WOB"],
@@ -173,7 +173,7 @@ const ROW_TEXT: Record<DeckGroup, readonly string[]> = {
 const ROW_WORD: Record<DeckGroup, readonly string[]> = {
   rpt: ["REPEAT", "JUMP", "REVERSE", "PONG"],
   lop: ["FORWARD", "REVERSE", "PONG", "STEP"],
-  glc: ["SHUFFLE", "ORDER", "PONG", "FREEZE"],
+  glc: ["SHUFFLE", "JUMP", "MANGLE", "CUT"],
   scr: ["BABY", "TEAR", "FLARE", "ORBIT"],
   gat: ["HALF", "NARROW", "MUTE", "DROP"],
   pch: ["HOLD", "RISE", "FALL", "WOBBLE"],
@@ -577,18 +577,6 @@ function reverseSlice(start: number, now: number, origin: number, slice: number)
   return { pos: start + slice - into, live: 0, gain: 1, throw: 0, rate: -1 };
 }
 
-function slotOpen(duty: number): number {
-  const unit = clamp01(duty);
-  return unit >= 0.5 ? 1 : unit / 0.5;
-}
-
-function skipSlot(seed: number, windowIndex: number, slot: number, vary: number): boolean {
-  if (!(vary > 0)) return false;
-  let state = (Math.imul(seed + 1, 997) + Math.imul(windowIndex + 1, 131) + Math.imul(slot + 1, 17)) >>> 0;
-  state = (Math.imul(state, 1664525) + 1013904223) >>> 0;
-  return (state % 1000) / 1000 < vary;
-}
-
 function readGroup(moment: DeckMoment, group: DeckGroup, y: number): DeckRead {
   const { knobs, tempo, barBeats, now, down, ahead, seed } = moment;
   const bar = barSamples(tempo, barBeats);
@@ -680,33 +668,72 @@ function readGroup(moment: DeckMoment, group: DeckGroup, y: number): DeckRead {
   return { pos: now, live: 1, gain: 1, throw: amt, rate: 1 };
 }
 
-function readGlitch(moment: DeckMoment, origin: number, y: number): DeckRead {
-  const { knobs, tempo, barBeats, now, ahead, seed } = moment;
-  const window = lenSamples(knobs, tempo, barBeats);
-  const slice = Math.max(1, divSamples(knobs, tempo));
-  const count = Math.max(1, Math.min(48, Math.round(window / slice)));
-  const future = ahead >= window;
-  const start = future ? origin : origin - window;
-  const held = now - origin;
-  const windowIndex = Math.floor(held / Math.max(1, window));
-  const at = Math.floor(held / slice);
-  let src = mod(at, count);
-  if (y === 0) src = glitchOrder(seed, windowIndex, count)[mod(at, count)] ?? 0;
-  else if (y === 2) src = pongIndex(at, count);
-  else if (y === 3) src = count - 1;
-  const into = mod(held, slice);
-  const reverse = knobs.ramp < 0.5;
-  const pos = start + src * slice + (reverse ? slice - into : into);
-  const open = slotOpen(knobs.duty);
-  const gain = skipSlot(seed, windowIndex, src, clamp01(knobs.vary)) || into >= slice * open ? 0 : 1;
-  return { pos, live: 0, gain, throw: 0, rate: reverse ? -1 : 1 };
+/** Straight, octave up, octave down, straight. Two straights keep the bar mostly in tune. */
+const GLITCH_SPEED = [1, 2, 0.5, 1] as const;
+
+function glitchHash(seed: number, windowIndex: number, slot: number, salt: number): number {
+  let state = (Math.imul(seed + 1, 997) + Math.imul(windowIndex + 1, 131) + Math.imul(slot + 1, salt)) >>> 0;
+  state = (Math.imul(state, 1664525) + 1013904223) >>> 0;
+  return state;
 }
 
-function pongIndex(at: number, count: number): number {
-  if (count <= 1) return 0;
-  const period = count * 2 - 2;
-  const i = mod(at, period);
-  return i < count ? i : period - i;
+/** How many times the attack fits in one slice. The grain never goes finer than a 32nd. */
+function glitchCuts(y: number, held: number, beat: number, slice: number): number {
+  const bias = [0, 0, 1, 2][pick(y, 4)] ?? 0;
+  const steps = Math.min(3, bias + Math.floor(held / Math.max(1, beat)));
+  let cuts = 1 << steps;
+  const finest = Math.max(1, Math.round(beat / 8));
+  while (cuts > 1 && Math.floor(slice / cuts) < finest) cuts >>= 1;
+  return cuts;
+}
+
+function glitchSpeed(seed: number, slot: number, count: number): number {
+  return GLITCH_SPEED[glitchHash(seed, 0, mod(slot, count), 17) % 4] ?? 1;
+}
+
+/**
+ * Downbeat slices (phase 0) are read half a beat later, so a kick on 1 lands on the and.
+ * Odd rows pick any slice of that phase. Even rows walk a shuffle of it.
+ */
+function glitchSource(seed: number, windowIndex: number, slot: number, count: number, perBeat: number, y: number): number {
+  const order = glitchOrder(seed, windowIndex, count);
+  const jump = y % 2 === 1;
+  if (perBeat < 2) {
+    if (!jump) return order[mod(slot, count)] ?? 0;
+    return mod(glitchHash(seed, windowIndex, slot, 47), count);
+  }
+  const srcPhase = mod(mod(slot, perBeat) - Math.floor(perBeat / 2), perBeat);
+  const bucket: number[] = [];
+  for (const src of order) if (mod(src, perBeat) === srcPhase) bucket.push(src);
+  if (bucket.length === 0) return order[mod(slot, count)] ?? 0;
+  const at = jump ? mod(glitchHash(seed, windowIndex, slot, 47), bucket.length) : Math.floor(slot / perBeat) % bucket.length;
+  return bucket[at] ?? 0;
+}
+
+function grainOffset(at: number, rate: number, grain: number): number {
+  if (rate > 1.5) return mod(at * 2, grain);
+  if (rate < 0.75) return Math.floor(at / 2);
+  return mod(at, grain);
+}
+
+/** One bar of slices. A downbeat hit lands on the offbeat; holding stutters it and may jump an octave. */
+function readGlitch(moment: DeckMoment, origin: number, y: number): DeckRead {
+  const { knobs, tempo, barBeats, now, ahead, seed } = moment;
+  const beat = Math.max(1, Math.round(samplesPerBeat(tempo)));
+  const bar = barSamples(tempo, barBeats);
+  const slice = Math.max(1, divSamples(knobs, tempo));
+  const count = Math.max(1, Math.min(32, Math.floor(bar / slice)));
+  const window = count * slice;
+  const start = ahead >= window ? origin : origin - window;
+  const held = now - origin;
+  const perBeat = Math.max(1, Math.round(beat / slice));
+  const slip = perBeat >= 2 ? 0 : Math.floor(beat / 2);
+  const cuts = glitchCuts(y, held, beat, slice);
+  const grain = Math.max(1, Math.floor(slice / cuts));
+  const rate = cuts > 1 ? glitchSpeed(seed, Math.floor(held / slice), count) : 1;
+  const src = glitchSource(seed, Math.floor(held / window), Math.floor(held / slice), count, perBeat, y);
+  const local = mod(mod(held, slice) - slip, slice);
+  return { pos: start + src * slice + grainOffset(local % grain, rate, grain), live: 0, gain: 1, throw: 0, rate };
 }
 
 function readScratch(origin: number, now: number, len: number, knobs: DeckKnobs, shape: number): DeckRead {
@@ -793,7 +820,7 @@ function readBounce(origin: number, now: number, span: number): DeckRead {
 function gestureRead(moment: DeckMoment, gesture: DeckGesture): DeckRead {
   const grouped = parseGroupGesture(gesture);
   if (grouped) return readGroup(moment, grouped.group, grouped.y);
-  const { knobs, tempo, barBeats, now, down, ahead, seed } = moment;
+  const { knobs, tempo, barBeats, now, down, ahead } = moment;
   const bar = barSamples(tempo, barBeats);
   const div = divSamples(knobs, tempo);
   const len = lenSamples(knobs, tempo, barBeats);
@@ -847,18 +874,7 @@ function gestureRead(moment: DeckMoment, gesture: DeckGesture): DeckRead {
     return { pos: start + mod(now - origin, div), live: 0, gain: 1, throw: 0, rate: 1 };
   }
 
-  if (gesture === "glch") {
-    const beat = Math.max(1, Math.round(samplesPerBeat(tempo)));
-    const future = ahead >= beat;
-    const start = future ? origin : origin - beat;
-    const slices = 4;
-    const slice = Math.max(1, Math.round(beat / slices));
-    const barIndex = Math.floor(origin / bar);
-    const order = glitchOrder(seed, barIndex, slices);
-    const at = Math.min(slices - 1, Math.floor((now - origin) / slice));
-    const into = mod(now - origin, slice);
-    return { pos: start + order[at] * slice + into, live: 0, gain: 1, throw: 0, rate: 1 };
-  }
+  if (gesture === "glch") return readGlitch(moment, origin, 0);
 
   if (gesture === "tran") {
     const duty = 0.05 + Math.max(0, Math.min(1, knobs.duty)) * 0.9;
@@ -918,22 +934,21 @@ export interface DeckPicture {
   span: number;
   /** Sample under the stylus. */
   head: number;
-  /** 0 flattens the groove. */
+  /** Kept at 1. A mute lives in the voice and does not flatten the groove. */
   gain: number;
 }
 
 /**
  * One bar of platter, stylus in the middle. Gestures move `head`, and the
  * groove scrolls under it. The scale stays the bar. Depth is the wet mix in
- * the voice; the strip always shows the full gesture. A parked head is silent
- * in the voice, and the groove stays drawn.
+ * the voice; the strip always shows the full gesture, including while a
+ * transformer, a drop, or a parked head is silent.
  */
 export function deckPicture(moment: DeckMoment): DeckPicture {
   const read = deckRead(moment);
   const head = moment.now * read.live + read.pos * (1 - read.live);
   const span = barSamples(moment.tempo, moment.barBeats);
-  const parked = read.live < 0.5 && Math.abs(read.rate) < 0.02;
-  return { start: head - span / 2, span, head, gain: parked ? 1 : read.gain };
+  return { start: head - span / 2, span, head, gain: 1 };
 }
 
 export interface DeckCommand {

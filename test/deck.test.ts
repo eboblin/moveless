@@ -45,6 +45,17 @@ describe("deck curves", () => {
     assert.ok(read.gain < 0.05);
     const parked = deckPicture(moment({ gesture: "stop", now: span, knobs }));
     assert.equal(parked.gain, 1);
+    const div = divSamples(knobs, TEMPO);
+    const chopped = Math.floor(div * 0.9);
+    const transform = moment({ gesture: "tran", down: 0, now: chopped, knobs });
+    const gate = moment({ gesture: "gat0", down: 0, now: chopped, knobs });
+    const drop = moment({ gesture: "drop", now: chopped, knobs });
+    assert.equal(deckRead(transform).gain, 0);
+    assert.equal(deckRead(gate).gain, 0);
+    assert.equal(deckRead(drop).gain, 0);
+    assert.equal(deckPicture(transform).gain, 1);
+    assert.equal(deckPicture(gate).gain, 1);
+    assert.equal(deckPicture(drop).gain, 1);
     const mid = deckRead(moment({ gesture: "stop", now: Math.floor(span / 4), knobs }));
     assert.ok(mid.rate < 0.8);
     assert.ok(mid.rate > 0.05);
@@ -133,22 +144,53 @@ describe("deck curves", () => {
     assert.deepEqual(deckSlots("scr", { ...knobs, quant: 1 }), ["row", "len", "vary", "duty", "ramp", "brake", "quant", "depth"]);
   });
 
-  it("walks glitch slices in order and cuts a slot below half duty", () => {
-    const knobs = assembleDeck({ ...defaultDeck(), len: 1, duty: 0.5, quant: 0 }, "glc", 4);
-    const div = divSamples(knobs, TEMPO);
-    const down = div * 8;
-    const a = deckRead(moment({ gesture: "glc1", down, now: down + 10, knobs }));
-    const b = deckRead(moment({ gesture: "glc1", down, now: down + div + 10, knobs }));
-    assert.ok(Math.abs(b.pos - a.pos - div) < 2, `step ${b.pos - a.pos} div ${div}`);
-    const lateAt = down + Math.floor(div * 0.75);
-    const open = deckRead(moment({ gesture: "glc1", down, now: lateAt, knobs }));
-    const gated = deckRead(moment({ gesture: "glc1", down, now: lateAt, knobs: { ...knobs, duty: 0.25 } }));
-    assert.equal(open.gain, 1);
-    assert.equal(gated.gain, 0);
-    assert.equal(deckRead(moment({ gesture: "glc0", down, now: down + 10, knobs })).gain, 1);
-    const frozenA = deckRead(moment({ gesture: "glc3", down, now: down + 10, knobs }));
-    const frozenB = deckRead(moment({ gesture: "glc3", down, now: down + div + 10, knobs }));
-    assert.ok(Math.abs(frozenB.pos - frozenA.pos) < 2);
+  it("shuffles a bar onto the offbeat and mangled slices stay in time", () => {
+    const knobs = assembleDeck({ ...defaultDeck(), quant: 0 }, "glc", 4);
+    const slice = divSamples(knobs, TEMPO);
+    const bar = barSamples(TEMPO, 4);
+    const beat = bar / 4;
+    const down = bar;
+    const read = (gesture: "glc0" | "glc1" | "glc2" | "glc3" | "glch", at: number, extra = knobs) =>
+      deckRead(moment({ gesture, down, now: down + at, knobs: extra, ahead: bar }));
+    assert.deepEqual(deckSlots("glc", knobs), ["row", null, null, null, null, "div", "quant", "depth"]);
+    const downbeat = read("glc0", 10);
+    const and = read("glc0", slice);
+    assert.equal(downbeat.gain, 1);
+    assert.equal(downbeat.rate, 1);
+    assert.equal(Math.round((downbeat.pos - down) / slice) % 2, 1);
+    assert.equal(Math.round((and.pos - down) / slice) % 2, 0);
+    assert.equal(and.pos - down, Math.round((and.pos - down) / slice) * slice);
+    const later = read("glc0", 110);
+    assert.equal(later.pos - downbeat.pos, 100);
+    const grain = Math.floor(slice / 2);
+    const stutter = read("glc0", beat);
+    const again = read("glc0", beat + grain);
+    assert.equal(stutter.pos, again.pos);
+    assert.ok(stutter.rate === 0.5 || stutter.rate === 1 || stutter.rate === 2);
+    const plain = read("glc0", beat + 20);
+    const ignored = read("glc0", beat + 20, { ...knobs, len: 0, duty: 0.1, vary: 1, ramp: 0 });
+    assert.equal(ignored.pos, plain.pos);
+    assert.equal(ignored.rate, plain.rate);
+    assert.equal(ignored.gain, 1);
+    let octave = false;
+    for (let slot = 0; slot < 8; slot++) {
+      const hit = read("glc2", slot * slice);
+      assert.equal(hit.gain, 1);
+      assert.ok(hit.pos >= down && hit.pos < down + bar);
+      assert.ok(hit.rate === 0.5 || hit.rate === 1 || hit.rate === 2);
+      if (hit.rate !== 1) octave = true;
+    }
+    assert.equal(octave, true);
+    const legacy = read("glch", slice + 4);
+    const shuffle = read("glc0", slice + 4);
+    assert.equal(legacy.pos, shuffle.pos);
+    assert.equal(legacy.rate, shuffle.rate);
+    const quarter = setGroupCell({ ...defaultDeck(), quant: 0 }, "glc", 3, 0, 4);
+    const qSlice = divSamples(quarter, TEMPO);
+    const slipped = deckRead(moment({ gesture: "glc0", down, now: down + beat / 2, knobs: quarter, ahead: bar }));
+    const onGrid = deckRead(moment({ gesture: "glc0", down, now: down, knobs: quarter, ahead: bar }));
+    assert.equal((slipped.pos - down) % qSlice, 0);
+    assert.notEqual((onGrid.pos - down) % qSlice, 0);
   });
 
   it("throws a quarter of the scratch window on the factory column", () => {

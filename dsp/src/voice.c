@@ -1973,13 +1973,6 @@ static DeckRead deck_spin(float origin, float now, float target) {
     return r;
 }
 
-static int deck_pong(int at, int count) {
-    if (count <= 1) return 0;
-    int period = count * 2 - 2;
-    int i = deck_mod(at, period);
-    return i < count ? i : period - i;
-}
-
 static void deck_shuffle(unsigned seed, int window_index, int count, int *order) {
     int n = count < 1 ? 1 : count > 48 ? 48 : count;
     for (int i = 0; i < n; i++) order[i] = i;
@@ -1993,12 +1986,79 @@ static void deck_shuffle(unsigned seed, int window_index, int count, int *order)
     }
 }
 
-static int deck_skip(int seed, int window_index, int slot, float vary) {
-    unsigned state;
-    if (!(vary > 0.0f)) return 0;
-    state = (unsigned)((seed + 1) * 997 + (window_index + 1) * 131 + (slot + 1) * 17);
+static unsigned deck_hash(unsigned seed, int window_index, int slot, int salt) {
+    unsigned state = (seed + 1u) * 997u + (unsigned)(window_index + 1) * 131u + (unsigned)(slot + 1) * (unsigned)salt;
     state = state * 1664525u + 1013904223u;
-    return (state % 1000) / 1000.0f < vary;
+    return state;
+}
+
+/** One bar of slices. A downbeat hit lands on the offbeat; holding stutters it and may jump an octave. */
+static DeckRead deck_glitch(const Engine *engine, int origin, int now, int y) {
+    static const float speed[4] = { 1.0f, 2.0f, 0.5f, 1.0f };
+    static const int row_bias[4] = { 0, 0, 1, 2 };
+    int beat = deck_beat(engine->tempo);
+    int bar = deck_bar_samples(engine);
+    int slice = deck_div(engine);
+    int count, window, held, per, slip, cuts, grain, slot, src, local, at, src_off, start;
+    int order[32];
+    int bucket[32];
+    int fill = 0;
+    int bias, steps, finest, window_index, jump, src_phase, pick;
+    float rate = 1.0f;
+    DeckRead r;
+    if (beat < 1) beat = 1;
+    if (slice < 1) slice = 1;
+    if (y < 0) y = 0;
+    if (y > 3) y = 3;
+    count = bar / slice;
+    if (count < 1) count = 1;
+    if (count > 32) count = 32;
+    window = count * slice;
+    start = engine->deck_lead >= window ? origin : origin - window;
+    held = now - origin;
+    if (held < 0) held = 0;
+    per = (int)lroundf((float)beat / (float)slice);
+    if (per < 1) per = 1;
+    slip = per >= 2 ? 0 : beat / 2;
+    bias = row_bias[y];
+    steps = bias + held / beat;
+    if (steps > 3) steps = 3;
+    if (steps < 0) steps = 0;
+    cuts = 1 << steps;
+    finest = (int)lroundf((float)beat / 8.0f);
+    if (finest < 1) finest = 1;
+    while (cuts > 1 && slice / cuts < finest) cuts >>= 1;
+    grain = slice / cuts;
+    if (grain < 1) grain = 1;
+    window_index = window > 0 ? held / window : 0;
+    slot = held / slice;
+    if (cuts > 1) rate = speed[deck_hash((unsigned)engine->deck_seed, 0, deck_mod(slot, count), 17) % 4u];
+    jump = y % 2 == 1;
+    deck_shuffle((unsigned)engine->deck_seed, window_index, count, order);
+    src = order[deck_mod(slot, count)];
+    if (per < 2) {
+        if (jump) src = (int)(deck_hash((unsigned)engine->deck_seed, window_index, slot, 47) % (unsigned)count);
+    } else {
+        src_phase = deck_mod(deck_mod(slot, per) - per / 2, per);
+        for (pick = 0; pick < count; pick++) {
+            if (deck_mod(order[pick], per) == src_phase && fill < 32) bucket[fill++] = order[pick];
+        }
+        if (fill > 0) {
+            if (jump) src = bucket[deck_hash((unsigned)engine->deck_seed, window_index, slot, 47) % (unsigned)fill];
+            else src = bucket[deck_mod(slot / per, fill)];
+        }
+    }
+    local = deck_mod(deck_mod(held, slice) - slip, slice);
+    at = local % grain;
+    src_off = at;
+    if (rate > 1.5f) src_off = (at * 2) % grain;
+    else if (rate < 0.75f) src_off = at / 2;
+    r.pos = (float)(start + src * slice + src_off);
+    r.live = 0.0f;
+    r.gain = 1.0f;
+    r.throw_amt = 0.0f;
+    r.rate = rate;
+    return r;
 }
 
 static float deck_unit(float value) {
@@ -2084,37 +2144,7 @@ static DeckRead deck_group(const Engine *engine, int gesture, int now) {
         DeckRead r = { (float)(start + deck_mod(held, len > 0 ? len : 1)), 0.0f, 1.0f, 0.0f, 1.0f };
         return r;
     }
-    if (group == 2) {
-        int window = len > 1 ? len : 1;
-        int slice = div > 1 ? div : 1;
-        int count = (int)lroundf((float)window / (float)slice);
-        int future, start, window_index, slot, src, into;
-        int order[48];
-        float open, vary;
-        DeckRead r;
-        if (count < 1) count = 1;
-        if (count > 48) count = 48;
-        future = engine->deck_lead >= window;
-        start = future ? origin : origin - window;
-        window_index = held / window;
-        slot = held / slice;
-        src = deck_mod(slot, count);
-        if (y == 0) {
-            deck_shuffle((unsigned)engine->deck_seed, window_index, count, order);
-            src = order[deck_mod(slot, count)];
-        } else if (y == 2) src = deck_pong(slot, count);
-        else if (y == 3) src = count - 1;
-        into = deck_mod(held, slice);
-        vary = deck_unit(engine->deck_k[4]);
-        open = deck_unit(engine->deck_k[6]);
-        open = open >= 0.5f ? 1.0f : open / 0.5f;
-        r.pos = (float)(start + src * slice + (ramp < 0.5f ? slice - into : into));
-        r.live = 0.0f;
-        r.throw_amt = 0.0f;
-        r.rate = ramp < 0.5f ? -1.0f : 1.0f;
-        r.gain = deck_skip(engine->deck_seed, window_index, src, vary) || into >= (int)((float)slice * open) ? 0.0f : 1.0f;
-        return r;
-    }
+    if (group == 2) return deck_glitch(engine, origin, now, y);
     if (group == 3) {
         int span = len > 1 ? len : 1;
         float phase = (float)deck_mod(now - origin, span) / (float)span;
@@ -2322,28 +2352,7 @@ static DeckRead deck_gesture(const Engine *engine, int gesture, int now) {
         DeckRead r = { (float)(start + deck_mod(now - origin, div)), 0.0f, 1.0f, 0.0f, 1.0f };
         return r;
     }
-    if (gesture == 5) {
-        int beat = deck_beat(engine->tempo);
-        int future = engine->deck_lead >= beat;
-        int start = future ? origin : origin - beat;
-        int slice = beat / 4;
-        if (slice < 1) slice = 1;
-        int bar_index = origin / bar;
-        int order[4] = { 0, 1, 2, 3 };
-        unsigned state = (unsigned)((engine->deck_seed + 1) * 997 + (bar_index + 1) * 131);
-        for (int i = 3; i > 0; i--) {
-            state = state * 1664525u + 1013904223u;
-            int j = (int)(state % (unsigned)(i + 1));
-            int swap = order[i];
-            order[i] = order[j];
-            order[j] = swap;
-        }
-        int at = (now - origin) / slice;
-        if (at > 3) at = 3;
-        if (at < 0) at = 0;
-        DeckRead r = { (float)(start + order[at] * slice + deck_mod(now - origin, slice)), 0.0f, 1.0f, 0.0f, 1.0f };
-        return r;
-    }
+    if (gesture == 5) return deck_glitch(engine, origin, now, 0);
     if (gesture == 6) {
         float duty = 0.05f + (engine->deck_k[6] < 0.0f ? 0.0f : engine->deck_k[6] > 1.0f ? 1.0f : engine->deck_k[6]) * 0.9f;
         int on = deck_mod(now - origin, div) < (int)((float)div * duty);
