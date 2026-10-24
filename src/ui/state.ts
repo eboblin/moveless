@@ -127,6 +127,8 @@ export interface UiState {
   pageTitleUntilMs: number | null;
   /** Horizontal slide from the page the jog just left. Buttons leave this null. */
   pageTitleSlide: PageTitleSlide | null;
+  /** Lane name sits on the line above the page title. Set when the lane changes. */
+  pageTitleLane: boolean;
   trackDownTick: (number | null)[];
   trackDownMs: (number | null)[];
   /** Short press that stays on its bookmark until the same button is pressed again. */
@@ -145,7 +147,7 @@ export interface TrackPlace {
   mode: UiMode;
 }
 
-/** How long the page title stays over the phrase after a jog touch or a page step. */
+/** How long the page title stays after the jog is released, or after a button step. A held jog keeps it up. */
 export const PAGE_TITLE_MS = 500;
 /** How long the jog slide takes to bring the new title to center. */
 export const PAGE_TITLE_SLIDE_MS = 200;
@@ -290,7 +292,7 @@ export function rememberPage(ui: UiState, context: ContextId, page: number): UiS
     pageTitleSlide: null,
   };
   if (!moved) return next;
-  return showPageTitle(next);
+  return showPageTitle({ ...next, pageTitleLane: context !== ui.context });
 }
 
 export function defaultUi(): UiState {
@@ -334,6 +336,7 @@ export function defaultUi(): UiState {
     notice: null,
     pageTitleUntilMs: null,
     pageTitleSlide: null,
+    pageTitleLane: false,
     trackDownTick: [null, null, null, null],
     trackDownMs: [null, null, null, null],
     trackLatch: null,

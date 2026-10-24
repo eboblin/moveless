@@ -26,6 +26,7 @@ import {
   deckFrame,
   loadWidth,
   pageTitlePaintKey,
+  pageTitleVisible,
   renderScreen,
   type Screen,
 } from "../ui/screen.ts";
@@ -451,7 +452,7 @@ function deckOverlay(ui: UiState, now: number): boolean {
   if (ui.notice && now < ui.notice.untilMs) return true;
   if (ui.randomizeHint && now < ui.randomizeHint.untilMs) return true;
   if (ui.captureHint && now < ui.captureHint.untilMs) return true;
-  if (ui.pageTitleUntilMs !== null && now < ui.pageTitleUntilMs) return true;
+  if (pageTitleVisible(ui, now)) return true;
   return false;
 }
 

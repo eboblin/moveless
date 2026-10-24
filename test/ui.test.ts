@@ -13,7 +13,7 @@ import { bindingFor, lanePages, pageCount, pageGroup, pageGroupColor, pagesFor, 
 import { LED, advancePulseClock, blinkHalfMs, directionLit, dropLed, ledColorAt, menuLed, modeButtonLed, offColor, offerLed, padBlinkSteps, padLeds, padPackets, PLAY_LED_ON, playLed, PULSE_CLOCK_IDLE, sceneShadeStep, shadeColor, stepLed, stepLeds, takeLeds, trackLeds } from "../src/ui/leds.ts";
 import { DIGIT_H, displayAmount, fractionFromLabel, plotAmount } from "../src/ui/digits.ts";
 import { lettersWidth, plotLetters } from "../src/ui/letters.ts";
-import { CHAR_W, DIGIT_Y, FONT_H, HEADER_H, HEIGHT, NAME_Y, PAGE_TITLE_BAND_H, PAGE_TITLE_PAD, PAGE_TITLE_Y, PAGER_Y, PARAM_COL_W, PARAM_H, SEP_Y, TITLE_Y, VALUE_Y, VIZ_H, WIDTH, loadWidth, pageTitlePaintKey, pageTitleTravel, pixel, renderScreen, type Screen } from "../src/ui/screen.ts";
+import { CAPTION_GAP, CAPTION_LANE_Y, CAPTION_OUTLINE, CAPTION_PAGE_Y, CAPTION_SINGLE_Y, CHAR_W, DIGIT_Y, FONT_H, HEADER_H, HEIGHT, NAME_Y, PAGER_Y, PARAM_COL_W, PARAM_H, SEP_Y, TITLE_Y, VALUE_Y, VIZ_H, WIDTH, loadWidth, pageTitlePaintKey, pageTitleTravel, pixel, renderScreen, type Screen } from "../src/ui/screen.ts";
 import { WAVE_HOP, emptyWave, type WaveTape } from "../src/ui/wave.ts";
 import { defaultUi, HOLD_MS, HOLD_TICKS, openSetMode, PAGE_TITLE_MS, PAGE_TITLE_SLIDE_MS, settleWheel, WHEEL_RELEASE_MS, type DetentHold } from "../src/ui/state.ts";
 import { midiMessage, reduce, relDelta, settleTrackPeek, type Session } from "../src/ui/input.ts";
@@ -21,6 +21,50 @@ import { DETENT_CLICKS, DETENT_REST_MS, stepKnob, writeControl } from "../src/ui
 
 function session(): Session {
   return { project: defaultProject(), ui: defaultUi(), tick: 0, playing: false };
+}
+
+/** White glyphs on a solid black rectangle padded by `CAPTION_OUTLINE`, and the picture everywhere else. */
+function assertOutline(screen: Screen, plain: Screen, parts: { text: string; x: number; y: number }[]): void {
+  const ink = new Uint8Array(WIDTH * HEIGHT);
+  const plate = new Uint8Array(WIDTH * HEIGHT);
+  for (const part of parts) {
+    const width = lettersWidth(part.text);
+    const pad = CAPTION_OUTLINE;
+    for (let y = part.y - pad; y < part.y + DIGIT_H + pad; y++) {
+      for (let x = part.x - pad; x < part.x + width + pad; x++) {
+        if (x < 0 || y < 0 || x >= WIDTH || y >= HEIGHT) continue;
+        plate[y * WIDTH + x] = 1;
+      }
+    }
+    plotLetters(part.text, part.x, part.y, (px, py) => {
+      if (px < 0 || py < 0 || px >= WIDTH || py >= HEIGHT) return;
+      ink[py * WIDTH + px] = 1;
+    });
+  }
+  let lit = 0;
+  let covered = 0;
+  for (let y = 0; y < HEIGHT; y++) {
+    for (let x = 0; x < WIDTH; x++) {
+      const index = y * WIDTH + x;
+      if (ink[index]) {
+        assert.equal(pixel(screen, x, y), 1);
+        lit++;
+      } else if (plate[index]) {
+        assert.equal(pixel(screen, x, y), 0);
+        if (pixel(plain, x, y) === 1) covered++;
+      } else if (y >= HEADER_H && y <= HEADER_H + VIZ_H - 2 && (x + y) % 2 !== 0) {
+        assert.equal(pixel(screen, x, y), 0);
+      } else {
+        assert.equal(pixel(screen, x, y), pixel(plain, x, y));
+      }
+    }
+  }
+  assert.ok(lit > 0);
+  assert.ok(covered > 0);
+}
+
+function captionAt(text: string, y = CAPTION_SINGLE_Y): { text: string; x: number; y: number } {
+  return { text, x: Math.floor((WIDTH - lettersWidth(text)) / 2), y };
 }
 
 function loop(state: Session): Session {
@@ -1222,7 +1266,7 @@ describe("surface", () => {
     assert.ok(pitchSpread(sound) > 1);
   });
 
-  it("keeps chord names and degrees off the randomize row", () => {
+  it("hides chord names while the randomize caption is up", () => {
     const project = defaultProject();
     project.progression.count = 4;
     project.progression.length = 4;
@@ -1235,32 +1279,10 @@ describe("surface", () => {
     };
     const plain = renderScreen(project, { ...ui, randomizeHint: null }, 0);
     const shown = renderScreen(project, ui, 0, false, 0);
-    const line = shown.labels.filter((label) => ["ALL", "GENS", "VALUES"].includes(label.text));
-    assert.deepEqual(line.map((label) => label.text), ["ALL", "GENS", "VALUES"]);
-    const plate = {
-      x0: Math.min(...line.map((label) => label.x)) - 2,
-      x1: Math.max(...line.map((label) => label.x + label.text.length * CHAR_W)) + 2,
-      y0: line[0].y - 2,
-      y1: line[0].y + FONT_H + 2,
-    };
-    const covers = (label: { x: number; y: number; text: string }) => {
-      const box = {
-        x0: label.x - 1,
-        y0: label.y - 1,
-        x1: label.x + label.text.length * CHAR_W + 1,
-        y1: label.y + FONT_H + 1,
-      };
-      return box.x0 < plate.x1 && box.x1 > plate.x0 && box.y0 < plate.y1 && box.y1 > plate.y0;
-    };
-    const chords = plain.labels.filter((label) => label.y >= HEADER_H && label.y < HEADER_H + VIZ_H);
-    assert.ok(chords.some(covers));
-    for (const label of chords) {
-      const still = shown.labels.some((next) => next.text === label.text && next.x === label.x && next.y === label.y);
-      assert.equal(still, !covers(label));
-    }
-    for (let y = plate.y0; y < plate.y1; y++) {
-      for (let x = plate.x0; x < plate.x1; x++) assert.equal(pixel(shown, x, y), 0);
-    }
+    assert.ok(plain.labels.some((label) => label.y >= HEADER_H && label.y < HEADER_H + VIZ_H));
+    assert.equal(shown.labels.some((label) => label.y >= HEADER_H && label.y < HEADER_H + VIZ_H), false);
+    assert.equal(shown.labels.some((label) => label.text === "ALL" || label.text === "GENS"), false);
+    assertOutline(shown, plain, [captionAt("DEPTH", CAPTION_LANE_Y), captionAt("ALL", CAPTION_PAGE_Y)]);
   });
 
   it("draws sliced blocks with a gap and keeps the roll while an euclid knob is held", () => {
@@ -1656,30 +1678,26 @@ describe("surface", () => {
     state = reduce(state, { kind: "cc", data1: 52, data2: 127 });
     state = reduce(state, { kind: "note", data1: 68, data2: 127 });
     assert.equal(state.project.transition, "now");
-    const chosen = renderScreen(state.project, state.ui, 0, false, (state.ui.captureHint?.untilMs ?? 0) - 1);
+    const now = (state.ui.captureHint?.untilMs ?? 0) - 1;
+    const chosen = renderScreen(state.project, state.ui, 0, false, now);
+    const chosenBare = renderScreen(state.project, { ...state.ui, captureHint: null }, 0, false, now);
     assert.equal(chosen.viz, "phrase");
-    assert.deepEqual(
-      chosen.labels.filter((label) => ["TRANS", "NOW", "FAST", "MED", "SLOW", "WANDER", "OFF"].includes(label.text)).map((label) => label.text),
-      ["TRANS", "NOW", "FAST", "MED", "SLOW"],
-    );
-    assert.equal(chosen.labels.find((label) => label.text === "NOW")?.invert, true);
-    assert.equal(chosen.labels.find((label) => label.text === "TRANS")?.invert, false);
+    assert.equal(chosen.labels.some((label) => label.text === "TRANS" || label.text === "NOW"), false);
+    assertOutline(chosen, chosenBare, [captionAt("TRANSITION", CAPTION_LANE_Y), captionAt("NOW", CAPTION_PAGE_Y)]);
     const gone = renderScreen(state.project, state.ui, 0, false, state.ui.captureHint?.untilMs ?? 0);
-    assert.equal(gone.labels.some((label) => label.text === "TRANS"), false);
+    assert.deepEqual(gone.pixels, chosenBare.pixels);
     state = reduce(state, { kind: "note", data1: 73, data2: 127 });
     assert.equal(state.project.wander, "fast");
     state = reduce(state, { kind: "note", data1: 73, data2: 127 });
     assert.equal(state.project.wander, "fast");
     state = reduce(state, { kind: "note", data1: 72, data2: 127 });
     assert.equal(state.project.wander, null);
-    const screen = renderScreen(state.project, state.ui, 0, false, (state.ui.captureHint?.untilMs ?? 0) - 1);
+    const at = (state.ui.captureHint?.untilMs ?? 0) - 1;
+    const screen = renderScreen(state.project, state.ui, 0, false, at);
+    const bare = renderScreen(state.project, { ...state.ui, captureHint: null }, 0, false, at);
     assert.equal(screen.viz, "phrase");
-    assert.deepEqual(
-      screen.labels.filter((label) => ["WANDER", "OFF", "FAST", "MED", "SLOW", "TRANS", "NOW"].includes(label.text)).map((label) => label.text),
-      ["WANDER", "OFF", "FAST", "MED", "SLOW"],
-    );
-    assert.equal(screen.labels.find((label) => label.text === "OFF")?.invert, true);
-    assert.equal(screen.labels.find((label) => label.text === "WANDER")?.invert, false);
+    assert.equal(screen.labels.some((label) => label.text === "WANDER" || label.text === "OFF"), false);
+    assertOutline(screen, bare, [captionAt("WANDER", CAPTION_LANE_Y), captionAt("OFF", CAPTION_PAGE_Y)]);
     assert.equal(screen.header.includes("T:"), false);
   });
 
@@ -1997,31 +2015,23 @@ describe("surface", () => {
 
     state = reduce(state, { kind: "note", data1: 68 + 9, data2: 127 });
     assert.equal(state.project.randomizeDepth, "generators");
-    const shown = renderScreen(state.project, state.ui, 0, false, (state.ui.randomizeHint?.untilMs ?? 0) - 1);
+    const heldAt = (state.ui.randomizeHint?.untilMs ?? 0) - 1;
+    const heldCaption = renderScreen(state.project, state.ui, 0, false, heldAt);
+    const heldBare = renderScreen(state.project, { ...state.ui, pageTitleUntilMs: null, randomizeHint: null }, 0, false, heldAt);
+    assertOutline(heldCaption, heldBare, [captionAt(pagesFor("kick")[0]?.title ?? "")]);
+    state = reduce(state, { kind: "note", data1: 9, data2: 0 });
+    const upAt = state.ui.wheelReleaseMs ?? 0;
+    state = { ...state, ui: settleWheel(state.ui, upAt + WHEEL_RELEASE_MS) };
+    assert.equal(state.ui.wheelTouch, false);
+    const at = Math.max(state.ui.pageTitleUntilMs ?? 0, upAt);
+    const shown = renderScreen(state.project, state.ui, 0, false, at);
+    const plain = renderScreen(state.project, { ...state.ui, randomizeHint: null }, 0, false, at);
     assert.equal(shown.viz, "phrase");
-    const line = shown.labels.filter((label) => ["ALL", "GENS", "VALUES", "LANE", "GROUP", "PAGE", "DELETE", "LOW", "MED", "HIGH"].includes(label.text));
-    assert.deepEqual(line.map((label) => label.text), ["ALL", "GENS", "VALUES"]);
-    assert.equal(line.find((label) => label.text === "GENS")?.invert, true);
-    assert.equal(line[0].y, HEADER_H + Math.floor((VIZ_H - 1 - FONT_H) / 2));
-    const plain = renderScreen(state.project, { ...state.ui, randomizeHint: null }, 0, false, state.ui.pageTitleUntilMs ?? 0);
-    const left = Math.min(...line.map((label) => label.x));
-    const right = Math.max(...line.map((label) => label.x + label.text.length * CHAR_W));
-    const top = line[0].y;
-    const covered = (x: number, y: number) => x >= left - 2 && x < right + 2 && y >= top - 2 && y < top + FONT_H + 2;
-    let cleared = 0;
-    for (let y = HEADER_H; y < HEADER_H + VIZ_H - 1; y++) {
-      for (let x = 0; x < WIDTH; x++) {
-        if (covered(x, y)) {
-          assert.equal(pixel(shown, x, y), 0);
-          if (pixel(plain, x, y) === 1) cleared++;
-        } else {
-          assert.equal(pixel(shown, x, y), pixel(plain, x, y));
-        }
-      }
-    }
-    assert.ok(cleared > 0);
+    assert.equal(shown.labels.some((label) => ["ALL", "GENS", "VALUES", "LANE", "GROUP", "PAGE", "DELETE", "LOW", "MED", "HIGH"].includes(label.text)), false);
+    assert.ok(at < (state.ui.randomizeHint?.untilMs ?? 0));
+    assertOutline(shown, plain, [captionAt("DEPTH", CAPTION_LANE_Y), captionAt("GENERATORS", CAPTION_PAGE_Y)]);
     const gone = renderScreen(state.project, state.ui, 0, false, state.ui.randomizeHint?.untilMs ?? 0);
-    assert.equal(gone.labels.some((label) => label.text === "ALL"), false);
+    assert.deepEqual(gone.pixels, plain.pixels);
     const parked = clone(state.project.working.kick);
     state = reduce(state, { kind: "cc", data1: 3, data2: 127 });
     state = reduce(state, { kind: "note", data1: 9, data2: 0 });
@@ -2046,6 +2056,10 @@ describe("surface", () => {
     assert.equal(state.project.randomizeScope, "group");
     assert.equal(state.project.randomizeDepth, "all");
     assert.equal(state.project.randomizeIntensity, "clear");
+    const clearedAt = (state.ui.randomizeHint?.untilMs ?? 0) - 1;
+    const cleared = renderScreen(state.project, state.ui, 0, false, clearedAt);
+    const clearedBare = renderScreen(state.project, { ...state.ui, randomizeHint: null }, 0, false, clearedAt);
+    assertOutline(cleared, clearedBare, [captionAt("INTENSITY", CAPTION_LANE_Y), captionAt("DELETE", CAPTION_PAGE_Y)]);
     assert.equal(state.ui.notice, null);
     const clearedPads = padLeds(state.project, state.ui.mode, state.ui);
     assert.equal(clearedPads[0].color, LED.red);
@@ -2777,30 +2791,6 @@ describe("page title", () => {
     return Math.floor((WIDTH - lettersWidth(text)) / 2);
   }
 
-  /** Lit pixels of the title band. The band itself is cleared, so this is only the glyphs. */
-  function band(screen: Screen): number[] {
-    const out: number[] = [];
-    for (let y = PAGE_TITLE_Y; y < PAGE_TITLE_Y + PAGE_TITLE_BAND_H; y++) {
-      for (let x = 0; x < WIDTH; x++) out.push(pixel(screen, x, y));
-    }
-    return out;
-  }
-
-  function stamped(parts: { text: string; x: number }[]): number[] {
-    const pixels = new Uint8Array(WIDTH * HEIGHT);
-    for (const part of parts) {
-      plotLetters(part.text, part.x, PAGE_TITLE_Y + PAGE_TITLE_PAD, (px, py) => {
-        if (px < 0 || py < 0 || px >= WIDTH || py >= HEIGHT) return;
-        pixels[py * WIDTH + px] = 1;
-      });
-    }
-    const out: number[] = [];
-    for (let y = PAGE_TITLE_Y; y < PAGE_TITLE_Y + PAGE_TITLE_BAND_H; y++) {
-      for (let x = 0; x < WIDTH; x++) out.push(pixels[y * WIDTH + x] ?? 0);
-    }
-    return out;
-  }
-
   it("prints the page title over the phrase for half a second after a jog touch", () => {
     let ysMin = DIGIT_H;
     let ysMax = 0;
@@ -2809,8 +2799,11 @@ describe("page title", () => {
       ysMax = Math.max(ysMax, y);
     });
     assert.equal(ysMax - ysMin + 1, DIGIT_H);
-    assert.ok(PAGE_TITLE_Y >= HEADER_H);
-    assert.ok(PAGE_TITLE_Y + PAGE_TITLE_BAND_H <= SEP_Y);
+    assert.equal(CAPTION_LANE_Y, HEADER_H + CAPTION_GAP);
+    assert.equal(CAPTION_PAGE_Y, CAPTION_LANE_Y + DIGIT_H + CAPTION_GAP);
+    assert.equal(SEP_Y - 2 - (CAPTION_PAGE_Y + DIGIT_H - 1), CAPTION_GAP);
+    assert.equal(CAPTION_SINGLE_Y - HEADER_H, SEP_Y - 2 - (CAPTION_SINGLE_Y + DIGIT_H - 1));
+    assert.ok(CAPTION_PAGE_Y + DIGIT_H + CAPTION_OUTLINE < SEP_Y);
     assert.ok(SEP_Y < DIGIT_Y);
 
     let state = reduce(session(), { kind: "note", data1: 9, data2: 127 });
@@ -2818,18 +2811,25 @@ describe("page title", () => {
     const until = state.ui.pageTitleUntilMs ?? 0;
     assert.ok(until - Date.now() <= PAGE_TITLE_MS && until - Date.now() > PAGE_TITLE_MS - 1000);
     const shown = renderScreen(state.project, state.ui, 0, false, until - 1);
-    assert.deepEqual(band(shown), stamped([{ text: "GENERATOR 1", x: titleLeft("GENERATOR 1") }]));
+    const bare = renderScreen(state.project, { ...state.ui, pageTitleUntilMs: null }, 0, false, until - 1);
+    assertOutline(shown, bare, [captionAt("GENERATOR 1")]);
     for (let y = DIGIT_Y; y < DIGIT_Y + DIGIT_H; y++) {
       for (let x = 0; x < WIDTH; x++) assert.equal(pixel(shown, x, y), 0);
     }
-    const bare = renderScreen(state.project, { ...state.ui, pageTitleUntilMs: null }, 0, false, until);
-    const ended = renderScreen(state.project, state.ui, 0, false, until);
-    assert.deepEqual(ended.pixels, bare.pixels);
+    const held = renderScreen(state.project, state.ui, 0, false, until);
+    const heldBare = renderScreen(state.project, { ...state.ui, pageTitleUntilMs: null }, 0, false, until);
+    assertOutline(held, heldBare, [captionAt("GENERATOR 1")]);
 
     const released = reduce(state, { kind: "note", data1: 9, data2: 0 });
     assert.equal(released.ui.pageTitleUntilMs, until);
     const still = renderScreen(released.project, released.ui, 0, false, until - 1);
-    assert.deepEqual(band(still), stamped([{ text: "GENERATOR 1", x: titleLeft("GENERATOR 1") }]));
+    const stillBare = renderScreen(released.project, { ...released.ui, pageTitleUntilMs: null }, 0, false, until - 1);
+    assertOutline(still, stillBare, [captionAt("GENERATOR 1")]);
+    const settled = settleWheel(released.ui, (released.ui.wheelReleaseMs ?? 0) + WHEEL_RELEASE_MS);
+    assert.equal(settled.wheelTouch, false);
+    const dropped = renderScreen(released.project, settled, 0, false, until);
+    const droppedBare = renderScreen(released.project, { ...settled, pageTitleUntilMs: null }, 0, false, until);
+    assert.deepEqual(dropped.pixels, droppedBare.pixels);
   });
 
   it("slides the title when the jog changes page and snaps when a pad does", () => {
@@ -2850,16 +2850,17 @@ describe("page title", () => {
     const fromX = titleLeft("GENERATOR 1") - travel;
     const toX = titleLeft("GENERATOR 2") + (WIDTH - travel);
     assert.ok(toX > titleLeft("GENERATOR 2"));
-    const mid = renderScreen(state.project, state.ui, 0, false, started + PAGE_TITLE_SLIDE_MS / 2);
-    assert.deepEqual(
-      band(mid),
-      stamped([
-        { text: "GENERATOR 1", x: fromX },
-        { text: "GENERATOR 2", x: toX },
-      ]),
-    );
-    const settled = renderScreen(state.project, state.ui, 0, false, started + PAGE_TITLE_SLIDE_MS);
-    assert.deepEqual(band(settled), stamped([{ text: "GENERATOR 2", x: titleLeft("GENERATOR 2") }]));
+    const at = started + PAGE_TITLE_SLIDE_MS / 2;
+    const mid = renderScreen(state.project, state.ui, 0, false, at);
+    const midBare = renderScreen(state.project, { ...state.ui, pageTitleUntilMs: null }, 0, false, at);
+    assertOutline(mid, midBare, [
+      { text: "GENERATOR 1", x: fromX, y: CAPTION_SINGLE_Y },
+      { text: "GENERATOR 2", x: toX, y: CAPTION_SINGLE_Y },
+    ]);
+    const settledAt = started + PAGE_TITLE_SLIDE_MS;
+    const settled = renderScreen(state.project, state.ui, 0, false, settledAt);
+    const settledBare = renderScreen(state.project, { ...state.ui, pageTitleUntilMs: null }, 0, false, settledAt);
+    assertOutline(settled, settledBare, [captionAt("GENERATOR 2")]);
 
     const until = state.ui.pageTitleUntilMs ?? 0;
     state = reduce(state, { kind: "note", data1: 94, data2: 127 });
@@ -2867,42 +2868,71 @@ describe("page title", () => {
     assert.equal(state.ui.pageTitleSlide, null);
     assert.ok((state.ui.pageTitleUntilMs ?? 0) >= until);
     const next = pagesFor("kick")[2]?.title ?? "";
-    const snapped = renderScreen(state.project, state.ui, 0, false, (state.ui.pageTitleUntilMs ?? 0) - 1);
-    assert.deepEqual(band(snapped), stamped([{ text: next, x: titleLeft(next) }]));
+    const snappedAt = (state.ui.pageTitleUntilMs ?? 0) - 1;
+    const snapped = renderScreen(state.project, state.ui, 0, false, snappedAt);
+    const snappedBare = renderScreen(state.project, { ...state.ui, pageTitleUntilMs: null }, 0, false, snappedAt);
+    assertOutline(snapped, snappedBare, [captionAt(next)]);
   });
 
-  it("shows the lane's own page without a slide when a step or a page pad is pressed", () => {
+  it("outlines a button page title and writes the lane above it when the lane changes", () => {
+    const paint = (state: ReturnType<typeof session>) => {
+      const until = (state.ui.pageTitleUntilMs ?? 0) - 1;
+      const shown = renderScreen(state.project, state.ui, 0, false, until);
+      const bare = renderScreen(state.project, { ...state.ui, pageTitleUntilMs: null }, 0, false, until);
+      return { shown, bare };
+    };
+
     let state = reduce(session(), { kind: "note", data1: 20, data2: 127 });
     assert.equal(state.ui.heldContext, "bass");
     assert.equal(state.ui.pageTitleSlide, null);
+    assert.equal(state.ui.pageTitleLane, true);
     const bass = pagesFor("bass")[0]?.title ?? "";
-    let shown = renderScreen(state.project, state.ui, 0, false, (state.ui.pageTitleUntilMs ?? 0) - 1);
-    assert.deepEqual(band(shown), stamped([{ text: bass, x: titleLeft(bass) }]));
+    let frame = paint(state);
+    assertOutline(frame.shown, frame.bare, [captionAt("BASS", CAPTION_LANE_Y), captionAt(bass, CAPTION_PAGE_Y)]);
 
     state = reduce(state, { kind: "note", data1: 93, data2: 127 });
     assert.equal(state.ui.page, 1);
     assert.equal(state.ui.pageTitleSlide, null);
+    assert.equal(state.ui.pageTitleLane, true);
     const page = pagesFor("bass")[1]?.title ?? "";
-    shown = renderScreen(state.project, state.ui, 0, false, (state.ui.pageTitleUntilMs ?? 0) - 1);
-    assert.deepEqual(band(shown), stamped([{ text: page, x: titleLeft(page) }]));
+    frame = paint(state);
+    assertOutline(frame.shown, frame.bare, [captionAt("BASS", CAPTION_LANE_Y), captionAt(page, CAPTION_PAGE_Y)]);
 
     state = reduce(state, { kind: "note", data1: 20, data2: 0 });
     assert.equal(state.ui.context, "bass");
     assert.equal(state.ui.page, 1);
+    state = reduce(state, { kind: "note", data1: 20, data2: 127 });
+    assert.equal(state.ui.pageTitleLane, false);
+    assert.equal(state.ui.pageTitleSlide, null);
+    frame = paint(state);
+    assertOutline(frame.shown, frame.bare, [captionAt(page)]);
+
+    state = reduce(state, { kind: "note", data1: 94, data2: 127 });
+    assert.equal(state.ui.page, 2);
+    assert.equal(state.ui.pageTitleLane, false);
+    const next = pagesFor("bass")[2]?.title ?? "";
+    frame = paint(state);
+    assertOutline(frame.shown, frame.bare, [captionAt(next)]);
+
+    state = reduce(state, { kind: "note", data1: 20, data2: 0 });
     state = reduce(state, { kind: "note", data1: 16, data2: 127 });
     state = reduce(state, { kind: "note", data1: 16, data2: 0 });
     assert.equal(state.ui.context, "kick");
     state = reduce(state, { kind: "note", data1: 20, data2: 127 });
     assert.equal(state.ui.pageTitleSlide, null);
-    shown = renderScreen(state.project, state.ui, 0, false, (state.ui.pageTitleUntilMs ?? 0) - 1);
-    assert.deepEqual(band(shown), stamped([{ text: page, x: titleLeft(page) }]));
+    assert.equal(state.ui.pageTitleLane, true);
+    frame = paint(state);
+    assertOutline(frame.shown, frame.bare, [captionAt("BASS", CAPTION_LANE_Y), captionAt(next, CAPTION_PAGE_Y)]);
   });
 
   it("keeps a repaint key moving through a slide and drops it when the caption ends", () => {
     let state = reduce(session(), { kind: "note", data1: 9, data2: 127 });
     const touched = state.ui.pageTitleUntilMs ?? 0;
     assert.equal(pageTitlePaintKey(state.ui, touched - 1), 0);
-    assert.equal(pageTitlePaintKey(state.ui, touched), -1);
+    assert.equal(pageTitlePaintKey(state.ui, touched), 0);
+    const letGo = reduce(state, { kind: "note", data1: 9, data2: 0 });
+    const up = settleWheel(letGo.ui, (letGo.ui.wheelReleaseMs ?? 0) + WHEEL_RELEASE_MS);
+    assert.equal(pageTitlePaintKey(up, touched), -1);
 
     state = reduce(state, { kind: "cc", data1: 14, data2: 1 });
     const started = state.ui.pageTitleSlide?.startedMs ?? 0;
@@ -2912,7 +2942,10 @@ describe("page title", () => {
     assert.equal(pageTitlePaintKey(state.ui, started + PAGE_TITLE_SLIDE_MS), PAGE_TITLE_SLIDE_MS);
     assert.equal(pageTitlePaintKey(state.ui, started + PAGE_TITLE_SLIDE_MS + 50), PAGE_TITLE_SLIDE_MS);
     assert.ok(until > started + PAGE_TITLE_SLIDE_MS);
-    assert.equal(pageTitlePaintKey(state.ui, until), -1);
+    assert.equal(pageTitlePaintKey(state.ui, until), PAGE_TITLE_SLIDE_MS);
+    const letGoSlide = reduce(state, { kind: "note", data1: 9, data2: 0 });
+    const upSlide = settleWheel(letGoSlide.ui, (letGoSlide.ui.wheelReleaseMs ?? 0) + WHEEL_RELEASE_MS);
+    assert.equal(pageTitlePaintKey(upSlide, until), -1);
   });
 });
 

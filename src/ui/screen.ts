@@ -5,7 +5,7 @@ import { phraseStepsOf } from "../core/events.ts";
 import { chordSymbol, degreeNumeral, pitchClassName, scaleShort, scaleTitle } from "../core/harmony.ts";
 import { chordFigure, generatePhrase, laneSteps, octaveNumber, restingChordToneLabel, restingPitchLabel, restingSliceLabel } from "../core/phrase.ts";
 import { evalModulated } from "../core/modulate.ts";
-import { RANDOMIZE_DEPTHS, RANDOMIZE_INTENSITIES, RANDOMIZE_SCOPES, TRANSITIONS, WANDERS, isPitched, isVoice, LANES, LANE_CODE, type RandomizeDepth, type RandomizeIntensity, type RandomizeScope, type ContextId, type HarmonicEvent, type LaneId, type Phrase, type Project, type TimedEvent } from "../core/types.ts";
+import { isPitched, isVoice, LANES, LANE_CODE, type RandomizeDepth, type RandomizeIntensity, type RandomizeScope, type ContextId, type HarmonicEvent, type LaneId, type Phrase, type Project, type TimedEvent } from "../core/types.ts";
 import { DIGIT_H, displayAmount, divisionCell, type BigAmount, type DisplayAmount } from "./digits.ts";
 import { readControl } from "./controls.ts";
 import { bindingFor, livePage, pageTitle, pagesFor, type Binding, type Page } from "../core/pages.ts";
@@ -33,10 +33,20 @@ export const VALUE_Y = DIGIT_Y + Math.floor((DIGIT_H - FONT_H) / 2);
 export const VIZ_H = DIGIT_Y - HEADER_H - 3;
 export const SEP_Y = HEADER_H + VIZ_H - 1;
 export const PARAM_H = HEIGHT - HEADER_H - VIZ_H;
-/** Black band behind the page title: glyph height plus padding above and below. */
-export const PAGE_TITLE_PAD = 3;
-export const PAGE_TITLE_BAND_H = DIGIT_H + PAGE_TITLE_PAD * 2;
-export const PAGE_TITLE_Y = HEADER_H + Math.floor((VIZ_H - 1 - PAGE_TITLE_BAND_H) / 2);
+/**
+ * Caption rows in the picture, above the separator's own 1 px gap.
+ * One line is centered. Two lines share one pad above, between, and below.
+ */
+const CAPTION_BOX_TOP = HEADER_H;
+const CAPTION_BOX_BOTTOM = SEP_Y - 2;
+const CAPTION_BOX_H = CAPTION_BOX_BOTTOM - CAPTION_BOX_TOP + 1;
+export const CAPTION_GAP = Math.floor((CAPTION_BOX_H - 2 * DIGIT_H) / 3);
+export const CAPTION_LANE_Y = CAPTION_BOX_TOP + CAPTION_GAP;
+export const CAPTION_PAGE_Y = CAPTION_LANE_Y + DIGIT_H + CAPTION_GAP;
+/** One caption sits in the middle of the picture. Two keep the rows above. */
+export const CAPTION_SINGLE_Y = CAPTION_BOX_TOP + Math.floor((CAPTION_BOX_H - DIGIT_H) / 2);
+/** Black pad around a caption phrase. The plate is a solid rectangle, not a stroke around each glyph. */
+export const CAPTION_OUTLINE = 3;
 
 export interface Label {
   x: number;
@@ -137,18 +147,12 @@ export function renderScreen(
     : decking
       ? drawLabels(project, context, page, deckFocus, header, ui, now, "DJ")
     : drawLabels(project, context, page, focus, header, ui, now);
-  const menu = hint && !notice && !mixer ? menuLineLabels(project, hint.line) : null;
-  const titleOn = !notice && ui.pageTitleUntilMs !== null && now < ui.pageTitleUntilMs;
-  if (phrase && bars && !titleOn) {
-    const names = chordNameLabels(project, phrase);
-    // Names are host labels, painted after the pixel plate. Drop any that would cover the row.
-    labels.push(...(menu ? names.filter((label) => !labelCoversPlate(label, menu)) : names));
-  }
+  const menu = hint && !notice && !mixer ? hint.line : null;
+  const titleOn = !notice && pageTitleVisible(ui, now);
+  if (phrase && bars && !titleOn && !menu) labels.push(...chordNameLabels(project, phrase));
   if (notice) labels.push(...noticeLabels(notice.title, notice.value));
-  if (menu && !titleOn) {
-    clearLinePlate(pixels, menu);
-    labels.push(...menu);
-  }
+  if ((menu || titleOn) && phrase) dimPattern(pixels);
+  if (menu && !titleOn) drawMenuCaption(pixels, project, menu);
   if (titleOn) drawPageTitle(pixels, project, ui, now);
   const digits = mixer || !page ? [] : paramDigits(project, context, page, focus, ui, now);
   const dim: number[] = [];
@@ -158,29 +162,58 @@ export function renderScreen(
 function drawPageTitle(pixels: Uint8Array, project: Project, ui: UiState, now: number): void {
   const place = screenPlace(ui);
   const title = pageTitle(project, place.context, place.page);
-  const y0 = PAGE_TITLE_Y;
-  const y1 = y0 + PAGE_TITLE_BAND_H;
-  for (let y = y0; y < y1; y++) {
-    for (let x = 0; x < WIDTH; x++) set(pixels, x, y, 0);
-  }
-  const glyphY = y0 + PAGE_TITLE_PAD;
+  const lane = ui.pageTitleLane ? LANE_TITLE[place.context] : null;
+  const pageY = lane ? CAPTION_PAGE_Y : CAPTION_SINGLE_Y;
+  const parts: Caption[] = [];
+  if (lane) parts.push({ text: lane, x: titleLeft(lane), y: CAPTION_LANE_Y });
   const slide = ui.pageTitleSlide;
   const elapsed = slide ? now - slide.startedMs : PAGE_TITLE_SLIDE_MS;
   if (slide && elapsed < PAGE_TITLE_SLIDE_MS) {
     const travel = pageTitleTravel(elapsed);
-    paintTitle(pixels, slide.from, titleLeft(slide.from) - slide.dir * travel, glyphY);
-    paintTitle(pixels, title, titleLeft(title) + slide.dir * (WIDTH - travel), glyphY);
-    return;
+    parts.push({ text: slide.from, x: titleLeft(slide.from) - slide.dir * travel, y: pageY });
+    parts.push({ text: title, x: titleLeft(title) + slide.dir * (WIDTH - travel), y: pageY });
+  } else {
+    parts.push({ text: title, x: titleLeft(title), y: pageY });
   }
-  paintTitle(pixels, title, titleLeft(title), glyphY);
+  paintCaption(pixels, parts);
+}
+
+interface Caption {
+  text: string;
+  x: number;
+  y: number;
 }
 
 function titleLeft(text: string): number {
   return Math.floor((WIDTH - lettersWidth(text)) / 2);
 }
 
-function paintTitle(pixels: Uint8Array, text: string, x: number, y: number): void {
-  plotLetters(text, x, y, (px, py) => set(pixels, px, py, 1));
+/** White glyphs on a solid black rectangle the length of each phrase. */
+function paintCaption(pixels: Uint8Array, parts: readonly Caption[]): void {
+  const ink: number[] = [];
+  const seen = new Uint8Array(WIDTH * HEIGHT);
+  for (const part of parts) {
+    const width = lettersWidth(part.text);
+    if (width <= 0) continue;
+    const pad = CAPTION_OUTLINE;
+    for (let y = part.y - pad; y < part.y + DIGIT_H + pad; y++) {
+      for (let x = part.x - pad; x < part.x + width + pad; x++) set(pixels, x, y, 0);
+    }
+    plotLetters(part.text, part.x, part.y, (px, py) => {
+      if (px < 0 || py < 0 || px >= WIDTH || py >= HEIGHT) return;
+      const index = py * WIDTH + px;
+      if (seen[index]) return;
+      seen[index] = 1;
+      ink.push(index);
+    });
+  }
+  for (const index of ink) pixels[index] = 1;
+}
+
+/** The page caption is up. A held jog keeps it after the linger timer. */
+export function pageTitleVisible(ui: UiState, now: number): boolean {
+  if (ui.pageTitleUntilMs === null) return false;
+  return ui.wheelTouch || now < ui.pageTitleUntilMs;
 }
 
 /**
@@ -188,7 +221,7 @@ function paintTitle(pixels: Uint8Array, text: string, x: number, y: number): voi
  * During a jog slide it is the elapsed milliseconds, so a stopped transport still walks the line.
  */
 export function pageTitlePaintKey(ui: UiState, now: number): number {
-  if (ui.pageTitleUntilMs === null || now >= ui.pageTitleUntilMs) return -1;
+  if (!pageTitleVisible(ui, now)) return -1;
   if (!ui.pageTitleSlide) return 0;
   return Math.min(PAGE_TITLE_SLIDE_MS, Math.max(0, now - ui.pageTitleSlide.startedMs));
 }
@@ -336,88 +369,39 @@ function mixerChannelLabels(project: Project, focus: string | null): Label[] {
   return labels;
 }
 
-const DEPTH_WORD: Record<RandomizeDepth, string> = { all: "ALL", generators: "GENS", values: "VALUES" };
+const LANE_TITLE: Record<ContextId, string> = {
+  kick: "KICK",
+  snare: "SNARE",
+  hat: "HAT",
+  perc: "PERC",
+  bass: "BASS",
+  lead: "LEAD",
+  chords: "CHORDS",
+  fx: "FX",
+  aux: "AUX",
+};
+
+const DEPTH_WORD: Record<RandomizeDepth, string> = { all: "ALL", generators: "GENERATORS", values: "VALUES" };
 const SCOPE_WORD: Record<RandomizeScope, string> = { lane: "LANE", group: "GROUP", page: "PAGE" };
 const INTENSITY_WORD: Record<RandomizeIntensity, string> = { clear: "DELETE", soft: "LOW", medium: "MED", hard: "HIGH" };
-const TRANSITION_WORD: Record<(typeof TRANSITIONS)[number], string> = { now: "NOW", fast: "FAST", medium: "MED", slow: "SLOW" };
-const WANDER_WORD: Record<(typeof WANDERS)[number], string> = { fast: "FAST", medium: "MED", slow: "SLOW" };
+const TRANSITION_WORD = { now: "NOW", fast: "FAST", medium: "MED", slow: "SLOW" } as const;
+const WANDER_WORD = { fast: "FAST", medium: "MED", slow: "SLOW" } as const;
 
-function randomizeLineLabels(project: Project, line: RandomizeLine): Label[] {
-  const y = HEADER_H + Math.floor((VIZ_H - 1 - FONT_H) / 2);
-  if (line === "depth") return menuLine(RANDOMIZE_DEPTHS.map((id) => DEPTH_WORD[id]), DEPTH_WORD[project.randomizeDepth], y);
-  if (line === "scope") return menuLine(RANDOMIZE_SCOPES.map((id) => SCOPE_WORD[id]), SCOPE_WORD[project.randomizeScope], y);
-  return menuLine(RANDOMIZE_INTENSITIES.map((id) => INTENSITY_WORD[id]), INTENSITY_WORD[project.randomizeIntensity], y);
+/** Name on the upper caption row, the chosen word on the lower. No colon. */
+function menuCaption(project: Project, line: RandomizeLine | CaptureLine): { name: string; value: string } {
+  if (line === "depth") return { name: "DEPTH", value: DEPTH_WORD[project.randomizeDepth] };
+  if (line === "scope") return { name: "SCOPE", value: SCOPE_WORD[project.randomizeScope] };
+  if (line === "intensity") return { name: "INTENSITY", value: INTENSITY_WORD[project.randomizeIntensity] };
+  if (line === "transition") return { name: "TRANSITION", value: TRANSITION_WORD[project.transition] };
+  return { name: "WANDER", value: project.wander ? WANDER_WORD[project.wander] : "OFF" };
 }
 
-function captureLineLabels(project: Project, line: CaptureLine): Label[] {
-  const y = HEADER_H + Math.floor((VIZ_H - 1 - FONT_H) / 2);
-  if (line === "transition") {
-    return menuLine(["TRANS", ...TRANSITIONS.map((id) => TRANSITION_WORD[id])], TRANSITION_WORD[project.transition], y);
-  }
-  const current = project.wander ? WANDER_WORD[project.wander] : "OFF";
-  return menuLine(["WANDER", "OFF", ...WANDERS.map((id) => WANDER_WORD[id])], current, y);
-}
-
-function menuLineLabels(project: Project, line: RandomizeLine | CaptureLine): Label[] {
-  if (line === "transition" || line === "wander") return captureLineLabels(project, line);
-  return randomizeLineLabels(project, line);
-}
-
-interface Rect {
-  x0: number;
-  x1: number;
-  y0: number;
-  y1: number;
-}
-
-/** Black plate two pixels outside the whole line, not around each word. */
-function linePlate(labels: Label[]): Rect | null {
-  if (!labels.length) return null;
-  const y = labels[0].y;
-  let left = labels[0].x;
-  let right = left;
-  for (const label of labels) {
-    left = Math.min(left, label.x);
-    right = Math.max(right, label.x + label.text.length * CHAR_W);
-  }
-  return {
-    x0: Math.max(0, left - 2),
-    x1: Math.min(WIDTH, right + 2),
-    y0: Math.max(0, y - 2),
-    y1: Math.min(HEIGHT, y + FONT_H + 2),
-  };
-}
-
-function clearLinePlate(pixels: Uint8Array, labels: Label[]): void {
-  const plate = linePlate(labels);
-  if (!plate) return;
-  for (let py = plate.y0; py < plate.y1; py++) {
-    for (let px = plate.x0; px < plate.x1; px++) set(pixels, px, py, 0);
-  }
-}
-
-/** Inverted host text is a box one pixel outside the glyphs. That box must not land on the plate. */
-function labelCoversPlate(label: Label, menu: Label[]): boolean {
-  const plate = linePlate(menu);
-  if (!plate) return false;
-  const box: Rect = {
-    x0: label.x - 1,
-    y0: label.y - 1,
-    x1: label.x + label.text.length * CHAR_W + 1,
-    y1: label.y + FONT_H + 1,
-  };
-  return box.x0 < plate.x1 && box.x1 > plate.x0 && box.y0 < plate.y1 && box.y1 > plate.y0;
-}
-
-function menuLine(words: string[], current: string, y: number): Label[] {
-  const gap = CHAR_W;
-  const total = words.reduce((sum, word) => sum + word.length * CHAR_W, 0) + (words.length - 1) * gap;
-  let x = Math.max(0, Math.floor((WIDTH - total) / 2));
-  return words.map((word) => {
-    const label = { x, y, text: word, invert: word === current };
-    x += word.length * CHAR_W + gap;
-    return label;
-  });
+function drawMenuCaption(pixels: Uint8Array, project: Project, line: RandomizeLine | CaptureLine): void {
+  const { name, value } = menuCaption(project, line);
+  paintCaption(pixels, [
+    { text: name, x: titleLeft(name), y: CAPTION_LANE_Y },
+    { text: value, x: titleLeft(value), y: CAPTION_PAGE_Y },
+  ]);
 }
 
 function noticeLabels(title: string, value: string): Label[] {

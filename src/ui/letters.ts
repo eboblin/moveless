@@ -13,6 +13,11 @@ const SLASH: readonly number[] = [
   0b000011, 0b000011, 0b000110, 0b000110, 0b001100, 0b001100, 0b011000, 0b011000, 0b110000, 0b110000, 0b110000,
 ];
 
+/** Two dots, same cell as the capitals. */
+const COLON: readonly number[] = [
+  0b000000, 0b000000, 0b001100, 0b001100, 0b000000, 0b000000, 0b000000, 0b001100, 0b001100, 0b000000, 0b000000,
+];
+
 const LETTERS: readonly (readonly number[])[] = [
   // A
   [0b011110, 0b111111, 0b110011, 0b110011, 0b111111, 0b111111, 0b110011, 0b110011, 0b110011, 0b110011, 0b110011],
@@ -73,6 +78,7 @@ type Glyph = "space" | "digit" | readonly number[];
 function glyphOf(ch: string): Glyph | null {
   if (ch === " ") return "space";
   if (ch === "/") return SLASH;
+  if (ch === ":") return COLON;
   if (ch >= "0" && ch <= "9") return "digit";
   const index = ch.charCodeAt(0) - 65;
   if (index < 0 || index >= LETTERS.length) return null;
