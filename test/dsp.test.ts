@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { SIXTEENTH_TICKS, tickToSample } from "../src/core/clock.ts";
+import { clamp01, SIXTEENTH_TICKS, tickToSample } from "../src/core/clock.ts";
 import { defaultProject } from "../src/core/defaults.ts";
 import { evalModulated } from "../src/core/modulate.ts";
 import { applyMorph } from "../src/core/morph.ts";
@@ -8,6 +8,7 @@ import { clone } from "../src/core/clone.ts";
 import { launchScene, record } from "../src/core/performance.ts";
 import { mapFilter, mapKick, mapSend, mapSound } from "../src/dsp/map.ts";
 import { eventsInBlock, phraseLoop, soundMotions } from "../src/dsp/schedule.ts";
+import { envelopeTable, laneEnvelopeAt, readEnvelope } from "../src/dsp/envelope.ts";
 import { createEngine, filterSample, formatBus, glideSeconds, loadPhrase, melodyCutoff, packBlock, packPhrase, packPhraseBody, pluckSeconds, renderBlock, renderClock } from "../src/dsp/voice.ts";
 import type { BlockEvent } from "../src/dsp/schedule.ts";
 import type { LaneId } from "../src/core/types.ts";
@@ -348,6 +349,96 @@ describe("dsp adapter", () => {
     renderClock(engine);
     const step = 120 / sixteenth;
     assert.ok(Math.abs(engine.notes[0].cutoff - evalModulated(from, step)) < 1e-6);
+  });
+
+  it("follows a kick envelope from phrase events", () => {
+    const tempo = 120;
+    const sixteenth = tickToSample(SIXTEENTH_TICKS, tempo);
+    const loop = sixteenth * 16;
+    const kick = {
+      sample: 0,
+      loop,
+      lane: "kick" as const,
+      note: 36,
+      velocity: 127,
+      lengthTicks: 48,
+      params: mapSound("kick", { decay: 0 }),
+    };
+    const bass = {
+      sample: 0,
+      loop,
+      lane: "bass" as const,
+      note: 40,
+      velocity: 100,
+      lengthTicks: 16 * 48,
+      params: mapSound("bass", { attack: 0, release: 0.4 }),
+    };
+    const engine = createEngine();
+    loadPhrase(engine, [kick, bass], tempo, true, [{
+      lane: "bass",
+      id: "cutoff",
+      value: 0.2,
+      pattern: -1,
+      cycle: 4,
+      amount: 0.25,
+      loop,
+    }]);
+    renderClock(engine);
+    const env = laneEnvelopeAt([kick, bass], "kick", 0, tempo);
+    const peak = clamp01(0.2 + env * 0.25 * 3);
+    assert.ok(Math.abs(engine.notes[0].cutoff - peak) < 1e-6);
+    for (let i = 0; i < 40; i++) renderClock(engine);
+    assert.ok(engine.notes[0].cutoff < peak - 0.2);
+  });
+
+  it("modulates a lane from its own events", () => {
+    const tempo = 120;
+    const sixteenth = tickToSample(SIXTEENTH_TICKS, tempo);
+    const loop = sixteenth * 16;
+    const bass = {
+      sample: 0,
+      loop,
+      lane: "bass" as const,
+      note: 40,
+      velocity: 127,
+      lengthTicks: 16 * 48,
+      params: mapSound("bass", { attack: 0, release: 0.4 }),
+    };
+    const engine = createEngine();
+    loadPhrase(engine, [bass], tempo, true, [{
+      lane: "bass",
+      id: "cutoff",
+      value: 0.25,
+      pattern: -5,
+      cycle: 8,
+      amount: 0.2,
+      loop,
+    }]);
+    renderClock(engine);
+    const env = laneEnvelopeAt([bass], "bass", 0, tempo);
+    const heard = clamp01(0.25 + env * 0.2 * 3);
+    assert.ok(heard > 0.8);
+    assert.ok(Math.abs(engine.notes[0].cutoff - heard) < 1e-6);
+  });
+
+  it("holds the baked envelope on hop boundaries", () => {
+    const tempo = 120;
+    const sixteenth = tickToSample(SIXTEENTH_TICKS, tempo);
+    const loop = sixteenth * 16;
+    const kick = {
+      sample: 0,
+      loop,
+      lane: "kick" as const,
+      note: 36,
+      velocity: 127,
+      lengthTicks: 48,
+      params: mapSound("kick", { decay: 0 }),
+    };
+    const table = envelopeTable([kick], "kick", tempo);
+    for (const sample of [0, 128, 5120]) {
+      const direct = laneEnvelopeAt([kick], "kick", sample, tempo);
+      assert.ok(Math.abs(readEnvelope(table, sample) - direct) < 1e-6);
+    }
   });
 
   it("glides timbre during a morph and does not follow note pitch", () => {

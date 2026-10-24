@@ -14,8 +14,11 @@ import { mixFieldValues } from "./fields.ts";
 import { hash01 } from "./hash.ts";
 import { applyFollowMidi, chordTonePitchClasses, degreeToMidi, generateHarmony, harmonyAt, pitchClassName, scaleOf } from "./harmony.ts";
 import { latchStamp } from "./latch.ts";
-import { bipolarFromUnit, evalModulated, soundMacro, withMacro } from "./modulate.ts";
+import { applyVoiceEnvelope, bipolarFromUnit, evalModulated, soundMacro, voiceLane, withMacro } from "./modulate.ts";
+import { laneHeard } from "./journal.ts";
 import { macroOffset } from "./pages.ts";
+import { envelopeTable, readEnvelope, type EnvelopeTable } from "../dsp/envelope.ts";
+import { mapFilter, mapSend, mapSound } from "../dsp/map.ts";
 import { mod } from "./motif.ts";
 import {
   DRUM_NOTE,
@@ -215,7 +218,210 @@ function phraseOf(project: Project, working: Lanes): Phrase {
     steps[lane] = laneSteps(working, lane, global);
     lanes[lane] = eventsFor(working, lane, global, lock[lane] ? {} : macros, harmony, steps[lane]);
   }
-  return { lanes, harmony, steps };
+  return applyVoicePhrase(project, working, { lanes, harmony, steps });
+}
+
+function voiceEnvAt(tables: ReadonlyMap<LaneId, EnvelopeTable>, pattern: number, sample: number): number {
+  const lane = voiceLane(pattern);
+  const table = lane ? tables.get(lane) : undefined;
+  return table ? readEnvelope(table, sample) : 0;
+}
+
+function hearUnit(
+  dry: number,
+  pattern: number,
+  amount: number,
+  sample: number,
+  tables: ReadonlyMap<LaneId, EnvelopeTable>,
+): number {
+  if (pattern >= 0 || amount === 0) return dry;
+  return applyVoiceEnvelope(dry, voiceEnvAt(tables, pattern, sample), amount);
+}
+
+/** Note-on fields the voice reads once. Live follow keeps tracking the same formula afterwards. */
+function applyVoicePhrase(project: Project, working: Lanes, phrase: Phrase): Phrase {
+  const sources = voiceSources(working);
+  if (sources.size === 0) return phrase;
+  const tempo = Math.max(1, project.global.tempo);
+  const tables = new Map<LaneId, EnvelopeTable>();
+  const dry = envelopeHits(project, phrase, tempo);
+  for (const lane of sources) tables.set(lane, envelopeTable(dry, lane, tempo));
+  const lanes = {} as Phrase["lanes"];
+  for (const id of LANES) {
+    const macros = project.lock[id] ? {} : project.macros;
+    lanes[id] = phrase.lanes[id].map((event) => stampVoice(working, id, event, macros, project.global, phrase.harmony, tables));
+  }
+  return { ...phrase, lanes };
+}
+
+function voiceSources(working: Lanes): Set<LaneId> {
+  const need = new Set<LaneId>();
+  const take = (knob: { pattern: number; amount: number } | undefined) => {
+    if (!knob || knob.pattern >= 0 || knob.amount === 0) return;
+    const lane = voiceLane(knob.pattern);
+    if (lane) need.add(lane);
+  };
+  for (const id of LANES) {
+    const lane = working[id];
+    for (const knob of Object.values(lane.sound)) take(knob);
+    take(lane.filter.cutoff);
+    take(lane.filter.resonance);
+    take(lane.send.reverb);
+    take(lane.send.delay);
+    if (isDrum(id) || isPitched(id)) {
+      const box = lane as DrumLane | PitchedLane;
+      take(box.gen1.velocity);
+      take(box.gen2.velocity);
+    }
+    if (isPitched(id)) {
+      const box = lane as PitchedLane;
+      take(box.pitch);
+      take(box.octave);
+      take(box.length);
+    }
+    if (id === "chords") {
+      const box = lane as ChordLane;
+      take(box.velocity);
+    }
+  }
+  return need;
+}
+
+function envelopeHits(project: Project, phrase: Phrase, tempo: number) {
+  const out: {
+    sample: number;
+    loop: number;
+    lane: LaneId;
+    velocity: number;
+    lengthTicks: number;
+    params: { id: string; value: number }[];
+  }[] = [];
+  for (const lane of LANES) {
+    if (!laneHeard(project, lane)) continue;
+    const steps = Math.max(1, phrase.steps[lane]);
+    const loop = Math.max(1, tickToSample(steps * SIXTEENTH_TICKS, tempo));
+    const gain = project.mixer[lane] * project.mixer.master;
+    for (const event of phrase.lanes[lane]) {
+      out.push({
+        sample: ((event.sample % loop) + loop) % loop,
+        loop,
+        lane,
+        velocity: Math.max(1, Math.min(127, Math.round(event.velocity * gain * 127))),
+        lengthTicks: event.lengthTicks,
+        params: [...mapSound(lane, event.sound), ...mapFilter(event.filter), ...mapSend(event.send)],
+      });
+    }
+  }
+  return out;
+}
+
+function hearFields(
+  dry: Record<string, number>,
+  knobs: Record<string, { pattern: number; amount: number }>,
+  sample: number,
+  tables: ReadonlyMap<LaneId, EnvelopeTable>,
+): Record<string, number> {
+  let next: Record<string, number> | null = null;
+  for (const id of Object.keys(dry)) {
+    const knob = knobs[id];
+    if (!knob || knob.pattern >= 0 || knob.amount === 0) continue;
+    if (!next) next = { ...dry };
+    next[id] = hearUnit(dry[id] ?? 0, knob.pattern, knob.amount, sample, tables);
+  }
+  return next ?? dry;
+}
+
+function stampVoice(
+  working: Lanes,
+  id: LaneId,
+  event: TimedEvent,
+  macros: Record<string, number>,
+  global: GlobalSettings,
+  harmony: readonly HarmonicEvent[],
+  tables: ReadonlyMap<LaneId, EnvelopeTable>,
+): TimedEvent {
+  const lane = working[id];
+  const sample = event.sample;
+  const sound = hearFields(event.sound, lane.sound, sample, tables);
+  const filter = {
+    cutoff: hearUnit(event.filter.cutoff, lane.filter.cutoff.pattern, lane.filter.cutoff.amount, sample, tables),
+    resonance: hearUnit(event.filter.resonance, lane.filter.resonance.pattern, lane.filter.resonance.amount, sample, tables),
+  };
+  const send = {
+    reverb: hearUnit(event.send.reverb, lane.send.reverb.pattern, lane.send.reverb.amount, sample, tables),
+    delay: hearUnit(event.send.delay, lane.send.delay.pattern, lane.send.delay.amount, sample, tables),
+  };
+  let velocity = event.velocity;
+  let lengthTicks = event.lengthTicks;
+  let note = event.note;
+  if (isDrum(id) || isPitched(id)) {
+    const box = lane as DrumLane | PitchedLane;
+    velocity = hearGenVelocity(velocity, [box.gen1, box.gen2], sample, tables);
+  }
+  if (isPitched(id)) {
+    const box = lane as PitchedLane;
+    if (box.length.pattern < 0 && box.length.amount !== 0) {
+      const span = Math.max(1, global.bar * SIXTEENTH_TICKS);
+      const unit = hearUnit(event.lengthTicks / span, box.length.pattern, box.length.amount, sample, tables);
+      lengthTicks = Math.max(1, Math.round(unit * span));
+    }
+    if ((box.pitch.pattern < 0 && box.pitch.amount !== 0) || (box.octave.pattern < 0 && box.octave.amount !== 0)) {
+      note = retunePitched(box, event, macros, global, harmony, tables);
+    }
+  }
+  if (id === "chords") {
+    const box = lane as ChordLane;
+    velocity = hearUnit(velocity, box.velocity.pattern, box.velocity.amount, sample, tables);
+  }
+  if (sound === event.sound && filter.cutoff === event.filter.cutoff && filter.resonance === event.filter.resonance
+    && send.reverb === event.send.reverb && send.delay === event.send.delay
+    && velocity === event.velocity && lengthTicks === event.lengthTicks && note === event.note) {
+    return event;
+  }
+  return { ...event, sound, filter, send, velocity, lengthTicks, note };
+}
+
+function hearGenVelocity(
+  dry: number,
+  gens: readonly EuclidGen[],
+  sample: number,
+  tables: ReadonlyMap<LaneId, EnvelopeTable>,
+): number {
+  const voiced = gens.filter((gen) => gen.velocity.pattern < 0 && gen.velocity.amount !== 0);
+  if (voiced.length === 0) return dry;
+  const knob = voiced.reduce((best, gen) =>
+    Math.abs(dry - gen.velocity.value) < Math.abs(dry - best.velocity.value) ? gen : best,
+  );
+  return hearUnit(dry, knob.velocity.pattern, knob.velocity.amount, sample, tables);
+}
+
+function retunePitched(
+  lane: PitchedLane,
+  event: TimedEvent,
+  macros: Record<string, number>,
+  global: GlobalSettings,
+  harmony: readonly HarmonicEvent[],
+  tables: ReadonlyMap<LaneId, EnvelopeTable>,
+): number {
+  const base = swungStepTick(event.step, global.swing);
+  const repeat = Math.max(0, Math.round((event.tick - base) / SIXTEENTH_TICKS));
+  const step = event.step + repeat;
+  const pitch = withMacro(lane.pitch, macro(macros, "pitch"));
+  const octave = withMacro(lane.octave, macro(macros, "octave"));
+  const pitchU = pitch.pattern < 0
+    ? hearUnit(pitch.value, pitch.pattern, pitch.amount, event.sample, tables)
+    : evalModulated(pitch, step);
+  const octaveU = octave.pattern < 0
+    ? hearUnit(octave.value, octave.pattern, octave.amount, event.sample, tables)
+    : evalModulated(octave, step);
+  const shift = Math.round(bipolarFromUnit(evalModulated(withMacro(lane.step, macro(macros, "step")), event.step), 7));
+  const scale = scaleOf(global.scale);
+  const rootPc = mod(global.root + global.transpose, 12);
+  const degree = scaleOffset(pitchU) + repeat * shift;
+  const desired = degreeToMidi(degree, scale, rootPc, octaveNumber(octaveU));
+  const harm = harmonyAt(harmony, event.tick);
+  const chordPcs = harm ? chordTonePitchClasses(harm, scale, rootPc) : [];
+  return Math.max(0, Math.min(127, Math.round(applyFollowMidi(desired, lane.follow, chordPcs))));
 }
 
 export function laneSteps(lanes: Lanes, lane: LaneId, global: GlobalSettings): number {

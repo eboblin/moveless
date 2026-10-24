@@ -1,9 +1,12 @@
-import { SAMPLE_RATE, SIXTEENTH_TICKS, tickToSample } from "../core/clock.ts";
+import { clamp01, SAMPLE_RATE, SIXTEENTH_TICKS, tickToSample } from "../core/clock.ts";
 import { formatDeckCommand, type DeckCommand } from "../core/deck.ts";
 import { defaultBus, defaultFx } from "../core/defaults.ts";
-import { evalModulated } from "../core/modulate.ts";
+import { applyVoiceEnvelope, evalModulated, voiceLane } from "../core/modulate.ts";
 import { isDrum, LANES, type Bus, type Fx, type LaneId } from "../core/types.ts";
 import { commandDeck, createDeckRuntime, deckTargetLead, deckThrow, hearDeck, writeDeckBlock, type DeckRuntime } from "./deck.ts";
+import { envelopeTable, hatDecaySeconds, kickDecaySeconds, percDecaySeconds, readEnvelope, snareBodyDecaySeconds, snareNoiseDecaySeconds, type EnvelopeTable } from "./envelope.ts";
+
+export { hatDecaySeconds, kickDecaySeconds, percDecaySeconds, snareBodyDecaySeconds, snareNoiseDecaySeconds };
 import type { EngineParam } from "./map.ts";
 import type { BlockEvent, LoopEvent, Motion } from "./schedule.ts";
 import { clearEcho, clearTank, createEcho, createTank, echoSample, tankSample, type Echo, type Tank } from "./fx.ts";
@@ -102,6 +105,8 @@ export interface Engine {
   /** Voices claimed while arming one sample. */
   armSerial: number;
   armClock: number;
+  /** Baked voice-pattern envelopes. Null until some live motion asks for that lane. */
+  env: (EnvelopeTable | null)[];
 }
 
 interface DrumVoice {
@@ -249,6 +254,7 @@ export function createEngine(): Engine {
     laneFreq: Array.from({ length: LANE_COUNT }, () => 0),
     armSerial: 0,
     armClock: -1,
+    env: Array.from({ length: 7 }, () => null),
   };
 }
 
@@ -261,6 +267,7 @@ export function loadPhrase(engine: Engine, events: LoopEvent[], tempo: number, r
   engine.tempo = Math.max(1, tempo);
   engine.holdSig = sig;
   bucketMotions(engine, motions);
+  bakeEnvelopes(engine);
   stampHeld(engine);
   engine.deckShadow = null;
   engine.deck.lead = 0;
@@ -1146,7 +1153,8 @@ function follow(engine: Engine): void {
     const loop = laneLoop(engine, lane);
     if (loop < 1) continue;
     const step = (pos % loop) / span;
-    const units = box.live.map((motion) => evalMotion(motion, step));
+    const at = pos % loop;
+    const units = box.live.map((motion) => evalMotion(engine, motion, step, at));
     if (lane < DRUM_COUNT) {
       const drum = engine.drums[lane];
       for (let m = 0; m < box.live.length; m++) applyDrum(drum, box.live[m].param, units[m]);
@@ -1311,13 +1319,37 @@ export function filterSample(state: { low: number; band: number }, input: number
   return clipPeak(raw * trim);
 }
 
-function evalMotion(motion: LaneMotion, step: number): number {
-  return evalModulated({
-    value: motion.value,
-    pattern: motion.pattern,
-    cycle: motion.cycle,
-    amount: motion.amount,
-  }, step);
+function evalMotion(engine: Engine, motion: LaneMotion, step: number, at: number): number {
+  const source = voiceLane(motion.pattern);
+  if (!source) {
+    return evalModulated({
+      value: motion.value,
+      pattern: motion.pattern,
+      cycle: motion.cycle,
+      amount: motion.amount,
+    }, step);
+  }
+  if (motion.amount === 0) return clamp01(motion.value);
+  const index = LANES.indexOf(source);
+  const table = index >= 0 ? engine.env[index] : null;
+  const env = table ? readEnvelope(table, at) : 0;
+  return applyVoiceEnvelope(motion.value, env, motion.amount);
+}
+
+function bakeEnvelopes(engine: Engine): void {
+  const need = new Set<LaneId>();
+  for (const box of engine.lanes) {
+    for (const motion of box.live) {
+      const lane = voiceLane(motion.pattern);
+      if (lane) need.add(lane);
+    }
+  }
+  const env: (EnvelopeTable | null)[] = Array.from({ length: 7 }, () => null);
+  for (const lane of need) {
+    const index = LANES.indexOf(lane);
+    if (index >= 0) env[index] = envelopeTable(engine.phrase, lane, engine.tempo);
+  }
+  engine.env = env;
 }
 
 function bucketMotions(engine: Engine, motions: Motion[]): void {
@@ -1453,28 +1485,8 @@ function squaredSeconds(unit: number, lo: number, span: number): number {
   return lo + u * u * span;
 }
 
-export function kickDecaySeconds(unit: number): number {
-  return squaredSeconds(unit, 0.03, 1.37);
-}
-
 export function bendTimeSeconds(unit: number): number {
   return squaredSeconds(unit, 0.008, 0.392);
-}
-
-export function snareBodyDecaySeconds(unit: number): number {
-  return squaredSeconds(unit, 0.04, 0.76);
-}
-
-export function snareNoiseDecaySeconds(unit: number): number {
-  return squaredSeconds(unit, 0.02, 0.58);
-}
-
-export function hatDecaySeconds(unit: number): number {
-  return squaredSeconds(unit, 0.02, 1);
-}
-
-export function percDecaySeconds(unit: number): number {
-  return squaredSeconds(unit, 0.03, 1.2);
 }
 
 /** The 808/909 shelf is the octave pair. It carries a short drop; wood and metal stay put. */

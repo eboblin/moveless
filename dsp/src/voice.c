@@ -26,6 +26,9 @@
 #define PHRASE_TEXT 65536
 #define PHRASE_CAP 512
 #define LANE_COUNT 8
+#define ENV_LANES 7
+#define ENV_HOP 128
+#define ENV_CAP 8192
 #define LANE_MOTION_CAP 12
 #define HAAS_N 544
 #define LANE_HAT 2
@@ -161,6 +164,13 @@ typedef struct {
     unsigned phrase_sig;
     LaneBox lanes[LANE_COUNT];
     PhraseEv phrase[PHRASE_CAP];
+    /* Voice-pattern envelopes. Painted once per phrase, read in the callback. */
+    float env[ENV_LANES][ENV_CAP];
+    int env_n[ENV_LANES];
+    int env_loop[ENV_LANES];
+    int env_hop[ENV_LANES];
+    unsigned env_stamp;
+    int env_ready;
     Drum drums[DRUMS];
     Note notes[NOTES];
     /* Smoothed render share of the callback slack, 0..99. */
@@ -599,16 +609,12 @@ static int param_of(const char *id) {
 }
 
 static float eval_one(float value, int pattern, float cycle, float amount, float step) {
-    if (amount == 0.0f) return clampf01(value);
+    if (pattern < 0 || amount == 0.0f) return clampf01(value);
     int length = (int)roundf(cycle);
     if (length < 1) length = 1;
     float wrapped = fmodf(step, (float)length);
     if (wrapped < 0) wrapped += (float)length;
     return clampf01(value + motif_at(pattern, wrapped / (float)length) * amount);
-}
-
-static float eval_lane(const LaneMotion *motion, float step) {
-    return eval_one(motion->value, motion->pattern, motion->cycle, motion->amount, step);
 }
 
 static void refresh_drum_env(Drum *drum) {
@@ -775,6 +781,222 @@ static void stamp_held(Engine *engine) {
     }
 }
 
+static float decay_level(float amp, float age, float seconds) {
+    float tau, env;
+    if (!(amp > 0.0f) || !(seconds > 0.0f) || age < 0.0f) return 0.0f;
+    tau = seconds * SR;
+    if (tau < 1.0f) tau = 1.0f;
+    env = amp * expf(-age / tau);
+    if (env < amp * 0.02f) return 0.0f;
+    return env;
+}
+
+static float note_level(float amp, float age, float hold, float attack, float release_sec) {
+    float tau, env, rise;
+    if (!(amp > 0.0f) || age < 0.0f) return 0.0f;
+    if (hold < 1.0f) hold = 1.0f;
+    if (attack < 1.0f) attack = 1.0f;
+    tau = release_sec * SR;
+    if (tau < 1.0f) tau = 1.0f;
+    if (age < attack) {
+        rise = (age + 1.0f) / attack;
+        if (rise > 1.0f) rise = 1.0f;
+        env = amp * rise;
+    } else if (age < hold) env = amp;
+    else env = amp * expf(-(age - hold) / tau);
+    if (env > 1.0f) env = 1.0f;
+    if (age >= hold && env < amp * 0.02f) return 0.0f;
+    return env > 0.0f ? env : 0.0f;
+}
+
+static int ticks_to_samples(int ticks, float tempo) {
+    float bpm = tempo > 1.0f ? tempo : 120.0f;
+    int n = (int)lroundf(((float)ticks * SR * 60.0f) / (bpm * 192.0f));
+    return n < 1 ? 1 : n;
+}
+
+typedef struct {
+    int kind;
+    float amp, a, b, c, hold, attack, release;
+} EnvShape;
+
+/** Params once per event. kind 0 is one decay, 1 is snare, 2 is a note. */
+static void shape_of(const PhraseEv *hit, float tempo, EnvShape *s) {
+    s->amp = hit->velocity / 127.0f;
+    if (s->amp < 0.0f) s->amp = 0.0f;
+    if (s->amp > 1.0f) s->amp = 1.0f;
+    s->kind = 0;
+    s->a = s->b = s->c = s->hold = s->attack = s->release = 0.0f;
+    if (hit->lane == 0) {
+        s->a = kick_decay_seconds(read_param(hit->params, "decay", 0.4f));
+    } else if (hit->lane == 1) {
+        float snap = clampf01(read_param(hit->params, "snap", 0.4f));
+        s->kind = 1;
+        s->a = snare_body_decay_seconds(read_param(hit->params, "bdcy", 0.3f));
+        s->b = snare_noise_decay_seconds(read_param(hit->params, "ndcy", 0.3f));
+        s->c = (40.0f + powf(1.0f - snap, 1.4f) * 700.0f) / SR;
+    } else if (hit->lane == 2) {
+        float ring = clampf01(read_param(hit->params, "ring", 0.3f));
+        s->a = hat_decay_seconds(read_param(hit->params, "decay", 0.3f)) * (1.0f + ring * 2.8f);
+    } else if (hit->lane == 3) {
+        s->a = perc_decay_seconds(read_param(hit->params, "decay", 0.4f));
+    } else {
+        float release = clampf01(read_param(hit->params, "release", read_param(hit->params, "decay", 0.4f)));
+        int ticks = hit->ticks < 1 ? 1 : hit->ticks;
+        s->kind = 2;
+        s->hold = (float)ticks_to_samples(ticks, tempo);
+        s->attack = 1.0f + clampf01(read_param(hit->params, "attack", 0.0f)) * 0.2f * SR;
+        s->release = 0.04f + release * 1.6f;
+    }
+}
+
+static float shape_level(const EnvShape *s, float age) {
+    float body, noise, click;
+    if (s->kind == 2) return note_level(s->amp, age, s->hold, s->attack, s->release);
+    if (s->kind == 1) {
+        body = decay_level(s->amp, age, s->a);
+        noise = decay_level(s->amp, age, s->b);
+        click = decay_level(s->amp, age, s->c);
+        if (noise > body) body = noise;
+        if (click > body) body = click;
+        return body;
+    }
+    return decay_level(s->amp, age, s->a);
+}
+
+static int shape_horizon(const EnvShape *s, int loop) {
+    int cap = loop > 0 ? loop * 8 : 8;
+    int tail;
+    float seconds;
+    if (s->kind == 2) tail = (int)s->hold + (int)ceilf(s->release * 4.0f * SR);
+    else if (s->kind == 1) {
+        seconds = s->a;
+        if (s->b > seconds) seconds = s->b;
+        if (s->c > seconds) seconds = s->c;
+        tail = (int)ceilf(seconds * 4.0f * SR);
+    } else tail = (int)ceilf(s->a * 4.0f * SR);
+    if (tail < 0) tail = 0;
+    if (tail > cap) tail = cap;
+    return tail;
+}
+
+static unsigned env_mix(unsigned h, unsigned v) {
+    return (h ^ v) * 16777619u;
+}
+
+static unsigned envelope_stamp(const Engine *engine) {
+    unsigned h = 2166136261u;
+    int lane, e, m;
+    h = env_mix(h, (unsigned)(engine->tempo * 1000.0f));
+    for (e = 0; e < engine->phrase_count; e++) {
+        const PhraseEv *hit = &engine->phrase[e];
+        const unsigned char *p = (const unsigned char *)hit->params;
+        const unsigned char *end = p + sizeof hit->params;
+        h = env_mix(h, (unsigned)hit->sample);
+        h = env_mix(h, (unsigned)hit->loop);
+        h = env_mix(h, (unsigned)hit->lane);
+        h = env_mix(h, (unsigned)hit->velocity);
+        h = env_mix(h, (unsigned)hit->ticks);
+        for (; p < end && *p; p++) h = env_mix(h, *p);
+    }
+    for (lane = 0; lane < LANE_COUNT; lane++) {
+        const LaneBox *box = &engine->lanes[lane];
+        for (m = 0; m < box->live_count; m++) {
+            if (box->live[m].pattern < 0) h = env_mix(h, (unsigned)box->live[m].pattern);
+        }
+    }
+    return h;
+}
+
+/** Paint each referenced lane once. A per-sample scan of the phrase overran the block. */
+static void bake_envelopes(Engine *engine) {
+    int need[ENV_LANES];
+    int lane, e, m;
+    unsigned stamp = envelope_stamp(engine);
+    float tempo = engine->tempo > 1.0f ? engine->tempo : 120.0f;
+    if (engine->env_ready && stamp == engine->env_stamp) return;
+    memset(need, 0, sizeof need);
+    for (lane = 0; lane < LANE_COUNT; lane++) {
+        LaneBox *box = &engine->lanes[lane];
+        for (m = 0; m < box->live_count; m++) {
+            int pattern = box->live[m].pattern;
+            int source = -pattern - 1;
+            if (pattern < 0 && source >= 0 && source < ENV_LANES) need[source] = 1;
+        }
+    }
+    for (lane = 0; lane < ENV_LANES; lane++) {
+        int loop = 1;
+        int hop = ENV_HOP;
+        int n;
+        engine->env_n[lane] = 0;
+        engine->env_loop[lane] = 1;
+        engine->env_hop[lane] = hop;
+        if (!need[lane]) continue;
+        for (e = 0; e < engine->phrase_count; e++) {
+            if (engine->phrase[e].lane == lane && engine->phrase[e].loop > loop)
+                loop = engine->phrase[e].loop;
+        }
+        n = (loop + hop - 1) / hop;
+        while (n > ENV_CAP && hop < loop && hop < 0x40000000) {
+            hop *= 2;
+            n = (loop + hop - 1) / hop;
+        }
+        if (n > ENV_CAP) n = ENV_CAP;
+        if (n < 1) n = 1;
+        engine->env_loop[lane] = loop;
+        engine->env_hop[lane] = hop;
+        engine->env_n[lane] = n;
+        memset(engine->env[lane], 0, (size_t)n * sizeof(float));
+        for (e = 0; e < engine->phrase_count; e++) {
+            PhraseEv *hit = &engine->phrase[e];
+            EnvShape shape;
+            int origin, horizon, age;
+            if (hit->lane != lane) continue;
+            shape_of(hit, tempo, &shape);
+            origin = hit->sample % loop;
+            if (origin < 0) origin += loop;
+            horizon = shape_horizon(&shape, loop);
+            for (age = 0; age <= horizon; age += hop) {
+                float level = shape_level(&shape, (float)age);
+                int phase, bin;
+                if (age > 0 && level <= 0.0f) break;
+                phase = origin + age;
+                if (loop > 0) phase %= loop;
+                if (phase < 0) phase += loop;
+                bin = phase / hop;
+                if (bin >= 0 && bin < n && level > engine->env[lane][bin])
+                    engine->env[lane][bin] = level;
+            }
+        }
+    }
+    engine->env_stamp = stamp;
+    engine->env_ready = 1;
+}
+
+static float baked_envelope(const Engine *engine, int lane, int sample) {
+    int n, loop, hop, at, i;
+    if (lane < 0 || lane >= ENV_LANES) return 0.0f;
+    n = engine->env_n[lane];
+    loop = engine->env_loop[lane];
+    hop = engine->env_hop[lane];
+    if (n < 1 || loop < 1 || hop < 1) return 0.0f;
+    at = sample % loop;
+    if (at < 0) at += loop;
+    i = at / hop;
+    if (i >= n) i = n - 1;
+    if (i < 0) i = 0;
+    return engine->env[lane][i];
+}
+
+static float eval_voice(const Engine *engine, const LaneMotion *motion, float step, int at) {
+    int source;
+    if (motion->pattern >= 0) return eval_one(motion->value, motion->pattern, motion->cycle, motion->amount, step);
+    if (motion->amount == 0.0f) return clampf01(motion->value);
+    source = -motion->pattern - 1;
+    /* Same ×3 as applyVoiceEnvelope. Above full scale the value sits at 1. */
+    return clampf01(motion->value + baked_envelope(engine, source, at) * motion->amount * 3.0f);
+}
+
 static void follow_sound(Engine *engine) {
     if (engine->clock < 1) return;
     float tempo = engine->tempo > 1.0f ? engine->tempo : 120.0f;
@@ -799,8 +1021,9 @@ static void follow_sound(Engine *engine) {
         }
         if (loop < 1) continue;
         float step = (float)(pos % loop) / span;
+        int at = pos % loop;
         float units[LANE_MOTION_CAP];
-        for (int m = 0; m < box->live_count; m++) units[m] = eval_lane(&box->live[m], step);
+        for (int m = 0; m < box->live_count; m++) units[m] = eval_voice(engine, &box->live[m], step, at);
         if (lane < DRUMS) {
             Drum *drum = &engine->drums[lane];
             for (int m = 0; m < box->live_count; m++) apply_drum(drum, box->live[m].param, units[m]);
@@ -1972,6 +2195,7 @@ static void ingest_phrase(Engine *engine) {
     if (!restarted && engine->clock > 0 && sig != engine->phrase_sig) catch_holding(engine);
     engine->phrase_sig = sig;
     stamp_held(engine);
+    bake_envelopes(engine);
 }
 
 static unsigned phrase_timing_sig(const Engine *engine) {

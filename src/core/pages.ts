@@ -5,6 +5,7 @@ import {
   SCALE_IDS,
   STEPS,
   isDrum,
+  isLane,
   isPitched,
   laneFamily,
   type ContextId,
@@ -138,7 +139,7 @@ interface FieldSpec {
  */
 const SLOT = {
   value: { min: 0, max: 1, step: 0.01, suffix: "V" },
-  pattern: { weight: 1, min: 0, max: 63, step: 1, suffix: "P" },
+  pattern: { weight: 1, min: -LANES.length, max: 63, step: 1, suffix: "P" },
   cycle: { weight: 1.5, min: 1, max: 64, step: 1, suffix: "C" },
   amount: { weight: 1.2, min: -1, max: 1, step: 0.01, suffix: "A" },
 } as const;
@@ -683,15 +684,39 @@ export function pageId(context: ContextId, index: number): string | null {
   return pages[clamped]?.id ?? null;
 }
 
+function workingNumber(project: Project, path: string): number | null {
+  let current: unknown = project.working;
+  for (const part of path.split(".")) {
+    if (current === null || typeof current !== "object") return null;
+    current = (current as Record<string, unknown>)[part];
+  }
+  return typeof current === "number" ? current : null;
+}
+
+/** A voice source has no cycle. The stored number stays; the encoder slot goes empty. */
+function hideVoiceCycles(project: Project, context: ContextId, page: Page): Page {
+  if (!isLane(context)) return page;
+  let hidden = false;
+  const bindings = page.bindings.map((binding) => {
+    if (!binding?.path.endsWith(".cycle")) return binding;
+    const pattern = workingNumber(project, `${context}.${binding.path.slice(0, -".cycle".length)}.pattern`);
+    if (pattern === null || pattern >= 0) return binding;
+    hidden = true;
+    return null;
+  });
+  return hidden ? { ...page, bindings } : page;
+}
+
 /**
  * Page the caller is showing. The deck slot expands to the knobs of the focused group.
+ * A voice pattern hides its cycle slot.
  */
 export function livePage(project: Project, context: ContextId, index: number): Page | undefined {
   const pages = pagesFor(context);
   const item = pages[Math.min(Math.max(0, index), Math.max(0, pages.length - 1))];
   if (!item) return undefined;
-  if (item.id !== "deck") return item;
-  return deckPage(focusedGroup(project.deck), project.deck);
+  const page = item.id === "deck" ? deckPage(focusedGroup(project.deck), project.deck) : item;
+  return hideVoiceCycles(project, context, page);
 }
 
 /** Name the jog overlay prints. Mixer and DJ FX keep a fixed word even when the deck group changes. */

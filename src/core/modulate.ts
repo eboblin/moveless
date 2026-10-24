@@ -1,18 +1,36 @@
 import { clamp01 } from "./clock.ts";
 import { motif } from "./motif.ts";
 import { macroOffset } from "./pages.ts";
-import type { Modulated } from "./types.ts";
+import { LANES, type LaneId, type Modulated } from "./types.ts";
 
 export function modulated(value: number, pattern = 0, cycle = 1, amount = 0): Modulated {
   return { value, pattern, cycle, amount };
 }
 
-/** Cycle is a length in sixteenths. The lane runs on its own; a note reads the value at its step. */
+/** Pattern below zero names a voice. -1 is kick, -7 is chords. The lane itself is included. */
+export function voiceLane(pattern: number): LaneId | null {
+  const id = Math.round(pattern);
+  if (id >= 0) return null;
+  return LANES[-id - 1] ?? null;
+}
+
+/**
+ * Cycle is a length in sixteenths. The lane runs on its own; a note reads the value at its step.
+ * A voice source has no motif. This call stays at the centre; the phrase stamps the envelope onto the note.
+ */
 export function evalModulated(m: Modulated, step: number): number {
+  if (m.pattern < 0 || m.amount === 0) return clamp01(m.value);
   const cycle = Math.max(1, Math.round(m.cycle));
   const phase = (((step % cycle) + cycle) % cycle) / cycle;
-  if (m.amount === 0) return clamp01(m.value);
   return clamp01(m.value + motif(m.pattern, phase) * m.amount);
+}
+
+/**
+ * Live voice modulator. Amount is three times the envelope, then clamped:
+ * past full scale more of the curve sits at 1. The screen draws this same number.
+ */
+export function applyVoiceEnvelope(value: number, envelope: number, amount: number): number {
+  return clamp01(value + envelope * amount * 3);
 }
 
 export function withMacro(m: Modulated, offset: number): Modulated {

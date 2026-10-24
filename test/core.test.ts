@@ -6,7 +6,7 @@ import { defaultProject } from "../src/core/defaults.ts";
 import { euclidPattern, phraseStepsOf } from "../src/core/events.ts";
 import { applyMorph } from "../src/core/morph.ts";
 import { motif, MOTIF_COUNT } from "../src/core/motif.ts";
-import { evalModulated, modulated } from "../src/core/modulate.ts";
+import { evalModulated, modulated, voiceLane } from "../src/core/modulate.ts";
 import {
   addSceneToSet,
   advance,
@@ -40,7 +40,7 @@ import { holdNote, latchedPcs, releaseChannel, resetLatch, settleLatch } from ".
 import { chordLabels, textPreview } from "../src/core/text-preview.ts";
 import { fieldsOf, getPath } from "../src/core/fields.ts";
 import { hash01 } from "../src/core/hash.ts";
-import { SOUND, bindingFor, macroOffset, pagesFor } from "../src/core/pages.ts";
+import { SOUND, bindingFor, livePage, macroOffset, pagesFor } from "../src/core/pages.ts";
 import { LANES, PATTERN_LANES, type PatternId, type Project, type ScaleId } from "../src/core/types.ts";
 import { hasSoundMap } from "../src/dsp/map.ts";
 import { punch } from "../src/core/morph.ts";
@@ -367,6 +367,34 @@ describe("euclid generator", () => {
     const bassCurve = (step: number) => evalModulated(project.working.bass.gen1.velocity, step);
     assert.equal(bass.length, 4);
     assert.deepEqual(bass.map((event) => event.velocity), [0, 1, 2, 3].map(bassCurve));
+  });
+
+  it("keeps a voice pattern at the centre of the phrase", () => {
+    assert.equal(voiceLane(0), null);
+    assert.equal(voiceLane(-1), "kick");
+    assert.equal(voiceLane(-5), "bass");
+    assert.equal(voiceLane(-7), "chords");
+    assert.equal(voiceLane(-8), null);
+    assert.equal(evalModulated(modulated(0.4, -1, 4, 1), 3), 0.4);
+    const binding = bindingFor("filter.cutoff.pattern");
+    assert.equal(binding?.min, -7);
+    assert.equal(binding?.max, 63);
+    assert.ok(binding?.detents?.includes(0));
+
+    const project = bar(defaultProject());
+    project.working.kick.sound.pitch = modulated(0.35, -1, 8, 1);
+    project.working.kick.filter.cutoff.pattern = -1;
+    project.working.kick.filter.cutoff.cycle = 8;
+    const page = livePage(project, "kick", 7);
+    assert.equal(page?.bindings[1]?.path, "filter.cutoff.pattern");
+    assert.equal(page?.bindings[2], null);
+    assert.equal(page?.bindings[3]?.path, "filter.cutoff.amount");
+    assert.equal(project.working.kick.filter.cutoff.cycle, 8);
+    project.working.kick.filter.cutoff.pattern = 2;
+    assert.equal(livePage(project, "kick", 7)?.bindings[2]?.path, "filter.cutoff.cycle");
+    const kicks = generatePhrase(project).lanes.kick;
+    assert.ok(kicks.length > 0);
+    for (const event of kicks) assert.ok(event.sound.pitch > 0.35);
   });
 
   it("reads a modulator at the note time rather than the note count", () => {
@@ -1440,7 +1468,7 @@ describe("randomize, wander, sets", () => {
     const chords = setRandomizeDepth(setRandomizeIntensity(defaultProject(), "hard"), "generators");
     const chordNotes = randomizeLane(chords, "chords", "notes");
     assert.equal(chordNotes.working.chords.tone.value, chords.working.chords.tone.value);
-    assert.notEqual(chordNotes.working.chords.tone.pattern, chords.working.chords.tone.pattern);
+    assert.notDeepEqual(chordNotes.working.chords.tone, chords.working.chords.tone);
     assert.equal(chordNotes.progression.start, chords.progression.start);
   });
 

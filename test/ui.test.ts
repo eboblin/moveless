@@ -1533,6 +1533,49 @@ describe("surface", () => {
     assert.equal(pixel(phrase, 32, HEADER_H + 1), 0);
   });
 
+  it("names a voice source and drops the cycle ticks", () => {
+    const project = defaultProject();
+    project.working.kick.filter.cutoff = { value: 0, pattern: -1, cycle: 4, amount: 0 };
+    const named = renderScreen(project, {
+      ...defaultUi(),
+      context: "kick",
+      page: 7,
+      focus: { label: "CUTOFF P", path: "filter.cutoff.pattern", generator: "filter.cutoff", showPattern: true, held: true, untilTick: 0, untilMs: 0 },
+    }, 0);
+    assert.ok(named.labels.some((label) => label.text === "KCK" && label.cell === 1));
+    assert.equal(named.labels.some((label) => label.cell === 2), false);
+    const flat = {
+      ...defaultUi(),
+      context: "kick" as const,
+      page: 7,
+      focus: { label: "CUTOFF V", path: "filter.cutoff.value", generator: "filter.cutoff", showPattern: false, held: true, untilTick: 0, untilMs: 0 },
+    };
+    const screen = renderScreen(project, flat, 0);
+    assert.equal(pixel(screen, 0, HEADER_H), 0);
+    assert.equal(pixel(screen, 32, HEADER_H), 0);
+    const playing = renderScreen(project, flat, 0, true);
+    assert.equal(pixel(playing, 0, HEADER_H), 1);
+  });
+
+  it("draws a voice envelope across the lane", () => {
+    const project = defaultProject();
+    project.working.kick.gen1 = { ...project.working.kick.gen1, length: 16, hits: 1, rotate: 0, probability: 1 };
+    project.working.kick.gen2.hits = 0;
+    project.working.kick.filter.cutoff = { value: 0, pattern: -1, cycle: 4, amount: 1 };
+    const ui = {
+      ...defaultUi(),
+      context: "kick" as const,
+      page: 7,
+      focus: { label: "CUTOFF V", path: "filter.cutoff.value", generator: "filter.cutoff", showPattern: false, held: true, untilTick: 0, untilMs: 0 },
+    };
+    const screen = renderScreen(project, ui, 0);
+    const yTop = HEADER_H;
+    const yBottom = HEADER_H + VIZ_H - 2;
+    assert.equal(pixel(screen, 0, yTop), 1);
+    assert.equal(pixel(screen, WIDTH - 1, yTop), 0);
+    assert.equal(pixel(screen, WIDTH - 1, yBottom), 1);
+  });
+
   it("draws a generator over the phrase and darkens the phrase with a 1px checker", () => {
     const project = defaultProject();
     const phrase = renderScreen(project, defaultUi(), 0);
