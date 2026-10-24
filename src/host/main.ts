@@ -25,6 +25,7 @@ import {
   cellTextX,
   deckFrame,
   loadWidth,
+  nudgePlayhead,
   pageTitlePaintKey,
   pageTitleVisible,
   renderScreen,
@@ -183,10 +184,11 @@ function syncVoice(reset: boolean): void {
   voiceMorph = morphing;
   const now = Date.now();
   const deck = deckCommand();
+  const sameBody = !reset && phraseBody.length > 0 && phraseSent === phraseBody;
   const phraseDue = reset || phraseSent !== phraseBody || now - sentMs > 400;
   if (phraseDue) {
-    sendBlock(`P|${tempo}|${reset ? 1 : 0}|${phraseBody}`);
-    phraseSent = phraseBody;
+    sendBlock(sameBody ? `K|${tempo}` : `P|${tempo}|${reset ? 1 : 0}|${phraseBody}`);
+    if (!sameBody) phraseSent = phraseBody;
     sentMs = now;
   }
   if (phraseDue || deck !== deckSent) {
@@ -265,7 +267,6 @@ const frame = new Uint8Array(WIDTH * HEIGHT);
 let paintProject: Project | null = null;
 let paintUi: UiState | null = null;
 let paintPlaying = false;
-let paintStep = -1;
 let paintLatch = "";
 let paintLoad = -1;
 let paintNotice = false;
@@ -293,9 +294,17 @@ let chromeWidth = -2;
 let chromeBar = Number.NaN;
 let pulseClock: PulseClock = PULSE_CLOCK_IDLE;
 
-function screenChanged(): boolean {
+function blitColumns(pixels: Uint8Array, xs: readonly number[], y0: number, y1: number): void {
+  const pixel = (globalThis as HostGlobals).set_pixel;
+  if (!pixel) return;
+  for (const x of xs) {
+    if (x < 0 || x >= WIDTH) continue;
+    for (let y = y0; y <= y1; y++) pixel(x, y, pixels[y * WIDTH + x] ? 1 : 0);
+  }
+}
+
+function screenDelta(): "same" | "full" | "head" {
   const ui = session.ui;
-  const step = session.playing ? Math.floor(Math.max(0, session.tick)) : Math.floor(Math.max(0, session.tick) / 48);
   const now = Date.now();
   const notice = !!(ui.notice && now < ui.notice.untilMs);
   const hint = !!(ui.randomizeHint && now < ui.randomizeHint.untilMs);
@@ -305,27 +314,25 @@ function screenChanged(): boolean {
   const latch = Math.round(session.project.progression.count) <= 0 ? latchStamp() : "";
   const deckFrame = deckVisible(ui) ? Math.floor(Math.max(0, session.tick)) : -1;
   const titleKey = pageTitlePaintKey(ui, now);
-  if (
-    paintProject === session.project &&
-    paintUi === ui &&
-    paintPlaying === session.playing &&
-    paintStep === step &&
-    paintNotice === notice &&
-    paintHint === hint &&
-    paintCapture === capture &&
-    paintFocus === focus &&
-    paintPeek === peek &&
-    paintLatch === latch &&
-    paintDeckFrame === deckFrame &&
-    paintLoad === audioLoad &&
-    paintTitleKey === titleKey
-  ) {
-    return false;
+  const pictureSame = paintProject === session.project
+    && paintUi === ui
+    && paintPlaying === session.playing
+    && paintNotice === notice
+    && paintHint === hint
+    && paintCapture === capture
+    && paintFocus === focus
+    && paintPeek === peek
+    && paintLatch === latch
+    && paintDeckFrame === deckFrame
+    && paintLoad === audioLoad
+    && paintTitleKey === titleKey;
+  if (pictureSame) {
+    if (!session.playing || deckVisible(ui)) return "same";
+    return "head";
   }
   paintProject = session.project;
   paintUi = ui;
   paintPlaying = session.playing;
-  paintStep = step;
   paintNotice = notice;
   paintHint = hint;
   paintCapture = capture;
@@ -335,7 +342,7 @@ function screenChanged(): boolean {
   paintDeckFrame = deckFrame;
   paintLoad = audioLoad;
   paintTitleKey = titleKey;
-  return true;
+  return "full";
 }
 
 function ledsChanged(): boolean {
@@ -629,7 +636,13 @@ function paint(): void {
   if (deckVisible(session.ui) && !deckOverlay(session.ui, now)) paintDeckFast(now);
   else {
     deckFastLatched = false;
-    if (screenChanged()) paintScreen();
+    const delta = screenDelta();
+    if (delta === "full") paintScreen();
+    else if (delta === "head") {
+      const moved = nudgePlayhead(frame, session.tick);
+      if (moved.kind === "repaint") paintScreen();
+      else if (moved.kind === "moved") blitColumns(frame, moved.xs, moved.y0, moved.y1);
+    }
   }
   if (ledsChanged()) paintLeds();
 }
@@ -693,7 +706,6 @@ export function init(): void {
   paintProject = null;
   paintUi = null;
   paintPlaying = false;
-  paintStep = -1;
   paintNotice = false;
   paintHint = false;
   paintCapture = false;

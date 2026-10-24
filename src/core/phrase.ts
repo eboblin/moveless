@@ -42,7 +42,6 @@ import {
   type TimedEvent,
 } from "./types.ts";
 
-let idleProject: Project | null = null;
 let idleA = 0;
 let idleB = 0;
 let idlePhrase: Phrase | null = null;
@@ -97,6 +96,12 @@ function stampGlobal(mix: (n: number) => void, text: (s: string) => void, projec
     mix(project.macros[id] ?? 0);
   }
   for (const lane of LANES) mix(project.lock[lane] ? 1 : 0);
+  for (const lane of LANES) {
+    mix(project.mixer[lane]);
+    mix(project.mute[lane] ? 1 : 0);
+    mix(project.solo[lane] ? 1 : 0);
+  }
+  mix(project.mixer.master);
   for (const key of PROGRESSION_KEYS) mix(project.progression[key]);
   if (Math.round(project.progression.count) <= 0) text(latchStamp());
 }
@@ -196,9 +201,8 @@ function chordToneMidi(
 
 export function generatePhrase(project: Project): Phrase {
   const [a, b] = idleStamp(project);
-  if (project === idleProject && a === idleA && b === idleB && idlePhrase) return idlePhrase;
+  if (a === idleA && b === idleB && idlePhrase) return idlePhrase;
   const phrase = phraseOf(project, project.working);
-  idleProject = project;
   idleA = a;
   idleB = b;
   idlePhrase = phrase;
@@ -206,27 +210,33 @@ export function generatePhrase(project: Project): Phrase {
 }
 
 function phraseOf(project: Project, working: Lanes): Phrase {
-  const assemble = (): Phrase => {
-    const { global, macros, lock } = project;
-    const bassSteps = laneSteps(working, "bass", global);
-    const leadSteps = laneSteps(working, "lead", global);
-    const chordSteps = sixteenthSteps(global.phrase, global.bar);
-    const harmony = generateHarmony(project.progression, global, Math.max(bassSteps, leadSteps, chordSteps));
-    const lanes = {} as Phrase["lanes"];
-    const steps = {} as Phrase["steps"];
-    for (const lane of LANES) {
-      steps[lane] = laneSteps(working, lane, global);
-      lanes[lane] = eventsFor(working, lane, global, lock[lane] ? {} : macros, harmony, steps[lane]);
-    }
-    return { lanes, harmony, steps };
-  };
-  const dry = assemble();
+  soundHold = null;
+  const { global, macros, lock } = project;
+  const bassSteps = laneSteps(working, "bass", global);
+  const leadSteps = laneSteps(working, "lead", global);
+  const chordSteps = sixteenthSteps(global.phrase, global.bar);
+  const harmony = generateHarmony(project.progression, global, Math.max(bassSteps, leadSteps, chordSteps));
+  const lanes = {} as Phrase["lanes"];
+  const steps = {} as Phrase["steps"];
+  const voiced = new Set<LaneId>();
+  for (const lane of LANES) {
+    steps[lane] = laneSteps(working, lane, global);
+    if (laneUsesVoice(working, lane)) voiced.add(lane);
+    lanes[lane] = eventsFor(working, lane, global, lock[lane] ? {} : macros, harmony, steps[lane]);
+  }
+  const dry = { lanes, harmony, steps };
   const sources = voiceSources(working);
   if (sources.size === 0) return dry;
   const tempo = Math.max(1, project.global.tempo);
   const tables = dryTables(project, dry, sources, tempo);
   const sixteenth = tickToSample(SIXTEENTH_TICKS, tempo);
-  const wet = hearVoices((pattern, step) => voiceEnvAt(tables, pattern, step * sixteenth), assemble);
+  const wetLanes = { ...lanes };
+  hearVoices((pattern, step) => voiceEnvAt(tables, pattern, step * sixteenth), () => {
+    for (const lane of voiced) {
+      wetLanes[lane] = eventsFor(working, lane, global, lock[lane] ? {} : macros, harmony, steps[lane]);
+    }
+  });
+  const wet = { lanes: wetLanes, harmony, steps };
   tablesOn.set(wet, tables);
   return wet;
 }
@@ -287,6 +297,15 @@ function voiceSources(working: Lanes): Set<LaneId> {
   };
   for (const id of LANES) takeLane(working, id, take);
   return need;
+}
+
+/** This lane reads a voice, so its notes are built again once the dry envelopes exist. */
+function laneUsesVoice(working: Lanes, id: LaneId): boolean {
+  let hit = false;
+  takeLane(working, id, (knob) => {
+    if (voiced(knob)) hit = true;
+  });
+  return hit;
 }
 
 function takeLane(
@@ -424,14 +443,35 @@ function macro(macros: Record<string, number>, id: string): number {
   return macroOffset(id, macros);
 }
 
-function soundValues(
-  sound: Record<string, { value: number; pattern: number; cycle: number; amount: number }>,
-  step: number,
-  macros: Record<string, number>,
-): Record<string, number> {
+type SoundKnobs = Record<string, { value: number; pattern: number; cycle: number; amount: number }>;
+
+let soundHold: { sound: SoundKnobs; macros: Record<string, number>; read: (step: number) => Record<string, number> } | null = null;
+
+function evalSound(sound: SoundKnobs, keys: readonly string[], step: number, macros: Record<string, number>): Record<string, number> {
   const out: Record<string, number> = {};
-  for (const id of Object.keys(sound)) out[id] = evalModulated(withMacro(sound[id], soundMacro(id, macros)), step);
+  for (const id of keys) out[id] = evalModulated(withMacro(sound[id], soundMacro(id, macros)), step);
   return out;
+}
+
+/** One key list per sound object. A lane with no live amount shares a single record across its notes. */
+function bindSound(sound: SoundKnobs, macros: Record<string, number>): (step: number) => Record<string, number> {
+  const keys = Object.keys(sound);
+  let varies = false;
+  for (const id of keys) {
+    if ((sound[id]?.amount ?? 0) !== 0) varies = true;
+  }
+  if (!varies) {
+    const value = evalSound(sound, keys, 0, macros);
+    return () => value;
+  }
+  return (step) => evalSound(sound, keys, step, macros);
+}
+
+function soundValues(sound: SoundKnobs, step: number, macros: Record<string, number>): Record<string, number> {
+  if (!soundHold || soundHold.sound !== sound || soundHold.macros !== macros) {
+    soundHold = { sound, macros, read: bindSound(sound, macros) };
+  }
+  return soundHold.read(step);
 }
 
 function filterValues(filter: LaneFilter, step: number, macros: Record<string, number>): TimedEvent["filter"] {
@@ -664,6 +704,7 @@ function fillSlice(
     const tail = end - phraseTicks;
     if (tail > 0) ranges.push([0, Math.min(phraseTicks, tail)]);
   }
+  const rateAt = rateAlong(lane, macros);
   for (const [from, to] of ranges) {
     if (to - from < 1) continue;
     for (const harm of harmony) {
@@ -672,17 +713,16 @@ function fillSlice(
       if (b - a < 1) continue;
       const notes = walkChord({ ...harm, startTick: a, lengthTicks: b - a }, (tick) => {
         const step = tick / SIXTEENTH_TICKS;
-        const rateU = evalModulated(withMacro(lane.rate, macro(macros, "rate")), step);
         const gateU = evalModulated(withMacro(lane.gate, macro(macros, "gate")), step);
         const toneU = evalModulated(withMacro(lane.tone, macro(macros, "tone")), step);
         const octaveU = evalModulated(withMacro(lane.octave, macro(macros, "octave")), step);
         return {
-          ...chordFigure(rateU),
+          ...rateAt(tick),
           gate: gateU,
           note: chordToneMidi(harm, scale, rootPc, toneU, octaveU),
           voices: chordVoices(harm, scale, rootPc, octaveU),
         };
-      }, {
+      }, rateAt, {
         block: blockKept,
         note: (tick, note) => rollChance(chanceAt(lane, macros, tick / SIXTEENTH_TICKS), global.seed, "note", tick, note),
       });
@@ -732,6 +772,7 @@ function rollChance(probability: number, seed: number, ...salt: (string | number
 function walkChord(
   harm: HarmonicEvent,
   at: (tick: number) => FigureAt,
+  rateAt: (tick: number) => ChordFigure,
   hear: { block: boolean; note: (tick: number, note: number) => boolean },
 ): { note: number; delay: number; lengthTicks: number }[] {
   const length = harm.lengthTicks;
@@ -740,7 +781,7 @@ function walkChord(
   while (cursor < length) {
     const now = at(harm.startTick + cursor);
     if (now.mode === "block" || now.ticks <= 0) {
-      const end = blockEnd(cursor, length, harm.startTick, at);
+      const end = blockEnd(cursor, length, harm.startTick, rateAt);
       const room = Math.max(1, end - cursor);
       if (hear.block) {
         for (const note of now.voices) hits.push({ note, delay: cursor, lengthTicks: room });
@@ -758,11 +799,25 @@ function walkChord(
   return hits;
 }
 
+/** One rate figure per tick. A block scans sixteenths and only needs this, not gate or voices. */
+function rateAlong(lane: ChordLane, macros: Record<string, number>): (tick: number) => ChordFigure {
+  const cache = new Map<number, ChordFigure>();
+  return (tick) => {
+    const hit = cache.get(tick);
+    if (hit) return hit;
+    const step = tick / SIXTEENTH_TICKS;
+    const rateU = evalModulated(withMacro(lane.rate, macro(macros, "rate")), step);
+    const figure = chordFigure(rateU);
+    cache.set(tick, figure);
+    return figure;
+  };
+}
+
 /** Leave a block on the sixteenth where rate steps out of it. */
-function blockEnd(cursor: number, length: number, start: number, at: (tick: number) => FigureAt): number {
+function blockEnd(cursor: number, length: number, start: number, rateAt: (tick: number) => ChordFigure): number {
   let tick = Math.min(length, cursor + SIXTEENTH_TICKS);
   while (tick < length) {
-    const later = at(start + tick);
+    const later = rateAt(start + tick);
     if (later.mode !== "block" && later.ticks > 0) return tick;
     tick = Math.min(length, tick + SIXTEENTH_TICKS);
   }

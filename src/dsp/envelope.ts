@@ -145,6 +145,8 @@ function hitLevel(event: EnvelopeHit, age: number, tempo: number): number {
 }
 
 const ENV_HOP = 128;
+/** Same ceiling as the device. The hop doubles until the table fits. */
+const ENV_CAP = 8192;
 
 /** One lane, held between hops. Sample 0 and every hop boundary match `laneEnvelopeAt`. */
 export interface EnvelopeTable {
@@ -158,12 +160,19 @@ export interface EnvelopeTable {
  * the whole phrase per sample and per pixel; that overran the block and froze the UI.
  */
 export function envelopeTable(events: readonly EnvelopeHit[], lane: LaneId, tempo = 120, hop = ENV_HOP): EnvelopeTable {
-  const step = Math.max(1, Math.round(hop));
+  let step = Math.max(1, Math.round(hop));
   let loop = 1;
   for (const event of events) {
     if (event.lane === lane && event.loop > loop) loop = event.loop;
   }
-  const values = new Float32Array(Math.max(1, Math.ceil(loop / step)));
+  let n = Math.max(1, Math.ceil(loop / step));
+  while (n > ENV_CAP && step < loop && step < 0x40000000) {
+    step *= 2;
+    n = Math.ceil(loop / step);
+  }
+  if (n > ENV_CAP) n = ENV_CAP;
+  if (n < 1) n = 1;
+  const values = new Float32Array(n);
   for (const event of events) {
     if (event.lane !== lane) continue;
     const shape = shapeOf(event, tempo);
@@ -173,6 +182,7 @@ export function envelopeTable(events: readonly EnvelopeHit[], lane: LaneId, temp
       const level = shapeLevel(shape, age);
       if (age > 0 && level <= 0) break;
       const bin = Math.floor(((origin + age) % loop) / step);
+      if (bin < 0 || bin >= n) continue;
       const prev = values[bin] ?? 0;
       if (level > prev) values[bin] = level;
     }

@@ -122,6 +122,7 @@ export function renderScreen(
   const bars = !notice && !mixer && !decking && page?.id === "prog";
   const viz = notice ? "notice" : mixer ? "mixer" : decking ? "deck" : generator ? "generator" : vizLane || bars ? "phrase" : "none";
   pixels.fill(0);
+  clearPlayhead();
   const pageMark = Math.min(pageIndex, Math.max(0, pages.length - 1));
   const pageCount = pages.length;
   if (ui.wheelTouch) drawPager(pixels, pageMark, pageCount);
@@ -142,6 +143,7 @@ export function renderScreen(
   else if (chordRoll && phrase) drawChordRoll(pixels, phrase, playhead);
   else if (vizLane && phrase) drawPhrase(pixels, project, phrase, vizLane, playhead);
   else if (decking) drawDeck(pixels, project, ui, tick, wave);
+  if (playing && phrase && !notice && !mixer && !decking) armViz(project, phrase, vizLane, chordRoll, bars, generator, tick);
   const deckFocus = decking ? (focus ?? effectTitle) : focus;
   const labels = mixer
     ? [{ x: 1, y: TITLE_Y, text: header.slice(0, LINE_LIMIT) }, ...mixerChannelLabels(project, focus)]
@@ -520,7 +522,7 @@ function drawGenerator(pixels: Uint8Array, project: Project, phrase: Phrase, con
   }
   if (playhead >= 0) {
     const pos = ((playhead % steps) + steps) % steps;
-    const x = Math.min(WIDTH - 1, Math.floor((pos * WIDTH) / steps));
+    const x = columnX(pos, steps);
     for (let y = yTop; y <= yBottom; y++) toggle(pixels, x, y);
   }
 }
@@ -675,8 +677,116 @@ function patternSteps(project: Project, lane: LaneId): number | null {
 }
 
 function paintPlayhead(pixels: Uint8Array, pos: number, steps: number, yTop: number, yBottom: number): void {
-  const x = Math.min(WIDTH - 1, Math.floor((pos * WIDTH) / steps));
+  const x = columnX(pos, steps);
   for (let y = yTop; y <= yBottom; y++) toggle(pixels, x, y);
+}
+
+function columnX(pos: number, steps: number): number {
+  const span = Math.max(1, steps);
+  const wrapped = wrapStep(pos, span);
+  return Math.min(WIDTH - 1, Math.floor((wrapped * WIDTH) / span));
+}
+
+const VIZ_TOP = HEADER_H;
+const VIZ_BOTTOM = HEADER_H + VIZ_H - 2;
+
+interface PlayheadWatch {
+  y0: number;
+  y1: number;
+  columnAt: (tick: number) => number | "repaint";
+}
+
+let playheadWatch: PlayheadWatch | null = null;
+let playheadX = -1;
+
+function clearPlayhead(): void {
+  playheadWatch = null;
+  playheadX = -1;
+}
+
+function armPlayhead(watch: PlayheadWatch, tick: number): void {
+  playheadWatch = watch;
+  const column = watch.columnAt(tick);
+  playheadX = column === "repaint" ? -1 : column;
+}
+
+/** Move the lit column. The picture underneath stays. A morph window that rolled asks for a full frame. */
+export function nudgePlayhead(
+  pixels: Uint8Array,
+  tick: number,
+): { kind: "idle" } | { kind: "same" } | { kind: "repaint" } | { kind: "moved"; xs: number[]; y0: number; y1: number } {
+  if (!playheadWatch) return { kind: "idle" };
+  const column = playheadWatch.columnAt(tick);
+  if (column === "repaint") return { kind: "repaint" };
+  if (column === playheadX) return { kind: "same" };
+  const prev = playheadX;
+  const y0 = playheadWatch.y0;
+  const y1 = playheadWatch.y1;
+  if (prev >= 0) flipColumn(pixels, prev, y0, y1);
+  if (column >= 0) flipColumn(pixels, column, y0, y1);
+  playheadX = column;
+  const xs: number[] = [];
+  if (prev >= 0) xs.push(prev);
+  if (column >= 0 && column !== prev) xs.push(column);
+  return { kind: "moved", xs, y0, y1 };
+}
+
+function flipColumn(pixels: Uint8Array, x: number, y0: number, y1: number): void {
+  for (let y = y0; y <= y1; y++) toggle(pixels, x, y);
+}
+
+function watchColumn(project: Project, steps: number, tick: number): void {
+  const span = Math.max(1, steps);
+  armPlayhead({
+    y0: VIZ_TOP,
+    y1: VIZ_BOTTOM,
+    columnAt(next) {
+      return columnX(stepAt(project, next), span);
+    },
+  }, tick);
+}
+
+/** Lane picture follows the morph window. Crossing into the next window needs a new drawing. */
+function watchLane(project: Project, phrase: Phrase, lane: LaneId, tick: number): void {
+  const full = Math.max(1, phrase.steps[lane]);
+  const width = patternSteps(project, lane);
+  const windowed = width != null && width < full;
+  const playhead = stepAt(project, tick);
+  const cursor = playhead < 0 ? 0 : ((playhead % full) + full) % full;
+  const origin = windowed ? Math.floor(cursor / width) * width : 0;
+  const span = windowed ? width : full;
+  armPlayhead({
+    y0: VIZ_TOP,
+    y1: VIZ_BOTTOM,
+    columnAt(next) {
+      const at = stepAt(project, next);
+      if (!windowed || width == null) return columnX(at, span);
+      const nextCursor = ((at % full) + full) % full;
+      const nextOrigin = Math.floor(nextCursor / width) * width;
+      if (nextOrigin !== origin) return "repaint";
+      return columnX(nextCursor - nextOrigin, span);
+    },
+  }, tick);
+}
+
+function armViz(
+  project: Project,
+  phrase: Phrase,
+  vizLane: LaneId | null,
+  chordRoll: boolean,
+  bars: boolean,
+  generator: string | null,
+  tick: number,
+): void {
+  if (generator && vizLane) {
+    watchColumn(project, laneSteps(project.working, vizLane, project.global), tick);
+    return;
+  }
+  if (bars || chordRoll) {
+    watchColumn(project, phrase.steps.chords, tick);
+    return;
+  }
+  if (vizLane) watchLane(project, phrase, vizLane, tick);
 }
 
 /** Keep a time inside one lane loop. A ratchet or repeat past the end returns to the start. */
@@ -695,6 +805,8 @@ interface Glyph {
   x1: number;
 }
 
+let glyphMemo: { events: TimedEvent[]; steps: number; melodic: boolean; collapse: boolean; glyphs: Glyph[] } | null = null;
+
 /**
  * Place every onset on the 128px strip.
  * Simultaneous notes stay on one column (a monophonic lane keeps the loudest).
@@ -702,6 +814,13 @@ interface Glyph {
  * A note that would run into the next attack stops one pixel short of it.
  */
 function layoutGlyphs(events: TimedEvent[], steps: number, melodic: boolean, collapse: boolean): Glyph[] {
+  if (
+    glyphMemo
+    && glyphMemo.events === events
+    && glyphMemo.steps === steps
+    && glyphMemo.melodic === melodic
+    && glyphMemo.collapse === collapse
+  ) return glyphMemo.glyphs;
   const source = collapse ? collapseSameOnset(events, steps) : events;
   const glyphs: Glyph[] = source.map((event) => {
     const step = wrapStep(event.tick / SIXTEENTH_TICKS, steps);
@@ -712,6 +831,7 @@ function layoutGlyphs(events: TimedEvent[], steps: number, melodic: boolean, col
   glyphs.sort((a, b) => a.at - b.at || a.x0 - b.x0 || a.event.tick - b.event.tick || a.event.note - b.event.note);
   separateOnsets(glyphs, steps);
   fitWidths(glyphs, melodic);
+  glyphMemo = { events, steps, melodic, collapse, glyphs };
   return glyphs;
 }
 

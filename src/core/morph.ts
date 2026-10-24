@@ -2,7 +2,7 @@ import { PPQN, SIXTEENTH_TICKS, sixteenthSteps, ticksPerBar } from "./clock.ts";
 import { clone } from "./clone.ts";
 import { phraseStepsOf } from "./events.ts";
 import { fieldsOf, getPath, setPath } from "./fields.ts";
-import { isDrum, isPitched, TRANSITION_BARS, type GlobalSettings, type Lanes, type MorphState, type PatternId, type Project, type Scene, type TransitionId } from "./types.ts";
+import { isDrum, isPitched, PATTERN_LANES, TRANSITION_BARS, type GlobalSettings, type Lanes, type MorphState, type PatternId, type Project, type Scene, type TransitionId } from "./types.ts";
 
 export function quantizeStart(tick: number, transition: TransitionId, beatsPerBar: number): number {
   const grid = transition === "now" ? ticksPerBar(1) / 4 : ticksPerBar(beatsPerBar);
@@ -307,7 +307,11 @@ function copyLane(into: Lanes, from: Lanes, lane: PatternId): void {
 }
 
 export function punch(project: Project, path: string, value: number): Project {
-  const working = clone(project.working);
+  const dot = path.indexOf(".");
+  const head = dot < 0 ? "" : path.slice(0, dot);
+  const lane = (PATTERN_LANES as readonly string[]).includes(head) ? head as PatternId : null;
+  const working = lane ? { ...project.working } : clone(project.working);
+  if (lane) copyLane(working, project.working, lane);
   setPath(working, path, value);
   if (!project.morph) return { ...project, working };
   const punched = project.morph.punched.includes(path) ? project.morph.punched : [...project.morph.punched, path];

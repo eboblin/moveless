@@ -80,17 +80,37 @@ const MELODY: Record<string, string> = {
   env: "env",
 };
 
-export function mapSound(lane: LaneId, sound: Record<string, number>): EngineParam[] {
-  if (lane === "bass" || lane === "lead" || lane === "chords") {
-    const table = MELODY;
-    return Object.keys(sound).sort().map((id) => ({ id: table[id] ?? id, value: clamp(sound[id] ?? 0) }));
+const MELODY_KEYS = Object.keys(MELODY);
+const DRUM_KEYS: Record<DrumId, readonly string[]> = {
+  kick: Object.keys(DRUM_SUFFIX.kick),
+  snare: Object.keys(DRUM_SUFFIX.snare),
+  hat: Object.keys(DRUM_SUFFIX.hat),
+  perc: Object.keys(DRUM_SUFFIX.perc),
+};
+
+function pushSound(out: EngineParam[], table: Record<string, string>, prefix: string, keys: readonly string[], sound: Record<string, number>): void {
+  for (const id of keys) {
+    const value = sound[id];
+    if (typeof value !== "number") continue;
+    const mapped = table[id] ?? id;
+    out.push({ id: prefix ? `${prefix}_${mapped}` : mapped, value: clamp(value) });
   }
-  const voice = VOICE[lane];
-  const table = DRUM_SUFFIX[lane];
-  return Object.keys(sound).sort().map((id) => ({
-    id: `${voice}_${table[id] ?? id}`,
-    value: clamp(sound[id] ?? 0),
-  }));
+  for (const id in sound) {
+    if (Object.prototype.hasOwnProperty.call(table, id)) continue;
+    const value = sound[id];
+    if (typeof value !== "number") continue;
+    out.push({ id: prefix ? `${prefix}_${id}` : id, value: clamp(value) });
+  }
+}
+
+export function mapSound(lane: LaneId, sound: Record<string, number>): EngineParam[] {
+  const out: EngineParam[] = [];
+  if (lane === "bass" || lane === "lead" || lane === "chords") {
+    pushSound(out, MELODY, "", MELODY_KEYS, sound);
+    return out;
+  }
+  pushSound(out, DRUM_SUFFIX[lane], VOICE[lane], DRUM_KEYS[lane], sound);
+  return out;
 }
 
 /** Lane filter. Plain ids so drums do not pick up a voice prefix. */

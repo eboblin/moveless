@@ -3132,6 +3132,8 @@ static void set_param(void *instance, const char *key, const char *val) {
         deck_apply_text(engine, val);
         return;
     }
+    /* Keepalive. The phrase already playing stays; do not parse or replace it. */
+    if (val[0] == 'K') return;
     if (val[0] == 'P' || val[0] == 'S') {
         snprintf(engine->phrase_text, PHRASE_TEXT, "%s", val);
         engine->phrase_pending = 1;
