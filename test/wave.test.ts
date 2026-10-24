@@ -7,8 +7,8 @@ import { LANES, type LaneId } from "../src/core/types.ts";
 import { createDeckRuntime, formatWavePage, noteDeck, parseWavePage, pastColumns } from "../src/dsp/deck.ts";
 import { createEngine, loadPhrase, placeClock, renderDryBlock } from "../src/dsp/voice.ts";
 import { WIDTH } from "../src/ui/screen.ts";
-import { applyWavePages, drawWaveform, emptyWave, waveAt, wavePeak, WAVE_HOP, type WaveTape } from "../src/ui/wave.ts";
-import { resetWaveform, serviceWaveform, waveformTape } from "../src/ui/wave-audio.ts";
+import { applyWavePages, drawWaveform, emptyWave, strokeWaveform, waveAt, wavePeak, WAVE_HOP, type WaveTape } from "../src/ui/wave.ts";
+import { resetWaveform, serviceWaveform, waveformPasses, waveformTape } from "../src/ui/wave-audio.ts";
 
 function pixelsOf(tape: WaveTape, head: number): Uint8Array {
   const pixels = new Uint8Array(WIDTH * 32);
@@ -223,6 +223,47 @@ describe("waveform", () => {
     assert.ok(open > tight + 0.15, `tight ${tight} open ${open}`);
   });
 
+  it("reuses the past buffer for the same ring text", () => {
+    const cols = Array.from({ length: 64 }, () => ({ left: 0.2, right: 0.1 }));
+    const pages = [formatWavePage(0, 1000, 8000, cols), formatWavePage(1, 1000, 8000, cols)];
+    const tape = emptyWave();
+    applyWavePages(tape, pages);
+    const past = tape.past;
+    applyWavePages(tape, pages);
+    assert.equal(tape.past, past);
+    const louder = cols.map((col, index) => (index === 0 ? { left: 0.9, right: 0.1 } : col));
+    applyWavePages(tape, [formatWavePage(0, 1000, 8000, louder), pages[1] ?? null]);
+    assert.equal(tape.past, past);
+    assert.ok((tape.past?.[0]?.left ?? 0) > 0.8);
+  });
+
+  it("strokes the same pixels as the platter buffer", () => {
+    const tape = emptyWave(WAVE_HOP, 8192);
+    tape.left.set(0, 1);
+    tape.right.set(4096, 0.25);
+    const view = { x: 0, y: 0, w: WIDTH, h: 32, head: 4096, span: 8192, stylus: true };
+    const drawn = new Uint8Array(WIDTH * 32);
+    drawWaveform(drawn, WIDTH, tape, view);
+    const stroked = new Uint8Array(WIDTH * 32);
+    strokeWaveform(
+      tape,
+      view,
+      (x, y, w, h, value) => {
+        for (let yy = 0; yy < h; yy++) {
+          for (let xx = 0; xx < w; xx++) {
+            const px = x + xx;
+            const py = y + yy;
+            if (px >= 0 && py >= 0 && px < WIDTH && py < 32) stroked[py * WIDTH + px] = value;
+          }
+        }
+      },
+      (x, y, value) => {
+        if (x >= 0 && y >= 0 && x < WIDTH && y < 32) stroked[y * WIDTH + x] = value;
+      },
+    );
+    assert.deepEqual(stroked, drawn);
+  });
+
   it("keeps the collage when a deck knob moves", () => {
     resetWaveform();
     const project = defaultProject();
@@ -230,6 +271,27 @@ describe("waveform", () => {
     const decked = clone(project);
     decked.deck.div = decked.deck.div === 0 ? 1 : 0;
     assert.equal(serviceWaveform(decked), tape);
+    assert.equal(serviceWaveform(project), tape);
+    const passes = waveformPasses();
+    const spread = { ...project, deck: { ...project.deck, div: project.deck.div === 0 ? 1 : 0 } };
+    assert.equal(serviceWaveform(spread), tape);
+    assert.equal(waveformPasses(), passes);
+    const morphing = {
+      ...spread,
+      morph: {
+        start: spread.working,
+        targetId: "001",
+        originTick: 0,
+        durationTicks: 768,
+        punched: [],
+        lanes: null,
+        t: 0,
+      },
+    };
+    const stepped = { ...morphing, working: { ...spread.working } };
+    assert.equal(serviceWaveform(morphing), tape);
+    assert.equal(serviceWaveform(stepped), tape);
+    assert.equal(waveformPasses(), passes);
     const quieter = clone(project);
     quieter.mixer = { ...quieter.mixer, master: 0 };
     const rebuilt = serviceWaveform(quieter);

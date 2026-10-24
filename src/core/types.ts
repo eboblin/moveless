@@ -284,7 +284,7 @@ export interface MorphState {
   punched: string[];
   /** Null moves every unlocked lane. A list is the wander step's subset. */
   lanes: PatternId[] | null;
-  /** 0 before originTick, then the morph clock. Pad lamps read this. */
+  /** Progress stored when the lanes last moved. Pad lamps read the clock via morphProgress. */
   t: number;
 }
 

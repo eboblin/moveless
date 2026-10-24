@@ -21,6 +21,8 @@ export function morphProgress(morph: MorphState, tick: number): number {
 }
 
 const fieldMemo = new WeakMap<Lanes, ReturnType<typeof fieldsOf>>();
+/** Next tick at which this morph can change a lane. Idle ticks return the same project. */
+const nextApply = new WeakMap<MorphState, number>();
 const LERP_STEPS = 4;
 
 function memoFields(lanes: Lanes) {
@@ -40,17 +42,36 @@ function switchTick(origin: number, end: number, periodTicks: number): number {
   return next <= end ? next : end;
 }
 
+function lerpMark(origin: number, end: number, step: number): number {
+  const span = end - origin;
+  if (step >= LERP_STEPS) return end;
+  const ideal = (span * step) / LERP_STEPS;
+  return origin + Math.min(span, Math.ceil(ideal / SIXTEENTH_TICKS) * SIXTEENTH_TICKS);
+}
+
 function lerpAt(from: number, to: number, tick: number, origin: number, end: number): number {
   if (tick < origin) return from;
   if (end <= origin || tick >= end) return to;
-  const span = end - origin;
   let k = 0;
   for (let i = 1; i <= LERP_STEPS; i++) {
-    const ideal = (span * i) / LERP_STEPS;
-    const snapped = i === LERP_STEPS ? span : Math.ceil(ideal / SIXTEENTH_TICKS) * SIXTEENTH_TICKS;
-    if (tick >= origin + Math.min(span, snapped)) k = i;
+    if (tick >= lerpMark(origin, end, i)) k = i;
   }
   return from + (to - from) * (k / LERP_STEPS);
+}
+
+/** First tick strictly after `tick` where this field can take a new value. */
+function nextFieldTick(kind: MorphKind, tick: number, origin: number, end: number, periodTicks: number): number {
+  if (tick < origin) return origin;
+  if (end <= origin || tick >= end) return end;
+  if (kind === "lerp") {
+    for (let i = 1; i <= LERP_STEPS; i++) {
+      const at = lerpMark(origin, end, i);
+      if (at > tick) return at;
+    }
+    return end;
+  }
+  const at = switchTick(origin, end, periodTicks);
+  return at > tick ? at : end;
 }
 
 function lanePeriodTicks(start: Lanes, lane: PatternId, global: GlobalSettings): number {
@@ -99,6 +120,7 @@ export function mergeLanes(
   const periods = new Map<PatternId, number>();
   const writes: { path: string; value: number }[] = [];
   const dirty = new Set<PatternId>();
+  let nextTick = end;
   for (const field of from) {
     const lane = field.path.split(".")[0] as PatternId;
     if (lock[lane] || (mask && !mask.has(lane)) || punched.has(field.path)) continue;
@@ -110,11 +132,16 @@ export function mergeLanes(
       periods.set(lane, period);
     }
     const grid = field.path.endsWith(".pattern") || field.path.endsWith(".cycle") ? cycleTicks(start, field.path) : period;
+    if (field.value !== to) {
+      const at = nextFieldTick(field.kind, tick, origin, end, grid);
+      if (at < nextTick) nextTick = at;
+    }
     const value = fieldAt(field.kind, field.value, to, tick, origin, end, grid);
     if (getPath(current, field.path) === value) continue;
     dirty.add(lane);
     writes.push({ path: field.path, value });
   }
+  morphNextTick = nextTick;
   if (dirty.size === 0) return current;
   const next: Lanes = { ...current };
   for (const lane of dirty) copyLane(next, current, lane);
@@ -122,15 +149,34 @@ export function mergeLanes(
   return next;
 }
 
+/** Filled by the last `mergeLanes` call. Idle morph ticks sleep until here. */
+let morphNextTick = 0;
+
 export function applyMorph(project: Project, tick: number): Project {
-  if (!project.morph) return project;
-  const target = project.journal.find((scene) => scene.id === project.morph?.targetId);
-  if (!target) return { ...project, morph: null };
-  const t = morphProgress(project.morph, tick);
-  const punched = new Set(project.morph.punched);
-  const working = mergeLanes(project.morph.start, target.lanes, project.working, tick, project.morph, project.global, punched, project.lock);
-  const done = tick >= project.morph.originTick && t >= 1;
-  if (!done) return { ...project, working, morph: { ...project.morph, t } };
+  const morph = project.morph;
+  if (!morph) return project;
+  const end = morph.originTick + Math.max(0, morph.durationTicks);
+  const scheduled = nextApply.get(morph);
+  if (scheduled !== undefined && tick < scheduled && tick < end) return project;
+  const target = project.journal.find((scene) => scene.id === morph.targetId);
+  if (!target) {
+    nextApply.delete(morph);
+    return { ...project, morph: null };
+  }
+  const t = morphProgress(morph, tick);
+  const punched = new Set(morph.punched);
+  const working = mergeLanes(morph.start, target.lanes, project.working, tick, morph, project.global, punched, project.lock);
+  const done = tick >= morph.originTick && t >= 1;
+  if (!done) {
+    if (working === project.working) {
+      nextApply.set(morph, morphNextTick);
+      return project;
+    }
+    const stepped = { ...morph, t };
+    nextApply.set(stepped, morphNextTick);
+    return { ...project, working, morph: stepped };
+  }
+  nextApply.delete(morph);
   return {
     ...project,
     working,

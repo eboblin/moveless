@@ -560,15 +560,23 @@ const DECK_FACE: Record<DeckSlot, { label: string; min: number; max: number; ste
   open: { label: "OPN", min: 0, max: 5, step: 1, integer: true },
 };
 
-/** Knobs of the selected group. Depth is always the rightmost encoder. */
+const deckPageCache = new Map<string, Page>();
+
+/** Knobs of the selected group. Depth is always the rightmost encoder. The page is shared for a group and its slot layout. */
 export function deckPage(group: DeckGroup, knobs: DeckKnobs): Page {
+  const quant = Number.isFinite(knobs.quant) ? Math.max(0, Math.min(3, Math.round(knobs.quant))) : 0;
+  const key = group !== "stp" && quant === 1 ? `${group}:div` : group;
+  const hit = deckPageCache.get(key);
+  if (hit) return hit;
   const bindings = deckSlots(group, knobs).map((slot) => {
     if (!slot) return null;
     const face = DECK_FACE[slot];
     const label = slot === "row" ? rowKnobName(group) : face.label;
     return plain(`deck.${slot}`, label, face.min, face.max, face.step, face.integer, "deck");
   });
-  return page("deck", "DJ FX", [null, null], "bus", bindings);
+  const built = page("deck", "DJ FX", [null, null], "bus", bindings);
+  deckPageCache.set(key, built);
+  return built;
 }
 
 function rememberDeck(): void {

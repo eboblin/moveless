@@ -363,7 +363,22 @@ export function commitMacro(project: Project, key: string): Project {
 
 export function setDeck(project: Project, id: string, value: number): Project {
   if (!isDeckSlot(id)) return project;
-  return { ...project, deck: writeDeckKnob(project.deck, id, value, project.global.bar) };
+  const deck = writeDeckKnob(project.deck, id, value, project.global.bar);
+  if (deck === project.deck) return project;
+  return { ...project, deck };
+}
+
+/** Phrase and the platter collage ignore the deck. Same lanes, mix and globals mean the same sound. */
+export function sameHeard(a: Project, b: Project): boolean {
+  return a.working === b.working
+    && a.global === b.global
+    && a.macros === b.macros
+    && a.progression === b.progression
+    && a.mixer === b.mixer
+    && a.mute === b.mute
+    && a.solo === b.solo
+    && a.lock === b.lock
+    && a.bus === b.bus;
 }
 
 export function setBus(project: Project, id: keyof Bus, value: number): Project {

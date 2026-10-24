@@ -15,9 +15,12 @@ import {
   recallGroup,
   setGroupCell,
   assembleDeck,
+  readDeckSlot,
   writeDeckKnob,
   type DeckMoment,
 } from "../src/core/deck.ts";
+import { setDeck } from "../src/core/journal.ts";
+import { defaultProject } from "../src/core/defaults.ts";
 import { commandDeck, createDeckRuntime, hearDeck } from "../src/dsp/deck.ts";
 import { createEngine, renderClock } from "../src/dsp/voice.ts";
 
@@ -208,6 +211,17 @@ describe("deck curves", () => {
     assert.ok(Math.abs(small.pos - down) < Math.abs(baby.pos - down));
     const back = deckRead(moment({ gesture: "scr0", down, now: at, knobs: { ...knobs, ramp: 0 } }));
     assert.ok(back.pos < down);
+  });
+
+  it("returns the same knobs when the slot is already there", () => {
+    const deck = defaultDeck();
+    assert.equal(writeDeckKnob(deck, "depth", deck.depth, 4), deck);
+    const project = defaultProject();
+    const value = readDeckSlot(project.deck, "depth");
+    assert.equal(setDeck(project, "depth", value), project);
+    const moved = setDeck(project, "depth", value === 0 ? 0.5 : 0);
+    assert.notEqual(moved, project);
+    assert.equal(setDeck(moved, "depth", readDeckSlot(moved.deck, "depth")), moved);
   });
 
   it("remembers a division column on each group", () => {

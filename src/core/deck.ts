@@ -362,22 +362,55 @@ export function stickDeckFocus(deck: DeckKnobs, barBeats: number): DeckKnobs {
 
 /** A knob turn writes the shared value, and the focused group's cell when that knob is its column or row. */
 export function writeDeckKnob(deck: DeckKnobs, id: DeckSlot, value: number, barBeats: number): DeckKnobs {
-  const cells = copyCells(deck.cells.length === 8 ? deck.cells : defaultDeck().cells);
-  const next: DeckKnobs = { ...deck, cells };
-  if (id !== "row" && id !== "rate" && id !== "open") next[id] = value;
-  const group = focusedGroup(next);
-  const cell = { ...cells[groupIndex(group)] };
-  if (id === "div" && ownsDiv(group)) cell.x = pick(value, 6);
-  if (id === "brake" && ownsBrake(group)) cell.x = pick(value, 6);
+  const group = focusedGroup(deck);
+  const index = groupIndex(group);
+  const base = deck.cells.length === 8 ? deck.cells : defaultDeck().cells;
+  const prev = base[index] ?? { x: 0, y: 0 };
+  let x = prev.x;
+  let y = prev.y;
+  let div = deck.div;
+  let len = deck.len;
+  let depth = deck.depth;
+  let brake = deck.brake;
+  let vary = deck.vary;
+  let quant = deck.quant;
+  let duty = deck.duty;
+  let ramp = deck.ramp;
+  if (id === "div") div = value;
+  else if (id === "len") len = value;
+  else if (id === "depth") depth = value;
+  else if (id === "brake") brake = value;
+  else if (id === "vary") vary = value;
+  else if (id === "quant") quant = value;
+  else if (id === "duty") duty = value;
+  else if (id === "ramp") ramp = value;
+  if (id === "div" && ownsDiv(group)) x = pick(value, 6);
+  if (id === "brake" && ownsBrake(group)) x = pick(value, 6);
   if (id === "len" && group === "lop") {
-    cell.x = lenColumn(value, barBeats);
-    next.len = lenUnit(cell.x, barBeats);
+    x = lenColumn(value, barBeats);
+    len = lenUnit(x, barBeats);
   }
-  if (id === "row") cell.y = pick(value, 4);
-  if (id === "rate" && group === "pch") cell.x = pick(value, 6);
-  if (id === "open" && group === "thr") cell.x = pick(value, 6);
-  cells[groupIndex(group)] = cell;
-  return next;
+  if (id === "row") y = pick(value, 4);
+  if (id === "rate" && group === "pch") x = pick(value, 6);
+  if (id === "open" && group === "thr") x = pick(value, 6);
+  if (
+    deck.cells.length === 8 &&
+    prev.x === x &&
+    prev.y === y &&
+    deck.div === div &&
+    deck.len === len &&
+    deck.depth === depth &&
+    deck.brake === brake &&
+    deck.vary === vary &&
+    deck.quant === quant &&
+    deck.duty === duty &&
+    deck.ramp === ramp
+  ) {
+    return deck;
+  }
+  const cells = copyCells(base);
+  cells[index] = { x, y };
+  return { ...deck, cells, div, len, depth, brake, vary, quant, duty, ramp };
 }
 
 /** Old files stored a 7-step division and a 4-step brake. Map them onto the field. */

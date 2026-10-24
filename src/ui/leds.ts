@@ -280,6 +280,19 @@ function randomizeTouchesPage(project: Project, context: ContextId, index: numbe
  * Move palette colours 1–26 have dim/dark partners at 63+2c / 64+2c.
  * amount 0 = off; (0,1/3) = dark; [1/3,2/3) = dim; [2/3,1] = bright.
  */
+/**
+ * Lamp step while a morph is running. 0 is no morph. 1, 2 and 3 are the
+ * dark, dim and bright bands of {@link shadeColor}, including the armed floor.
+ */
+export function sceneShadeStep(project: Project, tick: number): number {
+  const morph = project.morph;
+  if (!morph) return 0;
+  const amount = Math.max(morphProgress(morph, tick), 1 / 6);
+  if (amount < 1 / 3) return 1;
+  if (amount < 2 / 3) return 2;
+  return 3;
+}
+
 export function shadeColor(color: number, amount: number): number {
   if (amount <= 0) return 0;
   if (color < 1 || color > 26) return amount >= 1 ? color : 0;

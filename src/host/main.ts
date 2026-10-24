@@ -1,7 +1,7 @@
 import { SAMPLE_RATE } from "../core/clock.ts";
 import { defaultProject } from "../core/defaults.ts";
 import { holdNote, latchStamp, releaseChannel, resetLatch, settleLatch } from "../core/latch.ts";
-import { advance, clampJournalPage, heardFx, journalPageCount, wanderCandidates } from "../core/performance.ts";
+import { advance, clampJournalPage, heardFx, journalPageCount, sameHeard, wanderCandidates } from "../core/performance.ts";
 import { generatePhrase } from "../core/phrase.ts";
 import { loadStoredProject, saveStoredProject, type HostFiles, type StoredUi } from "../core/persist.ts";
 import { phraseLoop, soundMotions } from "../dsp/schedule.ts";
@@ -10,7 +10,7 @@ import { assembleDeck, behaviorOf, formatDeckCommand, isDeckGroup } from "../cor
 import { formatBus, packPhraseBody } from "../dsp/voice.ts";
 import { midiMessage, reduce, settleTrackPeek, type Session } from "../ui/input.ts";
 import { CAPTURE_CC, DOWN_CC, MENU_CC, MUTE_CC, PLAY_CC, SAMPLE_CC, UP_CC } from "../core/types.ts";
-import { advancePulseClock, blinkHalfMs, directionLit, dropLed, ledColorAt, menuLed, modeButtonLed, offerLed, padBlinkSteps, padLeds, padPackets, playLed, PULSE_CLOCK_IDLE, stepLeds, takeLeds, trackLeds, type PulseClock } from "../ui/leds.ts";
+import { advancePulseClock, blinkHalfMs, directionLit, dropLed, ledColorAt, menuLed, modeButtonLed, offerLed, padBlinkSteps, padLeds, padPackets, playLed, PULSE_CLOCK_IDLE, sceneShadeStep, stepLeds, takeLeds, trackLeds, type PulseClock } from "../ui/leds.ts";
 import { plotAmount, plotMinus } from "../ui/digits.ts";
 import {
   CHAR_W,
@@ -19,15 +19,18 @@ import {
   HEADER_H,
   HEIGHT,
   PARAM_COL_W,
+  SEP_Y,
   WIDTH,
   VIZ_H,
   cellTextX,
+  deckFrame,
   loadWidth,
   pageTitlePaintKey,
   renderScreen,
+  type Screen,
 } from "../ui/screen.ts";
 import { resetWaveform, serviceWaveform } from "../ui/wave-audio.ts";
-import { applyWavePages, type WaveTape } from "../ui/wave.ts";
+import { applyWavePages, strokeWaveform, type WaveTape } from "../ui/wave.ts";
 import { pageId } from "../core/pages.ts";
 import { defaultUi, focusVisible, peekKind, rememberPage, settleWheel, type UiState } from "../ui/state.ts";
 import type { Project } from "../core/types.ts";
@@ -162,7 +165,8 @@ function syncVoice(reset: boolean): void {
   const boundary = morphing !== voiceMorph || step !== voiceStep;
   const latch = Math.round(session.project.progression.count) <= 0 ? latchStamp() : "";
   const latchChanged = latch !== phraseLatch;
-  if ((phraseProject !== session.project && (!morphing || boundary || reset)) || latchChanged) {
+  const heardSame = phraseProject !== null && sameHeard(phraseProject, session.project);
+  if ((!heardSame && (!morphing || boundary || reset)) || latchChanged) {
     const phrase = generatePhrase(session.project);
     phraseBody = packPhraseBody(
       phraseLoop(session.project, phrase),
@@ -271,10 +275,21 @@ let paintPeek: string | null = null;
 let paintDeckFrame = -1;
 let paintTitleKey = -1;
 let ledPhase = -1;
+let ledShade = -1;
 let ledProject: Project | null = null;
 let ledUi: UiState | null = null;
 let ledPlaying = false;
 let ledPeek: string | null = null;
+/** Deck fast path has drawn both bands since the last full paint. */
+let deckFastLatched = false;
+let deckColumn = Number.NaN;
+let deckSpan = Number.NaN;
+let deckTape: WaveTape | null = null;
+let chromeDeck: Project["deck"] | null = null;
+let chromeUi: UiState | null = null;
+let chromeFocus = false;
+let chromeWidth = -2;
+let chromeBar = Number.NaN;
 let pulseClock: PulseClock = PULSE_CLOCK_IDLE;
 
 function screenChanged(): boolean {
@@ -325,8 +340,10 @@ function screenChanged(): boolean {
 function ledsChanged(): boolean {
   const phase = Math.floor(Date.now() / blinkHalfMs(session.project.global.tempo));
   const peek = peekKind(session.ui);
-  if (ledPhase === phase && ledProject === session.project && ledUi === session.ui && ledPlaying === session.playing && ledPeek === peek) return false;
+  const shade = sceneShadeStep(session.project, session.tick);
+  if (ledPhase === phase && ledShade === shade && ledProject === session.project && ledUi === session.ui && ledPlaying === session.playing && ledPeek === peek) return false;
   ledPhase = phase;
+  ledShade = shade;
   ledProject = session.project;
   ledUi = session.ui;
   ledPlaying = session.playing;
@@ -348,6 +365,35 @@ function paintScreen(): void {
   }
   const screen = renderScreen(session.project, session.ui, session.tick, session.playing, Date.now(), frame, audioLoad, wave);
   blit(screen.pixels);
+  paintHostReadout(screen);
+}
+
+function hostRect(x: number, y: number, w: number, h: number, value: number): void {
+  if (w <= 0 || h <= 0) return;
+  const host = globalThis as HostGlobals;
+  if (host.fill_rect) {
+    host.fill_rect(x, y, w, h, value);
+    return;
+  }
+  const pixel = host.set_pixel;
+  if (!pixel) return;
+  for (let row = y; row < y + h; row++) {
+    for (let col = x; col < x + w; col++) pixel(col, row, value);
+  }
+}
+
+function blitRows(pixels: Uint8Array, y0: number, y1: number): void {
+  const pixel = (globalThis as HostGlobals).set_pixel;
+  if (!pixel) return;
+  for (let y = y0; y < y1; y++) {
+    const row = y * WIDTH;
+    for (let x = 0; x < WIDTH; x++) {
+      if (pixels[row + x]) pixel(x, y, 1);
+    }
+  }
+}
+
+function paintHostReadout(screen: Screen): void {
   const host = globalThis as HostGlobals;
   const invertedCells = new Set<number>();
   for (const label of screen.labels) {
@@ -398,6 +444,69 @@ function paintScreen(): void {
       }
     }
   }
+}
+
+/** Notice, hint, or the sliding page title covers the platter. Those frames stay on the full blit. */
+function deckOverlay(ui: UiState, now: number): boolean {
+  if (ui.notice && now < ui.notice.untilMs) return true;
+  if (ui.randomizeHint && now < ui.randomizeHint.untilMs) return true;
+  if (ui.captureHint && now < ui.captureHint.untilMs) return true;
+  if (ui.pageTitleUntilMs !== null && now < ui.pageTitleUntilMs) return true;
+  return false;
+}
+
+function deckChromeStale(now: number): boolean {
+  return chromeDeck !== session.project.deck
+    || chromeUi !== session.ui
+    || chromeFocus !== focusVisible(session.ui.focus, session.tick, now)
+    || chromeWidth !== shownWidth
+    || chromeBar !== session.project.global.bar;
+}
+
+function paintDeckChrome(now: number): void {
+  const screen = renderScreen(session.project, session.ui, session.tick, session.playing, now, frame, audioLoad, null);
+  hostRect(0, 0, WIDTH, HEADER_H, 0);
+  blitRows(screen.pixels, 0, HEADER_H);
+  hostRect(0, SEP_Y, WIDTH, 1, 1);
+  const paramTop = HEADER_H + VIZ_H;
+  hostRect(0, paramTop, WIDTH, HEIGHT - paramTop, 0);
+  paintHostReadout(screen);
+  chromeDeck = session.project.deck;
+  chromeUi = session.ui;
+  chromeFocus = focusVisible(session.ui.focus, session.tick, now);
+  chromeWidth = shownWidth;
+  chromeBar = session.project.global.bar;
+}
+
+function paintDeckWave(wave: WaveTape, head: number, span: number): void {
+  const yTop = HEADER_H;
+  const h = VIZ_H - 1;
+  hostRect(0, yTop, WIDTH, h, 0);
+  const pixel = (globalThis as HostGlobals).set_pixel;
+  strokeWaveform(
+    wave,
+    { x: 0, y: yTop, w: WIDTH, h, head, span, gain: 1, stylus: true },
+    hostRect,
+    (x, y, value) => pixel?.(x, y, value),
+  );
+}
+
+/** Platter column and knob readout, each only when that band changed. */
+function paintDeckFast(now: number): void {
+  const wave = serviceWaveform(session.project);
+  applyWavePages(wave, [readParam("wave0"), readParam("wave1")]);
+  const picture = deckFrame(session.project, session.ui, session.tick);
+  const head = wave.readHead != null ? wave.readHead : picture.head;
+  const span = wave.pastSpan > 0 ? wave.pastSpan : picture.span;
+  const column = span > 0 ? Math.floor((head * WIDTH) / span) : 0;
+  const waveDirty = !deckFastLatched || column !== deckColumn || span !== deckSpan || wave !== deckTape;
+  const chromeDirty = !deckFastLatched || deckChromeStale(now);
+  if (chromeDirty) paintDeckChrome(now);
+  if (waveDirty) paintDeckWave(wave, head, span);
+  deckFastLatched = true;
+  deckColumn = column;
+  deckSpan = span;
+  deckTape = wave;
 }
 
 function arrowBrightness(): { up: number; down: number } {
@@ -515,7 +624,12 @@ function drainLeds(): void {
 
 function paint(): void {
   paintPulseClock();
-  if (screenChanged()) paintScreen();
+  const now = Date.now();
+  if (deckVisible(session.ui) && !deckOverlay(session.ui, now)) paintDeckFast(now);
+  else {
+    deckFastLatched = false;
+    if (screenChanged()) paintScreen();
+  }
   if (ledsChanged()) paintLeds();
 }
 
@@ -588,6 +702,16 @@ export function init(): void {
   paintTitleKey = -1;
   resetWaveform();
   ledPhase = -1;
+  ledShade = -1;
+  deckFastLatched = false;
+  deckColumn = Number.NaN;
+  deckSpan = Number.NaN;
+  deckTape = null;
+  chromeDeck = null;
+  chromeUi = null;
+  chromeFocus = false;
+  chromeWidth = -2;
+  chromeBar = Number.NaN;
   ledProject = null;
   ledUi = null;
   ledPlaying = false;

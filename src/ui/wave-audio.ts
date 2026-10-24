@@ -1,5 +1,5 @@
 import { PPQN, SAMPLE_RATE, SIXTEENTH_TICKS, tickToSample } from "../core/clock.ts";
-import { heardFx, laneHeard } from "../core/journal.ts";
+import { heardFx, laneHeard, sameHeard } from "../core/journal.ts";
 import { generatePhrase } from "../core/phrase.ts";
 import { LANES, type LaneId, type Phrase, type Project } from "../core/types.ts";
 import { phraseLoop, soundMotions, type LoopEvent } from "../dsp/schedule.ts";
@@ -15,12 +15,20 @@ import { WAVE_HOP, emptyWave, type WaveTape } from "./wave.ts";
 let bound: Project | null = null;
 let boundStamp = "";
 let tape: WaveTape = emptyWave();
+/** Times the collage stamp ran. A deck-only project skips this. */
+let stampPasses = 0;
 
 /** Drop the collage. The next view builds it again from the phrase. */
 export function resetWaveform(): void {
   bound = null;
   boundStamp = "";
   tape = emptyWave();
+  stampPasses = 0;
+}
+
+/** How many times the heard-phrase stamp has been built since the last reset. */
+export function waveformPasses(): number {
+  return stampPasses;
 }
 
 export function waveformTape(): WaveTape {
@@ -202,9 +210,18 @@ function audioStamp(project: Project, phrase: Phrase): string {
   ]);
 }
 
-/** Rebuild the collage when the heard phrase changes. Ring peaks stay on the tape the host fills. */
+/**
+ * Rebuild the collage when the heard phrase changes. Ring peaks stay on the tape the host fills.
+ * A running morph keeps the picture already drawn: rebuilding it on every lane step stalls the strip.
+ */
 export function serviceWaveform(project: Project): WaveTape {
   if (bound === project) return tape;
+  if (project.morph && bound) return tape;
+  if (bound && sameHeard(bound, project)) {
+    bound = project;
+    return tape;
+  }
+  stampPasses += 1;
   const phrase = generatePhrase(project);
   const stamp = audioStamp(project, phrase);
   if (stamp === boundStamp) {

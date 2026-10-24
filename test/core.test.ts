@@ -394,6 +394,14 @@ describe("euclid generator", () => {
 });
 
 describe("morph, journal, macros", () => {
+  it("keeps the project while a morph has not moved a lane", () => {
+    let project = record(defaultProject());
+    project = launchScene(project, project.journal[0].id, 0);
+    assert.ok(project.morph);
+    assert.equal(applyMorph(project, 0), project);
+    assert.equal(applyMorph(project, 1), project);
+  });
+
   it("holds a lane field until its loop and a modulator until its cycle", () => {
     let project = defaultProject();
     project = punch(project, "kick.gen1.velocity.value", 0);
@@ -419,6 +427,9 @@ describe("morph, journal, macros", () => {
     assert.equal(beforeCycle.working.kick.ratchet.count.cycle, 1);
     const afterCycle = applyMorph(project, SIXTEENTH_TICKS);
     assert.equal(afterCycle.working.kick.ratchet.count.pattern, 10);
+    const chained = applyMorph(beforeCycle, SIXTEENTH_TICKS);
+    assert.equal(chained.working.kick.ratchet.count.pattern, 10);
+    assert.equal(chained.working.kick.sound.decay.value, afterCycle.working.kick.sound.decay.value);
     assert.equal(afterCycle.working.kick.ratchet.count.cycle, 4);
     assert.equal(afterCycle.working.kick.gen1.velocity.value, 0);
     assert.equal(afterCycle.working.kick.sound.decay.pattern, 1);

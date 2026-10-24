@@ -20,6 +20,10 @@ export interface WaveTape {
   readHead: number | null;
   /** Bar length, in samples, that `past` was packed with. */
   pastSpan: number;
+  /** `wave0` text already merged into `past`. */
+  pastText0: string;
+  /** `wave1` text already merged into `past`. */
+  pastText1: string;
 }
 
 export interface WaveView {
@@ -38,7 +42,7 @@ export interface WaveView {
 }
 
 export function emptyWave(hop = WAVE_HOP, period = 0): WaveTape {
-  return { hop, period, left: new Map(), right: new Map(), past: null, readHead: null, pastSpan: 0 };
+  return { hop, period, left: new Map(), right: new Map(), past: null, readHead: null, pastSpan: 0, pastText0: "", pastText1: "" };
 }
 
 function fold(sample: number, period: number): number {
@@ -99,9 +103,12 @@ export function wavePeak(tape: WaveTape, from: number, to: number, head = Number
 
 /** Merge `wave0` and `wave1`. A missing page keeps the columns already stored. */
 export function applyWavePages(tape: WaveTape, texts: readonly (string | null | undefined)[]): void {
+  const text0 = texts[0] ?? "";
+  const text1 = texts[1] ?? "";
+  if (tape.pastText0 === text0 && tape.pastText1 === text1 && tape.past && tape.past.length === WAVE_PAST_COLS) return;
   let head: number | null = null;
   let span = 0;
-  let next: WavePeak[] | null = null;
+  let next = tape.past && tape.past.length === WAVE_PAST_COLS ? tape.past : null;
   let got = false;
   for (const text of texts) {
     const page = parseWavePage(text);
@@ -109,15 +116,22 @@ export function applyWavePages(tape: WaveTape, texts: readonly (string | null | 
     got = true;
     head = page.head;
     span = page.span;
-    if (!next) {
-      next = tape.past && tape.past.length === WAVE_PAST_COLS ? tape.past.map((col) => ({ ...col })) : Array.from({ length: WAVE_PAST_COLS }, () => ({ left: 0, right: 0 }));
+    if (!next) next = Array.from({ length: WAVE_PAST_COLS }, () => ({ left: 0, right: 0 }));
+    const base = page.page * WAVE_PAGE_COLS;
+    for (let i = 0; i < page.cols.length && i < WAVE_PAGE_COLS; i++) {
+      const dest = next[base + i];
+      const col = page.cols[i];
+      if (!dest || !col) continue;
+      dest.left = col.left;
+      dest.right = col.right;
     }
-    for (let i = 0; i < page.cols.length && i < WAVE_PAGE_COLS; i++) next[page.page * WAVE_PAGE_COLS + i] = page.cols[i];
   }
   if (!got || !next || head === null) return;
   tape.past = next;
   tape.readHead = head;
   tape.pastSpan = span;
+  tape.pastText0 = text0;
+  tape.pastText1 = text1;
 }
 
 function plot(pixels: Uint8Array, stride: number, x: number, y: number, value: number): void {
@@ -166,5 +180,48 @@ export function drawWaveform(pixels: Uint8Array, stride: number, tape: WaveTape,
   if (view.stylus) {
     const x = Math.round(origin);
     for (let y = view.y; y <= y1; y++) flip(pixels, stride, x, y);
+  }
+}
+
+/**
+ * Same strip as {@link drawWaveform}, sent as column rectangles.
+ * The stylus column is inverted one pixel at a time.
+ */
+export function strokeWaveform(
+  tape: WaveTape,
+  view: WaveView,
+  rect: (x: number, y: number, w: number, h: number, value: number) => void,
+  pixel: (x: number, y: number, value: number) => void,
+): void {
+  if (view.w <= 0 || view.h <= 0 || !(view.span > 0)) return;
+  const gain = view.gain ?? 1;
+  const y1 = view.y + view.h - 1;
+  const mid = view.y + Math.floor((view.h - 1) / 2);
+  const upRoom = Math.max(1, mid - view.y);
+  const downRoom = Math.max(1, y1 - mid);
+  const column = view.span / view.w;
+  const origin = view.x + (view.w - 1) / 2;
+  const stylusX = view.stylus ? Math.round(origin) : -1;
+  rect(view.x, mid, view.w, 1, 1);
+  let stylusUp = 0;
+  let stylusDown = 0;
+  for (let i = 0; i < view.w; i++) {
+    const sample = view.head + (view.x + i - origin) * column;
+    const got = wavePeak(tape, sample - column * 0.5, sample + column * 0.5, view.head);
+    const x = view.x + i;
+    const up = Math.round(waveLevel(got.left) * gain * upRoom);
+    const down = Math.round(waveLevel(got.right) * gain * downRoom);
+    if (x === stylusX) {
+      stylusUp = up;
+      stylusDown = down;
+      continue;
+    }
+    if (up > 0) rect(x, mid - up, 1, up, 1);
+    if (down > 0) rect(x, mid + 1, 1, down, 1);
+  }
+  if (!view.stylus) return;
+  for (let y = view.y; y <= y1; y++) {
+    const lit = y === mid || (y < mid && y >= mid - stylusUp) || (y > mid && y <= mid + stylusDown);
+    pixel(stylusX, y, lit ? 0 : 1);
   }
 }
