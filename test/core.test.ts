@@ -402,7 +402,7 @@ describe("morph, journal, macros", () => {
     assert.equal(applyMorph(project, 1), project);
   });
 
-  it("holds a lane field until its loop and a modulator until its cycle", () => {
+  it("spreads switch knobs across the window and keeps a modulator's pattern with its cycle", () => {
     let project = defaultProject();
     project = punch(project, "kick.gen1.velocity.value", 0);
     project = punch(project, "kick.ratchet.count.pattern", 2);
@@ -422,26 +422,31 @@ describe("morph, journal, macros", () => {
     project = launchScene(project, "002", 0);
     const duration = 4 * 192;
     assert.equal(project.morph?.durationTicks, duration);
-    const beforeCycle = applyMorph(project, SIXTEENTH_TICKS - 1);
-    assert.equal(beforeCycle.working.kick.ratchet.count.pattern, 2);
-    assert.equal(beforeCycle.working.kick.ratchet.count.cycle, 1);
-    const afterCycle = applyMorph(project, SIXTEENTH_TICKS);
-    assert.equal(afterCycle.working.kick.ratchet.count.pattern, 10);
-    const chained = applyMorph(beforeCycle, SIXTEENTH_TICKS);
-    assert.equal(chained.working.kick.ratchet.count.pattern, 10);
-    assert.equal(chained.working.kick.sound.decay.value, afterCycle.working.kick.sound.decay.value);
-    assert.equal(afterCycle.working.kick.ratchet.count.cycle, 4);
-    assert.equal(afterCycle.working.kick.gen1.velocity.value, 0);
-    assert.equal(afterCycle.working.kick.sound.decay.pattern, 1);
-    assert.equal(afterCycle.working.kick.sound.decay.cycle, 64);
-    assert.equal(afterCycle.working.kick.sound.decay.value, 0);
+    const before = applyMorph(project, SIXTEENTH_TICKS - 1);
+    assert.equal(before.working.kick.ratchet.count.pattern, 2);
+    assert.equal(before.working.kick.ratchet.count.cycle, 1);
+    assert.equal(before.working.kick.gen1.velocity.value, 0);
+    const held = applyMorph(project, 191);
+    assert.equal(held.working.kick.gen1.velocity.value, 0);
+    assert.equal(held.working.kick.ratchet.count.pattern, 2);
+    const atBeat = applyMorph(held, 192);
+    assert.equal(atBeat.working.kick.gen1.velocity.value, 1);
+    assert.equal(atBeat.working.kick.ratchet.count.pattern, 2);
+    assert.equal(atBeat.working.kick.sound.decay.value, 0.25);
     const quarter = applyMorph(project, duration / 4);
     assert.equal(quarter.working.kick.sound.decay.value, 0.25);
     const half = applyMorph(project, duration / 2);
     assert.equal(half.working.kick.sound.decay.value, 0.5);
-    assert.equal(half.working.kick.gen1.velocity.value, 0);
+    assert.equal(half.working.kick.gen1.velocity.value, 1);
+    assert.equal(half.working.kick.ratchet.count.pattern, 10);
+    assert.equal(half.working.kick.ratchet.count.cycle, 4);
     assert.equal(half.working.kick.sound.decay.pattern, 1);
+    assert.equal(half.working.kick.sound.decay.cycle, 64);
     assert.deepEqual(kickSig(generatePhrase(half)), kickSig(generatePhrase({ ...half, morph: null })));
+    const pattern = applyMorph(project, 576);
+    assert.equal(pattern.working.kick.sound.decay.pattern, 8);
+    assert.equal(pattern.working.kick.sound.decay.cycle, 4);
+    assert.equal(pattern.working.kick.sound.decay.value, 0.75);
     const done = applyMorph(project, duration);
     assert.equal(done.morph, null);
     assert.equal(done.activeSceneId, "002");
@@ -492,7 +497,7 @@ describe("morph, journal, macros", () => {
     project.transition = "slow";
     project = launchScene(project, "002", 0);
     project = applyMorph(project, 2 * 4 * 192);
-    assert.equal(project.working.snare.gen1.velocity.value, 1);
+    assert.equal(project.working.snare.gen1.velocity.value, 0);
     assert.ok(Math.abs(project.working.snare.sound.bodyDecay.value - 0.25) < 1e-9);
     project.lock.kick = true;
     project = launchScene(project, "003", 2 * 192);
@@ -546,7 +551,7 @@ describe("morph, journal, macros", () => {
     assert.equal(project.mixer.master, 0.2);
   });
 
-  it("keeps the phrase on working until the lane loop, then takes the target pattern", () => {
+  it("hands kick hits on the first bar and rotate on a later bar", () => {
     let project = defaultProject();
     project.working.kick.gen1.hits = 4;
     project.working.kick.gen1.rotate = 0;
@@ -575,9 +580,13 @@ describe("morph, journal, macros", () => {
     assert.deepEqual(generatePhrase(before).harmony.map((event) => event.root), start.harmony.map((event) => event.root));
     const after = applyMorph(project, loop);
     assert.equal(after.working.kick.gen1.hits, 7);
-    assert.equal(after.working.kick.gen1.rotate, 3);
+    assert.equal(after.working.kick.gen1.rotate, 0);
     assert.equal(after.working.kick.sound.decay.value, 0.25);
     assert.deepEqual(kickSig(generatePhrase(after)), kickSig(generatePhrase({ ...after, morph: null })));
+    const later = applyMorph(project, loop * 3);
+    assert.equal(later.working.kick.gen1.hits, 7);
+    assert.equal(later.working.kick.gen1.rotate, 3);
+    assert.ok(later.morph);
     const done = applyMorph(project, duration);
     assert.equal(done.morph, null);
     assert.equal(done.progression.start, 3);
@@ -586,7 +595,7 @@ describe("morph, journal, macros", () => {
     assert.deepEqual(generatePhrase(done).harmony.map((event) => event.root), start.harmony.map((event) => event.root));
   });
 
-  it("steps decay and switches the drum loop at the end of the current loop", () => {
+  it("steps decay in quarters and hands length before rotate", () => {
     let project = defaultProject();
     project.working.kick.gen1.length = 16;
     project.working.kick.gen1.hits = 1;
@@ -611,8 +620,12 @@ describe("morph, journal, macros", () => {
     assert.equal(generatePhrase(before).lanes.kick[0]?.sound.decay, 0);
     const at = applyMorph(project, loop);
     assert.equal(at.working.kick.gen1.length, 12);
+    assert.equal(at.working.kick.gen1.rotate, 0);
     assert.equal(generatePhrase(at).steps.kick, 12);
     assert.ok(Math.abs((generatePhrase(at).lanes.kick[0]?.sound.decay ?? -1) - 0.25) < 1e-9);
+    const turned = applyMorph(project, loop * 3);
+    assert.equal(turned.working.kick.gen1.length, 12);
+    assert.equal(turned.working.kick.gen1.rotate, 4);
     const half = applyMorph(project, (project.morph?.durationTicks ?? 0) / 2);
     assert.ok(Math.abs(half.working.kick.sound.decay.value - 0.5) < 1e-9);
   });
@@ -647,7 +660,7 @@ describe("morph, journal, macros", () => {
     assert.ok(punched.lanes.kick.every((event) => Math.abs(event.sound.decay - 0.2) < 1e-6));
   });
 
-  it("keeps the whole bass phrase on the source until its loop", () => {
+  it("spreads bass hits, rotate and pitch across the morph", () => {
     let project = defaultProject();
     project.global.phrase = 1;
     project.working.bass.gen1 = { ...project.working.bass.gen1, length: 16, hits: 2, rotate: 0, probability: 1 };
@@ -660,22 +673,31 @@ describe("morph, journal, macros", () => {
     project.working = clone(project.journal[0].lanes);
     project.transition = "medium";
     project = launchScene(project, "002", 0);
-    const loop = 16 * SIXTEENTH_TICKS;
     const start = generatePhrase({ ...project, morph: null, working: project.morph!.start });
     const goal = generatePhrase({ ...project, morph: null, working: project.journal[1].lanes });
     assert.notDeepEqual(noteSig(start, "bass"), noteSig(goal, "bass"));
-    const before = applyMorph(project, loop - 1);
+    const before = applyMorph(project, 575);
     assert.equal(before.working.bass.pitch.value, 0.2);
     assert.equal(before.working.bass.gen1.hits, 2);
+    assert.equal(before.working.bass.gen1.rotate, 0);
     assert.deepEqual(noteSig(generatePhrase(before), "bass"), noteSig(start, "bass"));
-    const after = applyMorph(project, loop);
-    assert.equal(after.working.bass.pitch.value, 0.9);
-    assert.equal(after.working.bass.gen1.hits, 8);
-    assert.deepEqual(noteSig(generatePhrase(after), "bass"), noteSig(goal, "bass"));
-    assert.ok(after.morph);
+    const hits = applyMorph(project, 576);
+    assert.equal(hits.working.bass.gen1.hits, 8);
+    assert.equal(hits.working.bass.gen1.rotate, 0);
+    assert.equal(hits.working.bass.pitch.value, 0.2);
+    assert.deepEqual(noteSig(generatePhrase(hits), "bass"), noteSig(generatePhrase({ ...hits, morph: null }), "bass"));
+    assert.ok(hits.morph);
+    const turned = applyMorph(project, 1536);
+    assert.equal(turned.working.bass.gen1.rotate, 3);
+    assert.equal(turned.working.bass.pitch.value, 0.2);
+    const pitched = applyMorph(project, 2496);
+    assert.equal(pitched.working.bass.pitch.value, 0.9);
+    assert.equal(pitched.working.bass.gen1.hits, 8);
+    assert.deepEqual(noteSig(generatePhrase(pitched), "bass"), noteSig(goal, "bass"));
+    assert.ok(pitched.morph);
   });
 
-  it("holds note velocity until the lane loop", () => {
+  it("hands note velocity before pitch", () => {
     let project = defaultProject();
     project.working.bass.gen1 = { ...project.working.bass.gen1, length: 16, hits: 1, rotate: 0, probability: 1 };
     project.working.bass.gen2.hits = 0;
@@ -701,18 +723,21 @@ describe("morph, journal, macros", () => {
     assert.notEqual(sourceHit.velocity, destHit.velocity);
     const early = applyMorph(project, duration * 0.25);
     const late = applyMorph(project, duration * 0.95);
-    assert.equal(early.working.bass.gen1.velocity.value, 0.4);
-    assert.equal(late.working.bass.gen1.velocity.value, 0.4);
+    assert.equal(early.working.bass.gen1.velocity.value, 0.9);
+    assert.equal(early.working.bass.pitch.value, 0.2);
+    assert.equal(late.working.bass.gen1.velocity.value, 0.9);
+    assert.equal(late.working.bass.pitch.value, 0.9);
     assert.equal(generatePhrase(early).lanes.bass.find((event) => event.tick === 0)?.note, sourceHit.note);
-    assert.equal(generatePhrase(early).lanes.bass.find((event) => event.tick === 0)?.velocity, sourceHit.velocity);
-    assert.equal(generatePhrase(late).lanes.bass.find((event) => event.tick === 0)?.velocity, sourceHit.velocity);
+    assert.equal(generatePhrase(early).lanes.bass.find((event) => event.tick === 0)?.velocity, destHit.velocity);
+    assert.equal(generatePhrase(late).lanes.bass.find((event) => event.tick === 0)?.note, destHit.note);
+    assert.equal(generatePhrase(late).lanes.bass.find((event) => event.tick === 0)?.velocity, destHit.velocity);
     const done = applyMorph(project, duration);
     assert.equal(done.working.bass.gen1.velocity.value, 0.9);
     assert.equal(generatePhrase(done).lanes.bass.find((event) => event.tick === 0)?.note, destHit.note);
     assert.equal(generatePhrase(done).lanes.bass.find((event) => event.tick === 0)?.velocity, destHit.velocity);
   });
 
-  it("steps timbre in quarters while the phrase is still the source", () => {
+  it("steps timbre in quarters while pattern knobs arrive on their own beats", () => {
     const project = morphPair(
       (item) => {
         item.working.bass.pitch.value = 0.2;
@@ -750,6 +775,7 @@ describe("morph, journal, macros", () => {
     const duration = project.morph?.durationTicks ?? 0;
     const start = generatePhrase({ ...project, morph: null, working: project.morph!.start });
     const riding = applyMorph(project, duration * 0.25);
+    assert.equal(riding.working.bass.gen1.hits, 6);
     assert.equal(riding.working.bass.pitch.value, 0.2);
     assert.equal(riding.working.bass.octave.value, 0.2);
     assert.equal(riding.working.bass.follow, 0);
@@ -757,12 +783,14 @@ describe("morph, journal, macros", () => {
     assert.ok(Math.abs(riding.working.bass.sound.wide.value - 0.25) < 1e-9);
     assert.ok(Math.abs(riding.working.kick.sound.pitch.value - 0.325) < 1e-9);
     const early = generatePhrase(riding);
-    assert.deepEqual(noteSig(early, "bass"), noteSig(start, "bass"));
+    assert.deepEqual(noteSig(early, "bass"), noteSig(generatePhrase({ ...riding, morph: null }), "bass"));
+    assert.notDeepEqual(noteSig(early, "bass"), noteSig(start, "bass"));
     assert.deepEqual(noteSig(early, "lead"), noteSig(start, "lead"));
     assert.ok(early.lanes.bass.every((event) => Math.abs(event.filter.cutoff - 0.25) < 1e-6));
     assert.ok(early.lanes.kick.every((event) => Math.abs(event.sound.pitch - 0.325) < 1e-6));
     const late = applyMorph(project, duration * 0.75);
-    assert.equal(late.working.bass.pitch.value, 0.2);
+    assert.equal(late.working.bass.pitch.value, 0.9);
+    assert.equal(late.working.bass.follow, 0);
     assert.ok(Math.abs(late.working.bass.sound.wide.value - 0.75) < 1e-9);
     const done = applyMorph(project, duration);
     assert.equal(done.morph, null);
