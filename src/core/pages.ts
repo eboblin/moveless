@@ -188,8 +188,11 @@ const FIELD = {
   fm: spec("FM", 1),
   damp: spec("DAMP", 1),
   wave: spec("WAVE", 1),
+  glide: spec("GLIDE", 1),
   sync: spec("SYNC", 1),
   fold: spec("FOLD", 1),
+  pluck: spec("PLUCK", 1),
+  env: spec("ENV", 1),
   wide: spec("WIDE", 1),
   step: spec("STEP", 1),
   gate: spec("GATE", 1),
@@ -213,9 +216,9 @@ export const SOUND = {
   snare: ["pitch", "body", "bodyDecay", "noise", "noiseDecay", "snap", "tone", "drive"],
   hat: ["pitch", "metal", "noise", "color", "decay", "attack", "ring", "pos"],
   perc: ["pitch", "material", "decay", "bend", "fm", "fmRatio", "attack", "damp"],
-  bass: ["wave", "bend", "sync", "fold", "drive", "wide", "attack", "release"],
-  lead: ["wave", "bend", "sync", "fold", "drive", "wide", "attack", "release"],
-  chords: ["wave", "bend", "sync", "fold", "drive", "wide", "attack", "release"],
+  bass: ["wave", "glide", "sync", "fold", "drive", "wide", "attack", "release", "pluck", "env"],
+  lead: ["wave", "glide", "sync", "fold", "drive", "wide", "attack", "release", "pluck", "env"],
+  chords: ["wave", "glide", "sync", "fold", "drive", "wide", "attack", "release", "pluck", "env"],
 } as const satisfies Record<LaneId, readonly FieldId[]>;
 
 /** Sum of the macro keys that feed one phrase field. Does not walk the page list. */

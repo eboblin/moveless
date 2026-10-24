@@ -105,17 +105,19 @@ function tapTrack(state: Session, index: number): Session {
 }
 
 describe("pages and leds", () => {
-  it("gives drums nine pages and bass eleven", () => {
+  it("gives drums nine pages and bass twelve", () => {
     assert.equal(pageCount("kick"), 9);
-    assert.equal(pageCount("bass"), 11);
-    assert.equal(pageCount("lead"), 11);
-    assert.equal(pageCount("chords"), 10);
+    assert.equal(pageCount("bass"), 12);
+    assert.equal(pageCount("lead"), 12);
+    assert.equal(pageCount("chords"), 11);
     assert.equal(pageGroup("chords", 0), "pattern");
     assert.equal(pageGroup("chords", 1), "pattern");
     assert.equal(pageGroup("kick", 7), "fx");
     assert.equal(pageGroup("kick", 8), "fx");
-    assert.equal(pageGroup("bass", 9), "fx");
+    assert.equal(pageGroup("bass", 9), "sound");
+    assert.equal(lanePages("bass")[9]?.title, "PLUCK / ENV");
     assert.equal(pageGroup("bass", 10), "fx");
+    assert.equal(pageGroup("bass", 11), "fx");
     assert.equal(pageGroup("chords", 2), "pattern");
     assert.equal(pageGroupColor("chords", 2), 3);
     assert.equal(pageGroup("chords", 3), "notes");
@@ -126,8 +128,9 @@ describe("pages and leds", () => {
     assert.deepEqual(lanePages("chords")[2]?.groups, ["VEL", "PRB"]);
     assert.equal(lanePages("chords")[2]?.bindings[4]?.label, "PRB V");
     assert.equal(lanePages("chords")[3]?.groups[0], "TONE");
-    assert.equal(pageGroup("chords", 8), "fx");
+    assert.equal(pageGroup("chords", 8), "sound");
     assert.equal(pageGroup("chords", 9), "fx");
+    assert.equal(pageGroup("chords", 10), "fx");
     assert.equal(pageGroupColor("kick", 7), 9);
     assert.equal(lanePages("bass").at(-1)?.groups[0], "REV");
     assert.equal(lanePages("bass").at(-1)?.groups[1], "DLY");
@@ -355,13 +358,15 @@ describe("pages and leds", () => {
     assert.equal(bass[27].color, offColor(14));
     assert.equal(bass[30].color, offColor(20));
     assert.equal(bass[16].color, offColor(20));
-    assert.equal(bass[17].color, offColor(9));
+    assert.equal(bass[17].color, offColor(20));
+    assert.equal(bass[18].color, offColor(9));
     const chords = padLeds(project, "journal", { ...defaultUi(), wheelTouch: true, context: "chords" });
     assert.equal(chords[24].color, 3);
     assert.equal(chords[26].color, 3);
     assert.equal(chords[27].color, offColor(14));
     assert.equal(chords[28].color, offColor(20));
-    assert.equal(chords[16].color, offColor(9));
+    assert.equal(chords[16].color, offColor(20));
+    assert.equal(chords[17].color, offColor(9));
     const fx = padLeds({ ...defaultProject(), randomizeDepth: "generators" }, "journal", { wheelTouch: true, context: "fx", page: 0 });
     assert.equal(fx[24].color, offColor(9));
     assert.equal(fx[24].blink, true);

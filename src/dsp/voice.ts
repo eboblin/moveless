@@ -59,6 +59,9 @@ const P_WIDE = 30;
 const P_REVERB = 31;
 const P_DELAY = 32;
 const P_NOTE_DRIVE = 33;
+const P_GLIDE = 34;
+const P_PLUCK = 35;
+const P_ENV = 36;
 const LANE_HAT = 2;
 const LANE_PERC = 3;
 const LANE_BASS = 4;
@@ -94,6 +97,11 @@ export interface Engine {
   /** Master platter. The shadow is a second voice kept ahead of this clock. */
   deck: DeckRuntime;
   deckShadow: Engine | null;
+  /** Last sounded frequency of each lane, so a fresh glide still starts from it. */
+  laneFreq: number[];
+  /** Voices claimed while arming one sample. */
+  armSerial: number;
+  armClock: number;
 }
 
 interface DrumVoice {
@@ -161,6 +169,8 @@ interface NoteVoice {
   /** Hard-sync reader, one per unison copy. */
   slave: number[];
   env: number;
+  /** Release ring under a pluck. The body stays in `env`. */
+  tail: number;
   age: number;
   left: number;
   freq: number;
@@ -170,6 +180,18 @@ interface NoteVoice {
   fold: number;
   drive: number;
   wide: number;
+  /** Pitch glide time, 0..1. Zero jumps. */
+  glide: number;
+  /** Amplitude pluck, 0..1. Zero holds until the gate ends. */
+  pluck: number;
+  pluckK: number;
+  /** Filter-envelope depth. The running contour is `filterEnv`. */
+  envAmt: number;
+  filterEnv: number;
+  /** Frequency the glide is chasing. `freq` is where the oscillator is now. */
+  target: number;
+  /** Arm batch. A chord note must not claim a sibling armed on this sample. */
+  claim: number;
   cutoff: number;
   resonance: number;
   reverb: number;
@@ -224,6 +246,9 @@ export function createEngine(): Engine {
     lanes: emptyLanes(),
     deck: createDeckRuntime(),
     deckShadow: null,
+    laneFreq: Array.from({ length: LANE_COUNT }, () => 0),
+    armSerial: 0,
+    armClock: -1,
   };
 }
 
@@ -276,7 +301,8 @@ function catchHolding(engine: Engine): void {
     let elapsed = pos - start;
     if (elapsed < 0) elapsed += loop;
     if (elapsed <= 0 || elapsed >= dur) continue;
-    armNote(engine, steal(engine), event, dur - elapsed, loop);
+    const note = armNote(engine, event, dur - elapsed, loop);
+    note.left = dur - elapsed;
   }
 }
 
@@ -622,9 +648,8 @@ function trigger(engine: Engine, event: BlockEvent | LoopEvent, tempo: number): 
     if (event.lane === "perc") clearHaas(drum);
     return;
   }
-  const note = steal(engine);
   const samples = Math.max(1, Math.round((event.lengthTicks * SAMPLE_RATE * 60) / (tempo * 192)));
-  armNote(engine, note, event, samples, loop);
+  armNote(engine, event, samples, loop);
 }
 
 function armDrum(drum: DrumVoice, event: BlockEvent | LoopEvent, pitch: number, loop: number): void {
@@ -710,20 +735,40 @@ function armDrum(drum: DrumVoice, event: BlockEvent | LoopEvent, pitch: number, 
   refreshDrumEnv(drum);
 }
 
-function armNote(engine: Engine, note: NoteVoice, event: BlockEvent | LoopEvent, samples: number, loop: number): void {
-  note.on = true;
-  note.env = 0;
-  note.age = 0;
-  note.left = samples;
+function midiFreq(pitch: number): number {
+  return 440 * 2 ** ((pitch - 69) / 12);
+}
+
+/** One arming batch per sample, so a chord does not hand its first voice to the next note. */
+function beginArm(engine: Engine): number {
+  if (engine.armClock !== engine.clock) {
+    engine.armClock = engine.clock;
+    engine.armSerial += 1;
+  }
+  return engine.armSerial;
+}
+
+/** Nearest sounding voice of this lane. Other lanes stay put. */
+function glideVoice(engine: Engine, lane: number, pitch: number, serial: number): NoteVoice | null {
+  let best: NoteVoice | null = null;
+  let bestDist = Infinity;
+  for (const note of engine.notes) {
+    if (!note.on || note.age === 0 || note.lane !== lane || note.claim === serial) continue;
+    const dist = Math.abs(note.pitch - pitch);
+    if (dist < bestDist) {
+      best = note;
+      bestDist = dist;
+    }
+  }
+  return best;
+}
+
+function paintNote(note: NoteVoice, event: BlockEvent | LoopEvent, samples: number, loop: number): void {
   note.lane = LANES.indexOf(event.lane);
   note.pitch = event.note;
-  for (let copy = 0; copy < 3; copy++) {
-    note.phase[copy] = unisonPhase(event.note, note.lane, engine.clock | 0, copy);
-    note.slave[copy] = 0;
-  }
   note.loop = loop;
-  clearHaas(note);
-  note.freq = 440 * 2 ** ((event.note - 69) / 12);
+  note.left = samples;
+  note.target = midiFreq(event.note);
   note.wave = read(event.params, ["wave"], 0.36);
   note.bend = read(event.params, ["bend"], 0);
   note.sync = read(event.params, ["sync"], 0);
@@ -736,11 +781,45 @@ function armNote(engine: Engine, note: NoteVoice, event: BlockEvent | LoopEvent,
   note.attack = read(event.params, ["attack"], 0);
   note.release = read(event.params, ["release", "decay"], 0.4);
   note.wide = read(event.params, ["wide"], 0);
+  note.glide = read(event.params, ["glide"], 0);
+  note.pluck = read(event.params, ["pluck"], 0);
+  note.envAmt = read(event.params, ["env"], 0);
   note.gain = event.velocity / 127;
-  note.low = 0;
-  note.band = 0;
   refreshRelease(note);
+  refreshPluck(note);
+}
+
+function armNote(engine: Engine, event: BlockEvent | LoopEvent, samples: number, loop: number): NoteVoice {
+  const serial = beginArm(engine);
+  const lane = LANES.indexOf(event.lane);
+  const glide = read(event.params, ["glide"], 0);
+  const prior = glide > 1e-4 ? glideVoice(engine, lane, event.note, serial) : null;
+  const legato = prior !== null && prior.left > 0;
+  const note = prior ?? steal(engine);
+  note.on = true;
+  if (!legato) {
+    note.env = 0;
+    note.tail = 0;
+    note.age = 0;
+    note.filterEnv = 1;
+    if (!prior) {
+      for (let copy = 0; copy < 3; copy++) {
+        note.phase[copy] = unisonPhase(event.note, lane, engine.clock | 0, copy);
+        note.slave[copy] = 0;
+      }
+      clearHaas(note);
+      note.low = 0;
+      note.band = 0;
+      const target = midiFreq(event.note);
+      const remembered = engine.laneFreq[lane] ?? 0;
+      note.freq = glide > 1e-4 && remembered > 1 ? remembered : target;
+    }
+  }
+  paintNote(note, event, samples, loop);
+  if (glide <= 1e-4) note.freq = note.target;
+  note.claim = serial;
   stampNote(engine, note);
+  return note;
 }
 
 function drumSample(engine: Engine, drum: DrumVoice): [number, number] {
@@ -798,7 +877,48 @@ function shapeNote(sample: number, fold: number, drive: number): number {
  * with the square of the knob and sit symmetrically around the note. Full wide
  * is three equal copies. The weights are power-normalized so the chord does not get louder.
  */
-function noteSample(_engine: Engine, note: NoteVoice): [number, number] {
+/** Pluck time. 0 holds. The first knob step is about 0.6 s, the top about 30 ms. */
+export function pluckSeconds(unit: number): number {
+  if (unit <= 1e-4) return 0;
+  const t = Math.min(1, Math.max(0, (unit - 0.01) / 0.99));
+  return 0.6 * (0.03 / 0.6) ** t;
+}
+
+/** Release ring under a pluck, quieter than the hit so the pluck stays the attack. */
+const PLUCK_TAIL = 0.4;
+
+/** Glide time. 0 jumps. The first knob step is about 60 ms, the top about 0.5 s. */
+export function glideSeconds(unit: number): number {
+  if (unit <= 1e-4) return 0;
+  const t = Math.min(1, Math.max(0, (unit - 0.01) / 0.99));
+  return 0.06 * (0.5 / 0.06) ** t;
+}
+
+/**
+ * Filter contour. ENV 0 leaves the cutoff knob alone. Above that the attack
+ * opens toward 0.5 by ENV, and the rest is the knob when it is already a
+ * low-pass, otherwise a darker floor `0.5 + ENV·0.45`.
+ */
+export function melodyCutoff(cutoff: number, env: number, contour: number): number {
+  if (env <= 1e-4) return cutoff;
+  const rest = cutoff > 0.5 ? cutoff : 0.5 + env * 0.45;
+  return rest + (0.5 - rest) * env * contour;
+}
+
+function slewNote(note: NoteVoice): void {
+  const tau = glideSeconds(note.glide);
+  if (!(tau > 0) || !(note.freq > 0)) {
+    note.freq = note.target;
+    return;
+  }
+  const k = 1 - Math.exp(-1 / (tau * SAMPLE_RATE));
+  const logF = Math.log(note.freq);
+  const logT = Math.log(Math.max(note.target, 1e-6));
+  note.freq = Math.exp(logF + (logT - logF) * k);
+}
+
+function noteSample(engine: Engine, note: NoteVoice): [number, number] {
+  slewNote(note);
   const inc = (TWO_PI * note.freq) / SAMPLE_RATE;
   const open = note.wide > 1e-4;
   const indexes = open ? [0, 1, 2] : [1];
@@ -818,17 +938,34 @@ function noteSample(_engine: Engine, note: NoteVoice): [number, number] {
   }
   mid *= norm;
   side *= norm;
-  const resonated = filterSample(note, mid, note.cutoff, note.resonance);
+  const resonated = filterSample(note, mid, melodyCutoff(note.cutoff, note.envAmt, note.filterEnv), note.resonance);
   const attackSamples = 1 + note.attack * 0.2 * SAMPLE_RATE;
-  // Hold full level for the whole note. Release is the tail after that length, not a decay from the attack.
-  if (note.left > 0 && note.age < attackSamples) note.env = (note.age + 1) / attackSamples;
+  // Pluck 0 holds full level for the gate, then release.
+  // Above zero the body falls on the pluck. Release keeps a quieter tail from the same attack.
+  if (note.pluck > 1e-4) {
+    if (note.age < attackSamples) {
+      note.env = (note.age + 1) / attackSamples;
+      note.tail = note.env;
+    } else {
+      if (note.tail < note.env) note.tail = note.env;
+      note.env *= note.pluckK;
+      note.tail *= note.releaseK;
+    }
+  } else if (note.left > 0 && note.age < attackSamples) note.env = (note.age + 1) / attackSamples;
   else if (note.left > 0) note.env = 1;
   else note.env *= note.releaseK;
+  const level = note.pluck > 1e-4 ? Math.max(note.env, note.tail * PLUCK_TAIL) : note.env;
+  const contour = note.pluck > 1e-4 ? pluckSeconds(note.pluck) : 0.15;
+  note.filterEnv *= Math.exp(-1 / (contour * SAMPLE_RATE));
   note.age += 1;
   if (note.left > 0) note.left -= 1;
-  if (note.left <= 0 && note.age >= attackSamples && note.env < 0.0008) note.on = false;
-  const gain = resonated * note.env * note.gain * NOTE_LEVEL;
-  const sided = side * note.env * note.gain * NOTE_LEVEL;
+  const quiet = note.age >= attackSamples && level < 0.0008;
+  if (note.pluck > 1e-4) {
+    if (quiet) note.on = false;
+  } else if (note.left <= 0 && quiet) note.on = false;
+  if (note.freq > 1) engine.laneFreq[note.lane] = note.freq;
+  const gain = resonated * level * note.gain * NOTE_LEVEL;
+  const sided = side * level * note.gain * NOTE_LEVEL;
   return [gain + sided, gain - sided];
 }
 
@@ -1103,6 +1240,11 @@ function applyNote(note: NoteVoice, param: number, unit: number): void {
     note.release = unit;
     refreshRelease(note);
   } else if (param === P_WIDE) note.wide = unit;
+  else if (param === P_GLIDE) note.glide = unit;
+  else if (param === P_PLUCK) {
+    note.pluck = unit;
+    refreshPluck(note);
+  } else if (param === P_ENV) note.envAmt = unit;
 }
 
 function refreshDrumEnv(drum: DrumVoice): void {
@@ -1116,6 +1258,11 @@ function refreshDrumEnv(drum: DrumVoice): void {
 
 function refreshRelease(note: NoteVoice): void {
   note.releaseK = Math.exp(-1 / ((0.04 + note.release * 1.6) * SAMPLE_RATE));
+}
+
+function refreshPluck(note: NoteVoice): void {
+  const sec = pluckSeconds(note.pluck);
+  note.pluckK = sec > 0 ? Math.exp(-1 / (sec * SAMPLE_RATE)) : 1;
 }
 
 const Q_MIN = 0.707;
@@ -1219,6 +1366,9 @@ function paramOf(id: string): number {
   if (id === "attack") return P_ATTACK;
   if (id === "release" || id === "decay") return P_RELEASE;
   if (id === "wide") return P_WIDE;
+  if (id === "glide") return P_GLIDE;
+  if (id === "pluck") return P_PLUCK;
+  if (id === "env") return P_ENV;
   if (ends(id, "freq")) return P_FREQ;
   if (ends(id, "btime")) return P_BTIME;
   if (ends(id, "pbend")) return P_PBEND;
@@ -1599,8 +1749,9 @@ function emptyDrum(): DrumVoice {
 
 function emptyNote(): NoteVoice {
   return {
-    on: false, phase: [0, 0, 0], slave: [0, 0, 0], env: 0, age: 0, left: 0, freq: 0,
+    on: false, phase: [0, 0, 0], slave: [0, 0, 0], env: 0, tail: 0, age: 0, left: 0, freq: 0,
     wave: 0.36, bend: 0, sync: 0, fold: 0, drive: 0, wide: 0,
+    glide: 0, pluck: 0, pluckK: 1, envAmt: 0, filterEnv: 0, target: 0, claim: 0,
     cutoff: 0.5, resonance: 0, reverb: 0, delay: 0, attack: 0, release: 0.4, gain: 0,
     low: 0, band: 0, lane: 0, pitch: 0, loop: 0, releaseK: 1,
     haas: new Float32Array(HAAS_N), haasI: 0,

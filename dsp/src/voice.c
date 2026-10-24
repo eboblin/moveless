@@ -68,7 +68,10 @@ enum {
     P_WIDE,
     P_REVERB,
     P_DELAY,
-    P_NOTE_DRIVE
+    P_NOTE_DRIVE,
+    P_GLIDE,
+    P_PLUCK,
+    P_ENV
 };
 
 typedef struct {
@@ -88,11 +91,11 @@ typedef struct {
 
 typedef struct {
     int on;
-    float phase[3], slave[3], env, freq;
+    float phase[3], slave[3], env, tail, freq;
     float wave, bend, sync, fold, drive, wide;
     float cutoff, resonance, reverb, delay, attack, release, gain, low, band;
-    float release_k;
-    int age, left, lane, pitch, loop;
+    float release_k, target, glide, pluck, pluck_k, env_amt, filter_env;
+    int age, left, lane, pitch, loop, claim;
     float haas[HAAS_N];
     int haas_i;
 } Note;
@@ -182,6 +185,9 @@ typedef struct {
     float *deck_peak_r;
     int deck_view_head;
     int deck_view_span;
+    float lane_freq[LANE_COUNT];
+    int arm_serial;
+    int arm_clock;
 } Engine;
 
 typedef struct {
@@ -565,6 +571,9 @@ static int param_of(const char *id) {
     if (strcmp(id, "attack") == 0) return P_ATTACK;
     if (strcmp(id, "release") == 0 || strcmp(id, "decay") == 0) return P_RELEASE;
     if (strcmp(id, "wide") == 0) return P_WIDE;
+    if (strcmp(id, "glide") == 0) return P_GLIDE;
+    if (strcmp(id, "pluck") == 0) return P_PLUCK;
+    if (strcmp(id, "env") == 0) return P_ENV;
     if (suffix_is(id, "freq")) return P_FREQ;
     if (suffix_is(id, "btime")) return P_BTIME;
     if (suffix_is(id, "pbend")) return P_PBEND;
@@ -617,6 +626,42 @@ static void refresh_drum_env(Drum *drum) {
 
 static void refresh_release(Note *note) {
     note->release_k = expf(-1.0f / ((0.04f + note->release * 1.6f) * SR));
+}
+
+/* Pluck time. 0 holds. The first knob step is about 0.6 s, the top about 30 ms. */
+static float pluck_seconds(float unit) {
+    float t;
+    if (unit <= 1e-4f) return 0.0f;
+    t = (unit - 0.01f) / 0.99f;
+    if (t < 0.0f) t = 0.0f;
+    if (t > 1.0f) t = 1.0f;
+    return 0.6f * powf(0.03f / 0.6f, t);
+}
+
+/* Release ring under a pluck, quieter than the hit so the pluck stays the attack. */
+#define PLUCK_TAIL 0.4f
+
+/* Glide time. 0 jumps. The first knob step is about 60 ms, the top about 0.5 s. */
+static float glide_seconds(float unit) {
+    float t;
+    if (unit <= 1e-4f) return 0.0f;
+    t = (unit - 0.01f) / 0.99f;
+    if (t < 0.0f) t = 0.0f;
+    if (t > 1.0f) t = 1.0f;
+    return 0.06f * powf(0.5f / 0.06f, t);
+}
+
+/* ENV 0 leaves the cutoff knob. Above that the attack opens toward 0.5. */
+static float melody_cutoff(float cutoff, float env, float contour) {
+    float rest;
+    if (env <= 1e-4f) return cutoff;
+    rest = cutoff > 0.5f ? cutoff : 0.5f + env * 0.45f;
+    return rest + (0.5f - rest) * env * contour;
+}
+
+static void refresh_pluck(Note *note) {
+    float sec = pluck_seconds(note->pluck);
+    note->pluck_k = sec > 0.0f ? expf(-1.0f / (sec * SR)) : 1.0f;
 }
 
 static void apply_drum(Drum *drum, int param, float unit) {
@@ -708,6 +753,12 @@ static void apply_note(Note *note, int param, float unit) {
         refresh_release(note);
         break;
     case P_WIDE: note->wide = unit; break;
+    case P_GLIDE: note->glide = unit; break;
+    case P_PLUCK:
+        note->pluck = unit;
+        refresh_pluck(note);
+        break;
+    case P_ENV: note->env_amt = unit; break;
     default: break;
     }
 }
@@ -876,25 +927,42 @@ static Note *steal(Engine *engine) {
     return &engine->notes[0];
 }
 
-static Note *arm_note(Engine *engine, int note_num, int velocity, int ticks, const char *params, int lane, int loop) {
-    Note *note = steal(engine);
-    float tempo = engine->tempo > 1.0f ? engine->tempo : 120.0f;
-    int samples = (int)((ticks * SR * 60.0f) / (tempo * 192.0f));
-    if (samples < 1) samples = 1;
-    note->on = 1;
-    note->env = 0;
-    note->age = 0;
-    note->left = samples;
+static float midi_freq(int pitch) {
+    return 440.0f * powf(2.0f, ((float)pitch - 69.0f) / 12.0f);
+}
+
+static int begin_arm(Engine *engine) {
+    if (engine->arm_clock != engine->clock) {
+        engine->arm_clock = engine->clock;
+        engine->arm_serial += 1;
+    }
+    return engine->arm_serial;
+}
+
+/* Nearest sounding voice of this lane. Other lanes stay put. */
+static Note *glide_voice(Engine *engine, int lane, int pitch, int serial) {
+    Note *best = NULL;
+    int best_dist = 1000;
+    for (int i = 0; i < NOTES; i++) {
+        Note *note = &engine->notes[i];
+        int dist;
+        if (!note->on || note->age == 0 || note->lane != lane || note->claim == serial) continue;
+        dist = note->pitch - pitch;
+        if (dist < 0) dist = -dist;
+        if (dist < best_dist) {
+            best = note;
+            best_dist = dist;
+        }
+    }
+    return best;
+}
+
+static void paint_note(Note *note, int note_num, int velocity, int samples, const char *params, int lane, int loop) {
     note->lane = lane;
     note->pitch = note_num;
-    for (int copy = 0; copy < 3; copy++) {
-        note->phase[copy] = unison_phase(note_num, lane, engine->clock, copy);
-        note->slave[copy] = 0.0f;
-    }
     note->loop = loop;
-    note->haas_i = 0;
-    memset(note->haas, 0, sizeof note->haas);
-    note->freq = 440.0f * powf(2.0f, ((float)note_num - 69.0f) / 12.0f);
+    note->left = samples;
+    note->target = midi_freq(note_num);
     note->wave = read_param(params, "wave", 0.36f);
     note->bend = read_param(params, "bend", 0.0f);
     note->sync = read_param(params, "sync", 0.0f);
@@ -907,10 +975,47 @@ static Note *arm_note(Engine *engine, int note_num, int velocity, int ticks, con
     note->attack = read_param(params, "attack", 0.0f);
     note->release = read_param(params, "release", read_param(params, "decay", 0.4f));
     note->wide = read_param(params, "wide", 0.0f);
+    note->glide = read_param(params, "glide", 0.0f);
+    note->pluck = read_param(params, "pluck", 0.0f);
+    note->env_amt = read_param(params, "env", 0.0f);
     note->gain = velocity / 127.0f;
-    note->low = 0;
-    note->band = 0;
     refresh_release(note);
+    refresh_pluck(note);
+}
+
+static Note *arm_note(Engine *engine, int note_num, int velocity, int ticks, const char *params, int lane, int loop) {
+    float tempo = engine->tempo > 1.0f ? engine->tempo : 120.0f;
+    int samples = (int)((ticks * SR * 60.0f) / (tempo * 192.0f));
+    int serial = begin_arm(engine);
+    float glide = read_param(params, "glide", 0.0f);
+    Note *prior = glide > 1e-4f ? glide_voice(engine, lane, note_num, serial) : NULL;
+    int legato = prior && prior->left > 0;
+    Note *note = prior ? prior : steal(engine);
+    if (samples < 1) samples = 1;
+    note->on = 1;
+    if (!legato) {
+        note->env = 0;
+        note->tail = 0;
+        note->age = 0;
+        note->filter_env = 1.0f;
+        if (!prior) {
+            int copy;
+            float target = midi_freq(note_num);
+            float remembered = lane >= 0 && lane < LANE_COUNT ? engine->lane_freq[lane] : 0.0f;
+            for (copy = 0; copy < 3; copy++) {
+                note->phase[copy] = unison_phase(note_num, lane, engine->clock, copy);
+                note->slave[copy] = 0.0f;
+            }
+            note->haas_i = 0;
+            memset(note->haas, 0, sizeof note->haas);
+            note->low = 0;
+            note->band = 0;
+            note->freq = glide > 1e-4f && remembered > 1.0f ? remembered : target;
+        }
+    }
+    paint_note(note, note_num, velocity, samples, params, lane, loop);
+    if (glide <= 1e-4f) note->freq = note->target;
+    note->claim = serial;
     stamp_note(engine, note);
     return note;
 }
@@ -1221,13 +1326,29 @@ static float shape_note(float sample, float fold, float drive) {
     return mix;
 }
 
+static void slew_note(Note *note) {
+    float tau = glide_seconds(note->glide);
+    float k, log_f, log_t;
+    if (!(tau > 0.0f) || !(note->freq > 0.0f)) {
+        note->freq = note->target;
+        return;
+    }
+    k = 1.0f - expf(-1.0f / (tau * SR));
+    log_f = logf(note->freq);
+    log_t = logf(note->target > 1e-6f ? note->target : 1e-6f);
+    note->freq = expf(log_f + (log_t - log_f) * k);
+}
+
 static void note_sample(Engine *engine, Note *note, float *left, float *right) {
-    float inc = (TWO_PI * note->freq) / SR;
-    int open = note->wide > 1e-4f;
+    float inc;
+    int open;
     int indexes[3];
     int count, i;
-    float power = 0.0f, norm, mid = 0.0f, side = 0.0f, resonated, attack_samples, gain, sided;
-    (void)engine;
+    float power = 0.0f, norm, mid = 0.0f, side = 0.0f, resonated, attack_samples, level, gain, sided, contour;
+    int quiet;
+    slew_note(note);
+    inc = (TWO_PI * note->freq) / SR;
+    open = note->wide > 1e-4f;
     ensure_wave_table();
     if (open) {
         indexes[0] = 0;
@@ -1255,18 +1376,40 @@ static void note_sample(Engine *engine, Note *note, float *left, float *right) {
     }
     mid *= norm;
     side *= norm;
-    resonated = filter_sample(&note->low, &note->band, mid, note->cutoff, note->resonance);
+    resonated = filter_sample(&note->low, &note->band, mid, melody_cutoff(note->cutoff, note->env_amt, note->filter_env), note->resonance);
     attack_samples = 1.0f + note->attack * 0.2f * SR;
-    /* Hold full level for the whole note. Release is the tail after that length. */
-    if (note->left > 0 && (float)note->age < attack_samples) note->env = ((float)note->age + 1.0f) / attack_samples;
-    else if (note->left > 0) note->env = 1.0f;
-    else note->env *= note->release_k;
+    /* Pluck 0 holds for the gate, then release. Above zero the body falls on the pluck and release keeps a quieter tail. */
+    if (note->pluck > 1e-4f) {
+        if ((float)note->age < attack_samples) {
+            note->env = ((float)note->age + 1.0f) / attack_samples;
+            note->tail = note->env;
+        } else {
+            if (note->tail < note->env) note->tail = note->env;
+            note->env *= note->pluck_k;
+            note->tail *= note->release_k;
+        }
+        level = note->env > note->tail * PLUCK_TAIL ? note->env : note->tail * PLUCK_TAIL;
+    } else if (note->left > 0 && (float)note->age < attack_samples) {
+        note->env = ((float)note->age + 1.0f) / attack_samples;
+        level = note->env;
+    } else if (note->left > 0) {
+        note->env = 1.0f;
+        level = note->env;
+    } else {
+        note->env *= note->release_k;
+        level = note->env;
+    }
+    contour = note->pluck > 1e-4f ? pluck_seconds(note->pluck) : 0.15f;
+    note->filter_env *= expf(-1.0f / (contour * SR));
     note->age += 1;
     if (note->left > 0) note->left -= 1;
-    /* Slow attacks start below 0.0008; only silence once the gate is over and the tail is quiet. */
-    if (note->left <= 0 && (float)note->age >= attack_samples && note->env < 0.0008f) note->on = 0;
-    gain = resonated * note->env * note->gain * NOTE_LEVEL;
-    sided = side * note->env * note->gain * NOTE_LEVEL;
+    quiet = (float)note->age >= attack_samples && level < 0.0008f;
+    if (note->pluck > 1e-4f) {
+        if (quiet) note->on = 0;
+    } else if (note->left <= 0 && quiet) note->on = 0;
+    if (note->freq > 1.0f && note->lane >= 0 && note->lane < LANE_COUNT) engine->lane_freq[note->lane] = note->freq;
+    gain = resonated * level * note->gain * NOTE_LEVEL;
+    sided = side * level * note->gain * NOTE_LEVEL;
     *left += gain + sided;
     *right += gain - sided;
 }
@@ -2743,6 +2886,7 @@ static void *create_instance(const char *module_dir, const char *json_defaults) 
         return NULL;
     }
     engine->noise = 1;
+    engine->arm_clock = -1;
     engine->tempo = 120.0f;
     engine->beats = 4.0f;
     engine->glue_gain = 1.0f;

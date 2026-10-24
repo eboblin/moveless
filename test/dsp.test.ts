@@ -8,7 +8,7 @@ import { clone } from "../src/core/clone.ts";
 import { launchScene, record } from "../src/core/performance.ts";
 import { mapFilter, mapKick, mapSend, mapSound } from "../src/dsp/map.ts";
 import { eventsInBlock, phraseLoop, soundMotions } from "../src/dsp/schedule.ts";
-import { createEngine, filterSample, formatBus, loadPhrase, packBlock, packPhrase, packPhraseBody, renderBlock, renderClock } from "../src/dsp/voice.ts";
+import { createEngine, filterSample, formatBus, glideSeconds, loadPhrase, melodyCutoff, packBlock, packPhrase, packPhraseBody, pluckSeconds, renderBlock, renderClock } from "../src/dsp/voice.ts";
 import type { BlockEvent } from "../src/dsp/schedule.ts";
 import type { LaneId } from "../src/core/types.ts";
 
@@ -739,6 +739,171 @@ describe("dsp adapter", () => {
     assert.ok(glued < dry);
   });
 
+  it("keeps a zero pluck at full level and lets a high pluck fall inside the gate", () => {
+    const long = 48000;
+    const held = pitched("bass", 40, 0, long);
+    const plucked = pitched("bass", 40, 1, long);
+    const engine = createEngine();
+    loadPhrase(engine, [held], 120, true);
+    renderClock(engine, 4000);
+    const organ = engine.notes.find((note) => note.on);
+    assert.ok(organ);
+    assert.ok(organ.env > 0.9);
+    assert.ok(organ.left > 0);
+    const other = createEngine();
+    loadPhrase(other, [plucked], 120, true);
+    renderClock(other, 4000);
+    const blip = other.notes.find((note) => note.on || note.age > 0);
+    assert.ok(blip);
+    assert.ok(blip.env < 0.15);
+  });
+
+  it("lets release carry a tail after a short pluck", () => {
+    const dry = pluckTake(0, 18000);
+    const held = pluckTake(1, 18000);
+    const earlyDry = energy(dry, 0, 700);
+    const earlyHeld = energy(held, 0, 700);
+    assert.ok(earlyDry > 0.01);
+    assert.ok(earlyHeld > earlyDry * 0.85 && earlyHeld < earlyDry * 1.15);
+    const lateDry = energy(dry, 10000, 18000);
+    const lateHeld = energy(held, 10000, 18000);
+    assert.ok(lateHeld > lateDry * 8, `late ${lateHeld} vs ${lateDry}`);
+  });
+
+  it("lets a pluck ring after the gate without the release cutting it", () => {
+    const engine = createEngine();
+    loadPhrase(engine, [{
+      sample: 0, loop: 200000, lane: "bass", note: 40, velocity: 100, lengthTicks: 8,
+      params: [
+        { id: "attack", value: 0 },
+        { id: "release", value: 0 },
+        { id: "pluck", value: 0.01 },
+        { id: "cutoff", value: 0.5 },
+      ],
+    }], 120, true);
+    renderClock(engine, 8000);
+    const note = engine.notes.find((voice) => voice.age > 0);
+    assert.ok(note);
+    assert.ok(note.left === 0);
+    assert.ok(note.env > 0.5, `env ${note.env}`);
+  });
+
+  it("still reads a legacy decay key as the release tail", () => {
+    const engine = createEngine();
+    loadPhrase(engine, [{
+      sample: 0, loop: 100000, lane: "lead", note: 64, velocity: 100, lengthTicks: 192,
+      params: [{ id: "decay", value: 0.8 }],
+    }], 120, true);
+    renderClock(engine);
+    assert.equal(engine.notes[0].release, 0.8);
+    assert.equal(engine.notes[0].pluck, 0);
+  });
+
+  it("opens the filter on the attack and lets it fall back, even from a dry cutoff", () => {
+    assert.equal(melodyCutoff(0.5, 0, 1), 0.5);
+    assert.ok(Math.abs(melodyCutoff(0.5, 1, 1) - 0.5) < 1e-6);
+    assert.ok(Math.abs(melodyCutoff(0.5, 1, 0) - 0.95) < 1e-6);
+    assert.ok(melodyCutoff(0.8, 1, 1) < 0.55);
+    assert.ok(Math.abs(melodyCutoff(0.3, 0, 0) - 0.3) < 1e-6);
+    const engine = createEngine();
+    loadPhrase(engine, [{
+      sample: 0, loop: 200000, lane: "bass", note: 40, velocity: 110, lengthTicks: 800,
+      params: [
+        { id: "attack", value: 0 },
+        { id: "pluck", value: 0 },
+        { id: "env", value: 1 },
+        { id: "cutoff", value: 0.5 },
+        { id: "release", value: 0.4 },
+      ],
+    }], 120, true);
+    renderClock(engine, 64);
+    const note = engine.notes[0];
+    assert.ok(note.filterEnv > 0.9);
+    renderClock(engine, 20000);
+    assert.ok(note.filterEnv < 0.1);
+    assert.ok(note.filterEnv > 0);
+  });
+
+  it("jumps pitch when glide is zero and slews it across an overlapping gate", () => {
+    assert.equal(glideSeconds(0), 0);
+    assert.ok(Math.abs(glideSeconds(0.01) - 0.06) < 1e-6);
+    assert.ok(Math.abs(glideSeconds(1) - 0.5) < 1e-6);
+    assert.equal(pluckSeconds(0), 0);
+    assert.ok(Math.abs(pluckSeconds(0.01) - 0.6) < 1e-6);
+    assert.ok(Math.abs(pluckSeconds(1) - 0.03) < 1e-6);
+    const jumped = createEngine();
+    loadPhrase(jumped, [
+      pitchedAt(0, 48, 0, 400),
+      pitchedAt(2000, 60, 0, 400),
+    ], 120, true);
+    renderClock(jumped, 2000);
+    const first = jumped.notes.find((note) => note.on && note.pitch === 48);
+    renderClock(jumped, 64);
+    const second = jumped.notes.find((note) => note.on && note.pitch === 60);
+    assert.ok(first && second);
+    assert.notEqual(first, second);
+    assert.ok(Math.abs(second.freq - midi(60)) < 1e-3);
+
+    const slid = createEngine();
+    loadPhrase(slid, [
+      pitchedAt(0, 48, 1, 800),
+      pitchedAt(2000, 60, 1, 800),
+    ], 120, true);
+    renderClock(slid, 2000);
+    const held = slid.notes.find((note) => note.on);
+    assert.ok(held);
+    const age = held.age;
+    renderClock(slid, 4000);
+    const voices = slid.notes.filter((note) => note.on);
+    assert.equal(voices.length, 1);
+    assert.equal(voices[0], held);
+    assert.ok(held.age > age);
+    assert.equal(held.pitch, 60);
+    assert.ok(held.env > 0.9);
+    assert.ok(held.freq > midi(48) + 1);
+    assert.ok(held.freq < midi(60) - 1);
+  });
+
+  it("retriggers the envelope across a gap and still slews pitch on the same oscillator", () => {
+    const engine = createEngine();
+    loadPhrase(engine, [
+      pitchedAt(0, 48, 0.01, 8, 1),
+      pitchedAt(2500, 60, 0.01, 400),
+    ], 120, true);
+    renderClock(engine, 2500);
+    const ringing = engine.notes.find((note) => note.on);
+    assert.ok(ringing);
+    assert.equal(ringing.left, 0);
+    assert.ok(ringing.env < 0.3);
+    renderClock(engine, 200);
+    const again = engine.notes.filter((note) => note.on);
+    assert.equal(again.length, 1);
+    assert.equal(again[0], ringing);
+    assert.ok(ringing.age < 250);
+    assert.ok(ringing.env > 0.5);
+    assert.ok(ringing.freq > midi(48) + 1);
+    assert.ok(ringing.freq < midi(60) - 1);
+  });
+
+  it("slides a chord tone into the nearest voice of its own lane", () => {
+    const engine = createEngine();
+    const chord = [48, 60, 72].map((note) => ({
+      sample: 0, loop: 400000, lane: "chords" as const, note, velocity: 100, lengthTicks: 800,
+      params: [{ id: "glide", value: 0 }, { id: "attack", value: 0 }, { id: "release", value: 0.4 }],
+    }));
+    loadPhrase(engine, [
+      ...chord,
+      { sample: 2000, loop: 400000, lane: "chords", note: 71, velocity: 100, lengthTicks: 800, params: [{ id: "glide", value: 1 }, { id: "attack", value: 0 }] },
+    ], 120, true);
+    renderClock(engine, 2000);
+    const high = engine.notes.find((note) => note.on && note.pitch === 72);
+    assert.ok(high);
+    renderClock(engine, 64);
+    assert.equal(high.pitch, 71);
+    assert.ok(engine.notes.some((note) => note.on && note.pitch === 48));
+    assert.ok(engine.notes.some((note) => note.on && note.pitch === 60));
+  });
+
   it("lets the decay macro lengthen a melodic release", () => {
     const project = defaultProject();
     const base = project.working.bass.sound.release.value;
@@ -748,6 +913,47 @@ describe("dsp adapter", () => {
     assert.ok(Math.abs(motion.value - Math.min(1, base + 0.4)) < 1e-6);
   });
 });
+
+function midi(note: number): number {
+  return 440 * 2 ** ((note - 69) / 12);
+}
+
+function pluckTake(release: number, frames: number): Float32Array {
+  const engine = createEngine();
+  loadPhrase(engine, [{
+    sample: 0, loop: 400000, lane: "bass", note: 52, velocity: 100, lengthTicks: 48,
+    params: [
+      { id: "attack", value: 0 },
+      { id: "release", value: release },
+      { id: "pluck", value: 1 },
+      { id: "cutoff", value: 0.5 },
+      { id: "wave", value: 0.42 },
+    ],
+  }], 120, true);
+  return renderClock(engine, frames);
+}
+
+function pitched(lane: "bass" | "lead", note: number, pluck: number, lengthTicks: number) {
+  return pitchedAt(0, note, 0, lengthTicks, pluck, lane);
+}
+
+function pitchedAt(sample: number, note: number, glide: number, lengthTicks: number, pluck = 0, lane: "bass" | "lead" | "chords" = "bass") {
+  return {
+    sample,
+    loop: 400000,
+    lane,
+    note,
+    velocity: 100,
+    lengthTicks,
+    params: [
+      { id: "attack", value: 0 },
+      { id: "release", value: 0.4 },
+      { id: "glide", value: glide },
+      { id: "pluck", value: pluck },
+      { id: "cutoff", value: 0.5 },
+    ],
+  };
+}
 
 function tone(lane: LaneId, note: number, velocity: number): BlockEvent {
   return {

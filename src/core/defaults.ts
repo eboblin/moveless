@@ -96,32 +96,41 @@ const SOUND_VALUE: Record<LaneId, Record<string, number>> = {
   bass: {
     wave: 0.28,
     bend: 0,
+    glide: 0,
     sync: 0,
     fold: 0,
     drive: 0,
     wide: 0,
     attack: 0.15,
     release: 0.09,
+    pluck: 0,
+    env: 0,
   },
   lead: {
     wave: 0.84,
     bend: 0,
+    glide: 0,
     sync: 0,
     fold: 0,
     drive: 0,
     wide: 0,
     attack: 0.23,
     release: 0.01,
+    pluck: 0,
+    env: 0,
   },
   chords: {
     wave: 0.24,
     bend: 0.04,
+    glide: 0,
     sync: 0,
     fold: 0,
     drive: 0.06,
     wide: 0.4,
     attack: 0,
     release: 0,
+    pluck: 0,
+    env: 0,
   },
 };
 
@@ -144,6 +153,8 @@ function sound(lane: LaneId): Record<string, ReturnType<typeof modulated>> {
   const values = SOUND_VALUE[lane];
   const out: Record<string, ReturnType<typeof modulated>> = {};
   for (const id of ids) out[id] = home(values[id] ?? 0.5);
+  // Bend left the melody page. Keeping the key lets an old scene still warp the wave.
+  if (lane === "bass" || lane === "lead" || lane === "chords") out.bend = home(SOUND_VALUE[lane].bend ?? 0);
   return out;
 }
 

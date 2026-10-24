@@ -64,16 +64,20 @@ const DRUM_SUFFIX: Record<DrumId, Record<string, string>> = {
 /**
  * Bass, lead and chords share one wavetable. Cutoff and resonance are the lane filter, not sound.
  * `decay` still reaches the voice as a release alias for older blocks.
+ * `bend` stays for scenes saved before GLIDE took its knob. It is not a page.
  */
 const MELODY: Record<string, string> = {
   wave: "wave",
   bend: "bend",
+  glide: "glide",
   sync: "sync",
   fold: "fold",
   drive: "drive",
   wide: "wide",
   attack: "attack",
   release: "release",
+  pluck: "pluck",
+  env: "env",
 };
 
 export function mapSound(lane: LaneId, sound: Record<string, number>): EngineParam[] {
