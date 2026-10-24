@@ -406,14 +406,16 @@ function touchEncoder(session: Session, index: number, press: boolean): Session 
   }
   const binding = currentBinding(session, index);
   if (!binding) return session;
-  const sameKnob = session.ui.detent?.path === binding.path;
+  const sameKnob = session.ui.detent?.path === binding.path || session.ui.travel?.path === binding.path;
+  const keep = !session.ui.shiftHeld && sameKnob;
   const ui = {
     ...session.ui,
     heldEncoders: session.ui.heldEncoders | bit,
     macroGesture: rememberMacro(session.ui.macroGesture, binding),
     macroReturns: [],
     focus: focusFor(session, binding, true),
-    detent: session.ui.shiftHeld || !sameKnob ? null : session.ui.detent,
+    detent: keep ? session.ui.detent : null,
+    travel: keep ? session.ui.travel : null,
   };
   if (!session.ui.shiftHeld) return { ...session, ui };
   return { ...session, project: resetControl(session.project, session.ui.context, binding), ui };
@@ -425,7 +427,8 @@ function turnEncoder(session: Session, index: number, value: number): Session {
   if (!binding || !delta) return session;
   const fingers = session.ui.heldEncoders !== 0;
   const coasting = session.ui.macroReturns.some((item) => item.path === binding.path);
-  const turned = writeControl(session.project, session.ui.context, binding, delta, session.ui.detent);
+  const pending = session.ui.travel?.path === binding.path ? session.ui.travel.pending : 0;
+  const turned = writeControl(session.project, session.ui.context, binding, delta, session.ui.detent, pending);
   return {
     ...session,
     project: turned.project,
@@ -434,6 +437,7 @@ function turnEncoder(session: Session, index: number, value: number): Session {
       macroGesture: fingers ? rememberMacro(session.ui.macroGesture, binding) : session.ui.macroGesture,
       macroReturns: coasting ? session.ui.macroReturns.filter((item) => item.path !== binding.path) : session.ui.macroReturns,
       detent: turned.hold,
+      travel: turned.pending === 0 ? null : { path: binding.path, pending: turned.pending },
       focus: focusFor(session, binding, fingers || (session.ui.focus?.held ?? false)),
     },
   };

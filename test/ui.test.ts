@@ -17,7 +17,7 @@ import { CAPTION_GAP, CAPTION_LANE_Y, CAPTION_OUTLINE, CAPTION_PAGE_Y, CAPTION_S
 import { WAVE_HOP, emptyWave, type WaveTape } from "../src/ui/wave.ts";
 import { defaultUi, HOLD_MS, HOLD_TICKS, openSetMode, PAGE_TITLE_MS, PAGE_TITLE_SLIDE_MS, settleWheel, WHEEL_RELEASE_MS, type DetentHold } from "../src/ui/state.ts";
 import { midiMessage, reduce, relDelta, settleTrackPeek, type Session } from "../src/ui/input.ts";
-import { DETENT_CLICKS, DETENT_REST_MS, stepKnob, writeControl } from "../src/ui/controls.ts";
+import { DETENT_CLICKS, DETENT_REST_MS, ENCODER_CLICKS_PER_TURN, KNOB_MAX_STEP_DEG, KNOB_SWEEP_DEG, knobClicksPerStep, stepKnob, writeControl } from "../src/ui/controls.ts";
 
 function session(): Session {
   return { project: defaultProject(), ui: defaultUi(), tick: 0, playing: false };
@@ -224,8 +224,8 @@ describe("pages and leds", () => {
     assert.ok(busScreen.labels.some((label) => label.text === "TLT"));
     const glue = bindingFor("bus.glue");
     assert.ok(glue);
-    const turned = writeControl(defaultProject(), "aux", glue, DETENT_CLICKS + 4);
-    assert.equal(turned.project.bus.glue, 0.04);
+    const turned = writeControl(defaultProject(), "aux", glue, DETENT_CLICKS + Math.ceil(knobClicksPerStep(glue)));
+    assert.ok(turned.project.bus.glue >= glue.step - 1e-9);
     assert.equal(aux.some((page) => page.title === "MACRO"), false);
   });
 
@@ -560,7 +560,9 @@ describe("surface", () => {
   it("rerolls the mixer and a perf page from Capture", () => {
     let mix = openMixer(session());
     mix.project.mixer.kick = 0.5;
-    mix = reduce(mix, { kind: "cc", data1: 71, data2: 1 });
+    const kickKnob = bindingFor("kick");
+    assert.ok(kickKnob);
+    mix = reduce(mix, { kind: "cc", data1: 71, data2: Math.ceil(knobClicksPerStep(kickKnob)) });
     assert.ok(mix.project.mixer.kick > 0.5);
     mix.project.mixer.kick = 0.2;
     mix = loop(mix);
@@ -1342,8 +1344,23 @@ describe("surface", () => {
     assert.ok(count);
     assert.equal(count.step, 1 / 8);
     assert.equal(count.max, 7 / 8);
-    assert.equal(stepKnob(0, count, 1, null).value, 0.125);
-    assert.equal(stepKnob(0, count, 7, null).value, 0.875);
+    assert.ok(knobClicksPerStep(count) * (360 / ENCODER_CLICKS_PER_TURN) <= KNOB_MAX_STEP_DEG + 1e-9);
+    let value = 0;
+    let hold: DetentHold | null = null;
+    let pending = 0;
+    const toward = (target: number) => {
+      let guard = 0;
+      while (value < target - 1e-9 && guard++ < 500) {
+        const stepped = stepKnob(value, count, 1, hold, 0, pending);
+        value = stepped.value;
+        hold = stepped.hold;
+        pending = stepped.pending;
+      }
+    };
+    toward(0.125);
+    assert.equal(value, 0.125);
+    toward(0.875);
+    assert.equal(value, 0.875);
     assert.equal(stepKnob(0.875, count, 1, null).value, 0.875);
     const project = defaultProject();
     const digit = (value: number) => {
@@ -1919,7 +1936,10 @@ describe("surface", () => {
     state = reduce(state, { kind: "cc", data1: 52, data2: 127 });
     state = reduce(state, { kind: "note", data1: 0, data2: 127 });
     assert.deepEqual(state.project.working.kick, before);
-    for (let n = 0; n < DETENT_CLICKS + 1; n++) state = reduce(state, { kind: "cc", data1: 71, data2: 1 });
+    const length = bindingFor("gen1.length");
+    assert.ok(length);
+    const extra = Math.ceil(knobClicksPerStep(length) - 1e-9);
+    for (let n = 0; n < DETENT_CLICKS + extra; n++) state = reduce(state, { kind: "cc", data1: 71, data2: 1 });
     assert.equal(state.project.working.kick.gen1.length, before.gen1.length + 1);
     assert.deepEqual(state.project.working.kick.gen2, before.gen2);
     state = reduce(state, { kind: "cc", data1: 52, data2: 0 });
@@ -2527,7 +2547,8 @@ describe("virtual detents", () => {
   it("catches a power of two and holds it for several clicks", () => {
     const cycle = knob("gen1.velocity.cycle");
     assert.deepEqual(cycle.detents, [1, 2, 4, 8, 16, 32, 64]);
-    const caught = stepKnob(3, cycle, 1, null);
+    const need = Math.ceil(knobClicksPerStep(cycle) - 1e-9);
+    const caught = stepKnob(3, cycle, need, null);
     assert.equal(caught.value, 4);
     assert.equal(caught.hold?.left, DETENT_CLICKS);
     let hold: DetentHold | null = caught.hold;
@@ -2536,12 +2557,15 @@ describe("virtual detents", () => {
       assert.equal(stuck.value, 4);
       hold = stuck.hold;
     }
-    const left = stepKnob(4, cycle, 1, hold);
+    let left = stepKnob(4, cycle, 1, hold, 0, 0);
+    let guard = 0;
+    while (left.value === 4 && guard++ < 5) left = stepKnob(left.value, cycle, 1, left.hold, 0, left.pending);
     assert.equal(left.value, 5);
     assert.equal(left.hold, null);
     assert.equal(stepKnob(3, cycle, 7, null).value, 4);
     assert.equal(stepKnob(4, cycle, 7, null).value, 4);
-    assert.equal(stepKnob(4, cycle, DETENT_CLICKS + 4, null).value, 8);
+    const span = Math.ceil(4 * knobClicksPerStep(cycle) - 1e-9);
+    assert.equal(stepKnob(4, cycle, DETENT_CLICKS + span, null).value, 8);
     const turned = stepKnob(4, cycle, -1, { path: cycle.path, dir: 1, left: 0, since: 0 });
     assert.equal(turned.value, 4);
     assert.equal(turned.hold?.dir, -1);
@@ -2564,14 +2588,16 @@ describe("virtual detents", () => {
 
     const cutoff = knob("filter.cutoff.value");
     assert.deepEqual(cutoff.detents, [0.5]);
-    const open = stepKnob(0.49, cutoff, 1, null);
+    const open = stepKnob(0.49, cutoff, Math.ceil(knobClicksPerStep(cutoff) - 1e-9), null);
     assert.equal(open.value, 0.5);
     const stay = stepKnob(open.value, cutoff, 1, open.hold);
     assert.equal(stay.value, 0.5);
     let cut = open.hold;
     for (let i = 0; i < DETENT_CLICKS; i++) cut = stepKnob(0.5, cutoff, 1, cut).hold;
-    const past = stepKnob(0.5, cutoff, 1, cut);
-    assert.ok(Math.abs(past.value - 0.51) < 1e-9);
+    let past = stepKnob(0.5, cutoff, 1, cut, 0, 0);
+    let moved = 0;
+    while (Math.abs(past.value - 0.5) < 1e-9 && moved++ < 5) past = stepKnob(past.value, cutoff, 1, past.hold, 0, past.pending);
+    assert.ok(Math.abs(past.value - 0.51) < 1e-6);
 
     assert.deepEqual(knob("pitch.value").detents, [0.5]);
     assert.deepEqual(knob("sound.pos.value").detents, [0.5]);
@@ -2585,20 +2611,127 @@ describe("virtual detents", () => {
 
     const hits = knob("gen1.hits");
     assert.equal(hits.detents, undefined);
-    assert.equal(stepKnob(16, hits, 1, null).value, 17);
+    const still = stepKnob(16, hits, 1, null);
+    assert.equal(still.value, 16);
+    let stepped = still;
+    let guard = 0;
+    while (stepped.value === 16 && guard++ < 5) stepped = stepKnob(stepped.value, hits, 1, stepped.hold, 0, stepped.pending);
+    assert.equal(stepped.value, 17);
+    assert.equal(stepped.hold, null);
   });
 
-  it("leaves a rested detent on the next click", () => {
+  it("leaves a rested detent on the next movement", () => {
     const cycle = knob("gen1.velocity.cycle");
-    const caught = stepKnob(3, cycle, 1, null, 0);
+    const caught = stepKnob(3, cycle, Math.ceil(knobClicksPerStep(cycle) - 1e-9), null, 0);
     assert.equal(caught.value, 4);
     const soon = stepKnob(4, cycle, 1, caught.hold, DETENT_REST_MS);
     assert.equal(soon.value, 4);
+    assert.equal(soon.hold?.left, DETENT_CLICKS - 1);
     const rested = stepKnob(4, cycle, 1, caught.hold, DETENT_REST_MS + 1);
-    assert.equal(rested.value, 5);
-    assert.equal(rested.hold, null);
-    const flick = stepKnob(4, cycle, 7, caught.hold, DETENT_REST_MS + 1);
+    assert.equal(rested.value, 4);
+    assert.equal(rested.hold?.left, 0);
+    let moved = rested;
+    let guard = 0;
+    while (moved.value === 4 && guard++ < 5) moved = stepKnob(moved.value, cycle, 1, moved.hold, DETENT_REST_MS + 1, moved.pending);
+    assert.equal(moved.value, 5);
+    assert.equal(moved.hold, null);
+    const flick = stepKnob(4, cycle, Math.ceil(4 * knobClicksPerStep(cycle) - 1e-9), caught.hold, DETENT_REST_MS + 1);
     assert.equal(flick.value, 8);
+  });
+});
+
+describe("knob sensitivity", () => {
+  function knob(path: string) {
+    const found = bindingFor(path);
+    assert.ok(found);
+    return found;
+  }
+
+  function sweepClicks(path: string, from: number, to: number): number {
+    const binding = knob(path);
+    let value = from;
+    let hold: DetentHold | null = null;
+    let pending = 0;
+    let clicks = 0;
+    const dir = to >= from ? 1 : -1;
+    while ((dir > 0 ? value < to - 1e-9 : value > to + 1e-9) && clicks < 5000) {
+      const stepped = stepKnob(value, binding, dir, hold, 0, pending);
+      value = stepped.value;
+      hold = stepped.hold;
+      pending = stepped.pending;
+      clicks++;
+    }
+    return clicks;
+  }
+
+  it("fits a hundred steps and one interior detent into about 220 degrees", () => {
+    const cutoff = knob("filter.cutoff.value");
+    assert.deepEqual(cutoff.detents, [0.5]);
+    const clicks = sweepClicks("filter.cutoff.value", 0, 1);
+    const degrees = clicks * (360 / ENCODER_CLICKS_PER_TURN);
+    assert.ok(Math.abs(degrees - KNOB_SWEEP_DEG) < 4, `sweep was ${degrees}`);
+  });
+
+  it("keeps a sparse step inside 20 degrees and a shorter total travel", () => {
+    const quant = knob("deck.quant");
+    const per = knobClicksPerStep(quant);
+    assert.ok(per * (360 / ENCODER_CLICKS_PER_TURN) <= KNOB_MAX_STEP_DEG + 1e-9);
+    const clicks = sweepClicks("deck.quant", quant.min, quant.max);
+    const degrees = clicks * (360 / ENCODER_CLICKS_PER_TURN);
+    assert.ok(degrees < KNOB_SWEEP_DEG - 1);
+    const slack = (360 / ENCODER_CLICKS_PER_TURN) * (quant.max - quant.min);
+    assert.ok(degrees <= (quant.max - quant.min) * KNOB_MAX_STEP_DEG + slack);
+  });
+
+  it("slows tempo to a quarter and transpose to a half", () => {
+    const tempo = knob("tempo");
+    const transpose = knob("transpose");
+    assert.equal(tempo.sensitivity, 0.25);
+    assert.equal(transpose.sensitivity, 0.5);
+    const tempoSteps = (tempo.max - tempo.min) / tempo.step;
+    const tempoDegrees = knobClicksPerStep(tempo) * (360 / ENCODER_CLICKS_PER_TURN) * tempoSteps;
+    assert.ok(Math.abs(tempoDegrees - KNOB_SWEEP_DEG * 4) < 1, `tempo sweep was ${tempoDegrees}`);
+    const transposeSteps = (transpose.max - transpose.min) / transpose.step;
+    const transposeDegrees = knobClicksPerStep(transpose) * (360 / ENCODER_CLICKS_PER_TURN) * transposeSteps;
+    assert.ok(transposeDegrees > KNOB_SWEEP_DEG * 1.8);
+    assert.ok(transposeDegrees < KNOB_SWEEP_DEG * 2.2);
+  });
+
+  it("turns the pattern knob at quarter sensitivity", () => {
+    const pattern = knob("gen1.velocity.pattern");
+    const hits = knob("gen1.hits");
+    assert.equal(pattern.sensitivity, 0.25);
+    assert.equal(hits.sensitivity, 1);
+    const steps = (pattern.max - pattern.min) / pattern.step;
+    const degrees = knobClicksPerStep(pattern) * (360 / ENCODER_CLICKS_PER_TURN) * steps;
+    assert.ok(degrees > KNOB_SWEEP_DEG * 3.6);
+    assert.ok(degrees < KNOB_SWEEP_DEG * 4.4);
+  });
+
+  it("keeps a partial turn until the knob or the page changes", () => {
+    const hits = knob("gen1.hits");
+    const first = stepKnob(16, hits, 1, null);
+    assert.equal(first.value, 16);
+    assert.ok(first.pending > 0);
+    const back = stepKnob(first.value, hits, -1, first.hold, 0, first.pending);
+    assert.equal(back.value, 16);
+    assert.ok(Math.abs(back.pending) < first.pending);
+    let second = first;
+    let guard = 0;
+    while (second.value === 16 && guard++ < 5) second = stepKnob(second.value, hits, 1, second.hold, 0, second.pending);
+    assert.equal(second.value, 17);
+
+    let state = session();
+    const before = state.project.working.kick.gen1.hits;
+    state = reduce(state, { kind: "cc", data1: 72, data2: 1 });
+    assert.equal(state.project.working.kick.gen1.hits, before);
+    assert.equal(state.ui.travel?.path, "gen1.hits");
+    state = reduce(state, { kind: "note", data1: 0, data2: 127 });
+    assert.equal(state.ui.travel, null);
+    state = reduce(state, { kind: "cc", data1: 72, data2: 1 });
+    assert.equal(state.ui.travel?.path, "gen1.hits");
+    state = reduce(state, { kind: "cc", data1: 14, data2: 1 });
+    assert.equal(state.ui.travel, null);
   });
 });
 
@@ -2621,7 +2754,9 @@ describe("deck screen", () => {
     assert.equal(screen.header, "BEAT REPEAT");
     assert.equal(screen.labels.some((label) => label.y === TITLE_Y && label.text === "DJ"), true);
     assert.equal(screen.labels.some((label) => label.text === "TIME" || label.text === "DECK"), false);
-    const quant = reduce(open, { kind: "cc", data1: 77, data2: 1 });
+    const quantKnob = bindingFor("deck.quant");
+    assert.ok(quantKnob);
+    const quant = reduce(open, { kind: "cc", data1: 77, data2: Math.ceil(knobClicksPerStep(quantKnob)) });
     assert.equal(renderScreen(quant.project, quant.ui, 0).header, "quantize: bar");
     assert.equal(screen.labels.some((label) => label.text === "ROL"), false);
     assert.equal(screen.labels.some((label) => label.y >= HEADER_H && label.y < SEP_Y), false);
@@ -2680,7 +2815,9 @@ describe("deck screen", () => {
     assert.equal(bottom.ui.deckGesture, "thr");
     assert.equal(bottom.project.morph?.targetId, first);
     assert.notEqual(bottom.project.morph?.targetId, second);
-    const turned = reduce(openDeck(session()), { kind: "cc", data1: 76, data2: 1 });
+    const divKnob = bindingFor("deck.div");
+    assert.ok(divKnob);
+    const turned = reduce(openDeck(session()), { kind: "cc", data1: 76, data2: Math.ceil(knobClicksPerStep(divKnob)) });
     assert.equal(turned.project.deck.div, 3);
   });
 

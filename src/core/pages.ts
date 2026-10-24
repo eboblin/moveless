@@ -38,6 +38,8 @@ export interface Binding {
   morph: MorphKind;
   /** Randomize cost of one full-scale step toward home. */
   weight: number;
+  /** 1 keeps the 220°/20° travel. Smaller turns the same step more slowly. */
+  sensitivity: number;
   display: KnobDisplay;
   /** Macro keys that add into this knob. Absent when the knob is not shifted. */
   macro?: readonly string[];
@@ -139,7 +141,7 @@ interface FieldSpec {
  */
 const SLOT = {
   value: { min: 0, max: 1, step: 0.01, suffix: "V" },
-  pattern: { weight: 1, min: -LANES.length, max: 63, step: 1, suffix: "P" },
+  pattern: { weight: 1, min: -LANES.length, max: 63, step: 1, suffix: "P", sensitivity: 0.25 },
   cycle: { weight: 1.5, min: 1, max: 64, step: 1, suffix: "C" },
   amount: { weight: 1.2, min: -1, max: 1, step: 0.01, suffix: "A" },
 } as const;
@@ -281,6 +283,7 @@ function bind(input: {
   display?: KnobDisplay;
   macro?: readonly string[];
   detents?: readonly number[] | "powers";
+  sensitivity?: number;
 }): Binding {
   const raw =
     input.detents === "powers"
@@ -299,6 +302,7 @@ function bind(input: {
     store: input.store ?? "lane",
     morph: input.morph ?? "switch",
     weight: input.weight,
+    sensitivity: input.sensitivity ?? 1,
     display: input.display ?? "number",
     ...(input.macro ? { macro: input.macro } : {}),
     ...(picked.length ? { detents: picked } : {}),
@@ -328,6 +332,7 @@ function vpca(path: string, field: FieldSpec, group: PageGroup, label = field.la
       step: SLOT.pattern.step,
       integer: true,
       weight: SLOT.pattern.weight,
+      sensitivity: SLOT.pattern.sensitivity,
       morph: morphKind(group, "other"),
     }),
     bind({
@@ -491,8 +496,9 @@ function plain(
   store: KnobStore,
   display?: KnobDisplay,
   morph?: MorphKind,
+  sensitivity?: number,
 ): Binding {
-  return bind({ path, label, min, max, step, integer, store, weight: PLAIN_WEIGHT, display, morph });
+  return bind({ path, label, min, max, step, integer, store, weight: PLAIN_WEIGHT, display, morph, sensitivity });
 }
 
 function plainPage(
@@ -603,11 +609,11 @@ function deckAuxPage(): Page {
 
 function globalPage(): Page {
   return page("settings", "GLOBAL", ["TIME", "FORM"], "global", [
-    plain("tempo", "TEMPO", 40, 240, 1, true, "global"),
+    plain("tempo", "TEMPO", 40, 240, 1, true, "global", undefined, undefined, 0.25),
     plain("swing", "SWING", 0, 1, 0.01, false, "global"),
     plain("root", "ROOT", 0, 11, 1, true, "global", "note"),
     plain("scale", "SCALE", 0, SCALE_IDS.length - 1, 1, true, "global", "scale"),
-    plain("transpose", "TRANS", -24, 24, 1, true, "global"),
+    plain("transpose", "TRANS", -24, 24, 1, true, "global", undefined, undefined, 0.5),
     plain("bar", "BAR", 1, 16, 1, true, "global"),
     plain("phrase", "PHRASE", 1, 64, 1, true, "global"),
     plain("seed", "SEED", 0, 999, 1, true, "global"),

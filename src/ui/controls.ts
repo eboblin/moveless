@@ -19,44 +19,112 @@ export function writeControl(
   binding: Binding,
   delta: number,
   hold: DetentHold | null = null,
-): { project: Project; hold: DetentHold | null } {
-  if (delta === 0) return { project, hold };
+  pending = 0,
+): { project: Project; hold: DetentHold | null; pending: number } {
+  if (delta === 0) return { project, hold, pending };
   const current = readControl(project, context, binding.path);
-  const stepped = stepKnob(current, binding, delta, hold, Date.now());
-  return { project: storeControl(project, context, binding, stepped.value), hold: stepped.hold };
+  const stepped = stepKnob(current, binding, delta, hold, Date.now(), pending);
+  return { project: storeControl(project, context, binding, stepped.value), hold: stepped.hold, pending: stepped.pending };
 }
 
 /** Clicks the encoder must spend on a fresh detent before the value moves off it. */
 export const DETENT_CLICKS = 8;
 /** After this long on a detent, the next turn leaves with no extra clicks. */
 export const DETENT_REST_MS = 500;
+/** Relative counts in one full turn. 210, the Push figure, swept a dense knob about 1.5× short of 220°. */
+export const ENCODER_CLICKS_PER_TURN = 315;
+/** Continuous travel of a dense knob, detent holds included. */
+export const KNOB_SWEEP_DEG = 220;
+/** A sparse knob changes by one step inside this angle, so its whole travel can be shorter. */
+export const KNOB_MAX_STEP_DEG = 20;
 
-/** One encoder message. A detent catches a crossing step and holds until it has rested. */
+/**
+ * Raw clicks that move this knob by one step.
+ * Interior detents spend their hold inside the sweep, so a detented scale does not run long.
+ */
+export function knobClicksPerStep(binding: Binding): number {
+  const increments = binding.step > 0 ? (binding.max - binding.min) / binding.step : 0;
+  const interior = (binding.detents ?? []).filter((value) => value > binding.min && value < binding.max).length;
+  const degPerClick = 360 / ENCODER_CLICKS_PER_TURN;
+  const budget = KNOB_SWEEP_DEG - interior * DETENT_CLICKS * degPerClick;
+  let degPerStep = increments > 0 ? budget / increments : KNOB_MAX_STEP_DEG;
+  if (!(degPerStep > 0)) degPerStep = 1;
+  if (degPerStep > KNOB_MAX_STEP_DEG) degPerStep = KNOB_MAX_STEP_DEG;
+  const sensitivity = binding.sensitivity > 0 ? binding.sensitivity : 1;
+  return Math.max(((degPerStep / sensitivity) * ENCODER_CLICKS_PER_TURN) / 360, 1e-9);
+}
+
+/** One encoder message. Clicks gather toward a step, and a detent catches the crossing. */
 export function stepKnob(
   current: number,
   binding: Binding,
   delta: number,
   hold: DetentHold | null,
   now = 0,
-): { value: number; hold: DetentHold | null } {
+  pending = 0,
+): { value: number; hold: DetentHold | null; pending: number } {
+  if (delta === 0) return { value: current, hold, pending };
   const dir: -1 | 1 = delta > 0 ? 1 : -1;
-  const ticks = Math.abs(delta);
+  let ticks = Math.abs(delta);
+  let acc = pending;
   const detents = binding.detents ?? [];
-  if (!detents.length) return { value: clampKnob(current + delta * binding.step, binding), hold: null };
-  const here = nearestDetent(current, detents, binding.step);
+  const here = detents.length ? nearestDetent(current, detents, binding.step) : null;
   if (here !== null) {
-    const rested = hold?.path === binding.path && now - hold.since > DETENT_REST_MS;
-    const left = rested ? 0 : hold?.path === binding.path && hold.dir === dir ? hold.left : DETENT_CLICKS;
-    if (ticks <= left) return { value: here, hold: { path: binding.path, dir, left: left - ticks, since: now } };
-    const dest = clampKnob(here + dir * (ticks - left) * binding.step, binding);
-    const caught = firstDetent(here, dest, detents);
-    if (caught !== null) return { value: caught, hold: { path: binding.path, dir, left: DETENT_CLICKS, since: now } };
-    return { value: dest, hold: null };
+    let owed = DETENT_CLICKS;
+    if (hold && hold.path === binding.path) {
+      if (now - hold.since > DETENT_REST_MS) owed = 0;
+      else if (hold.dir === dir) owed = hold.left;
+    }
+    if (owed > 0) {
+      if (acc !== 0 && Math.sign(acc) !== dir) {
+        const undo = Math.min(ticks, Math.abs(acc));
+        acc -= Math.sign(acc) * undo;
+        ticks -= undo;
+        if (ticks === 0) {
+          const tailDir: -1 | 1 = acc >= 0 ? 1 : -1;
+          return { value: here, hold: { path: binding.path, dir: tailDir, left: 0, since: now }, pending: acc };
+        }
+      }
+      if (ticks <= owed) return { value: here, hold: { path: binding.path, dir, left: owed - ticks, since: now }, pending: 0 };
+      ticks -= owed;
+      acc = 0;
+    }
+    current = here;
   }
-  const target = clampKnob(current + delta * binding.step, binding);
-  const caught = firstDetent(current, target, detents);
-  if (caught !== null) return { value: caught, hold: { path: binding.path, dir, left: DETENT_CLICKS, since: now } };
-  return { value: target, hold: null };
+  return walkSteps(current, binding, dir, ticks, acc, now);
+}
+
+/** Spend gathered clicks one value step at a time so a detent in between can catch. */
+function walkSteps(
+  current: number,
+  binding: Binding,
+  dir: -1 | 1,
+  ticks: number,
+  pending: number,
+  now: number,
+): { value: number; hold: DetentHold | null; pending: number } {
+  const clicksPerStep = knobClicksPerStep(binding);
+  let acc = pending + dir * ticks;
+  const detents = binding.detents ?? [];
+  let guard = 0;
+  while (Math.abs(acc) + 1e-9 >= clicksPerStep && guard++ < 100000) {
+    const stepDir: -1 | 1 = acc > 0 ? 1 : -1;
+    const next = clampKnob(current + stepDir * binding.step, binding);
+    if (Math.abs(next - current) <= 1e-9) return { value: current, hold: null, pending: 0 };
+    const caught = firstDetent(current, next, detents);
+    if (caught !== null) {
+      return { value: caught, hold: { path: binding.path, dir: stepDir, left: DETENT_CLICKS, since: now }, pending: 0 };
+    }
+    current = next;
+    acc -= stepDir * clicksPerStep;
+  }
+  if (Math.abs(acc) < 1e-9) acc = 0;
+  const still = detents.length ? nearestDetent(current, detents, binding.step) : null;
+  if (still !== null) {
+    const tailDir: -1 | 1 = acc >= 0 ? 1 : -1;
+    return { value: still, hold: { path: binding.path, dir: tailDir, left: 0, since: now }, pending: acc };
+  }
+  return { value: current, hold: null, pending: acc };
 }
 
 function clampKnob(raw: number, binding: Binding): number {

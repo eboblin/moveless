@@ -60,6 +60,12 @@ export interface DetentHold {
   since: number;
 }
 
+/** Clicks gathered toward the next value step. A reverse spends this tail first. */
+export interface KnobTravel {
+  path: string;
+  pending: number;
+}
+
 export interface UiState {
   context: ContextId;
   page: number;
@@ -116,6 +122,8 @@ export interface UiState {
   focus: Focus | null;
   /** Clicks of resistance still owed before leaving the current detent. */
   detent: DetentHold | null;
+  /** Partial turn that has not yet completed a value step. */
+  travel: KnobTravel | null;
   /** Encoders currently touched, bit 0 is the first knob. */
   heldEncoders: number;
   /** Macro knobs touched or turned since the first finger went down. */
@@ -284,6 +292,7 @@ export function rememberPage(ui: UiState, context: ContextId, page: number): UiS
     lanePages: { ...ui.lanePages, [context]: clamped },
     focus: moved ? null : ui.focus,
     detent: moved ? null : ui.detent,
+    travel: moved ? null : ui.travel,
     deckGesture: deckLive ? ui.deckGesture : null,
     deckGestureTick: deckLive ? ui.deckGestureTick : null,
     deckLatchedGesture: deckLive ? ui.deckLatchedGesture : null,
@@ -330,6 +339,7 @@ export function defaultUi(): UiState {
     heldPage: null,
     focus: null,
     detent: null,
+    travel: null,
     heldEncoders: 0,
     macroGesture: [],
     macroReturns: [],
