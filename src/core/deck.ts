@@ -925,13 +925,15 @@ export interface DeckPicture {
 /**
  * One bar of platter, stylus in the middle. Gestures move `head`, and the
  * groove scrolls under it. The scale stays the bar. Depth is the wet mix in
- * the voice; the strip always shows the full gesture.
+ * the voice; the strip always shows the full gesture. A parked head is silent
+ * in the voice, and the groove stays drawn.
  */
 export function deckPicture(moment: DeckMoment): DeckPicture {
   const read = deckRead(moment);
   const head = moment.now * read.live + read.pos * (1 - read.live);
   const span = barSamples(moment.tempo, moment.barBeats);
-  return { start: head - span / 2, span, head, gain: read.gain };
+  const parked = read.live < 0.5 && Math.abs(read.rate) < 0.02;
+  return { start: head - span / 2, span, head, gain: parked ? 1 : read.gain };
 }
 
 export interface DeckCommand {

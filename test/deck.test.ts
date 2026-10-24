@@ -43,6 +43,8 @@ describe("deck curves", () => {
     const read = deckRead(moment({ gesture: "stop", now: span, knobs }));
     assert.ok(read.rate < 0.02);
     assert.ok(read.gain < 0.05);
+    const parked = deckPicture(moment({ gesture: "stop", now: span, knobs }));
+    assert.equal(parked.gain, 1);
     const mid = deckRead(moment({ gesture: "stop", now: Math.floor(span / 4), knobs }));
     assert.ok(mid.rate < 0.8);
     assert.ok(mid.rate > 0.05);
