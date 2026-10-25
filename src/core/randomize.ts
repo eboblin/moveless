@@ -75,7 +75,9 @@ interface KnobSpec {
 function knobSpec(path: string): KnobSpec | null {
   const binding = bindingFor(path);
   if (!binding) return null;
-  return { min: binding.min, max: binding.max, step: binding.step, integer: binding.integer, weight: binding.weight };
+  // Pattern below zero names a voice. A roll stays in motif ids.
+  const min = path.endsWith(".pattern") ? Math.max(0, binding.min) : binding.min;
+  return { min, max: binding.max, step: binding.step, integer: binding.integer, weight: binding.weight };
 }
 
 function scopePages(lane: PatternId, scope: LaneScope): string[][] {
@@ -134,11 +136,17 @@ function applyBudget(
   for (const { path } of ordered) {
     if (left <= 1e-9) break;
     const spec = knobSpec(path);
-    const current = readNumber(root, path);
-    const home = readNumber(homes, path);
+    let current = readNumber(root, path);
+    let home = readNumber(homes, path);
     if (!spec || current === null || home === null) continue;
     const span = spec.max - spec.min;
     if (span <= 0) continue;
+    // A stored voice id is outside the roll. Start from the motif floor.
+    if (current < spec.min) {
+      current = spec.min;
+      setPath(root, path, current);
+    }
+    if (home < spec.min) home = spec.min;
     const unit = (current - spec.min) / span;
     const homeUnit = (home - spec.min) / span;
     const towardRoom = Math.abs(unit - homeUnit);

@@ -1680,6 +1680,52 @@ describe("randomize, wander, sets", () => {
     assert.equal(escaped, true);
   });
 
+  it("keeps generator patterns on motif ids at every intensity", () => {
+    const patternsOf = (node: unknown, out: number[] = []): number[] => {
+      if (!node || typeof node !== "object") return out;
+      const record = node as Record<string, unknown>;
+      if (typeof record.pattern === "number" && typeof record.cycle === "number" && typeof record.amount === "number") out.push(record.pattern);
+      for (const value of Object.values(record)) if (value && typeof value === "object") patternsOf(value, out);
+      return out;
+    };
+    for (const intensity of ["soft", "medium", "hard"] as const) {
+      for (const lane of ["kick", "bass", "chords"] as const) {
+        for (let seed = 1; seed <= 12; seed++) {
+          const project = {
+            ...setRandomizeIntensity(defaultProject(), intensity),
+            global: { ...defaultProject().global, seed },
+            randomizeNonce: seed,
+          };
+          const next = randomizeLane(project, lane, "all");
+          for (const pattern of patternsOf(next.working[lane])) assert.ok(pattern >= 0);
+        }
+      }
+    }
+
+    let leftVoice = false;
+    let leftZero = false;
+    for (const intensity of ["soft", "medium", "hard"] as const) {
+      for (const start of [-7, -1, 0]) {
+        for (let seed = 1; seed <= 20; seed++) {
+          const project = {
+            ...setRandomizeIntensity(defaultProject(), intensity),
+            global: { ...defaultProject().global, seed },
+            randomizeNonce: seed,
+          };
+          project.working.lead.filter.cutoff = modulated(0.4, start, 8, -0.25);
+          const next = randomizePaths(project, "lead", ["filter.cutoff.pattern"]).working.lead.filter.cutoff;
+          assert.ok(next.pattern >= 0);
+          assert.equal(next.cycle, 8);
+          assert.equal(next.amount, -0.25);
+          if (start < 0 && next.pattern !== start) leftVoice = true;
+          if (start === 0 && next.pattern > 0) leftZero = true;
+        }
+      }
+    }
+    assert.equal(leftVoice, true);
+    assert.equal(leftZero, true);
+  });
+
   it("captures only the paths of one page", () => {
     let project = setRandomizeIntensity(defaultProject(), "hard");
     const before = clone(project.working.kick);
