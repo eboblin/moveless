@@ -25,10 +25,10 @@ import {
   toggleMute,
 } from "../core/performance.ts";
 import { DECK_GROUPS, fieldAt, focusedGroup, groupAt, recallGroup, setGroupCell, type DeckGroup } from "../core/deck.ts";
-import { CAPTURE_CC, contextAtStep, DOWN_CC, isLane, JOG_CLICK_CC, LANES, LOOP_CC, MENU_CC, PLAY_CC, RANDOMIZE_DEPTHS, RANDOMIZE_SCOPES, RECORD_CC, TRANSITIONS, UP_CC, WANDERS, type ContextId, type PatternId, type Project } from "../core/types.ts";
+import { CAPTURE_CC, contextAtStep, DOWN_CC, isLane, JOG_CLICK_CC, LANES, LOOP_CC, MENU_CC, MUTE_CC, PLAY_CC, RANDOMIZE_DEPTHS, RANDOMIZE_SCOPES, RECORD_CC, SAMPLE_CC, TRANSITIONS, UP_CC, WANDERS, type ContextId, type PatternId, type Project } from "../core/types.ts";
 import { resetControl, writeControl } from "./controls.ts";
-import { bindingFor, bindingPaths, deckPage, livePage, pageCount, pageGroup, pageId, pageTitle, pagesFor, scopeIncludesPage } from "../core/pages.ts";
-import { applyBookmark, auxHidesRandomize, FOCUS_HOLD_MS, focusHoldTicks, HOLD_MS, HOLD_TICKS, holdIsShort, MACRO_RETURN_MS, PAGE_TITLE_MS, patternPadsVisible, RANDOMIZE_HINT_MS, rememberPage, restoreTrackPlace, screenPlace, settleRandomize, settleWheel, showPageTitle, toggleRandomize, type CaptureLine, type MacroReturn, type Notice, type RandomizeLine, type UiState } from "./state.ts";
+import { bindingFor, bindingPaths, deckPage, livePage, mixerPage, pageCount, pageGroup, pageTitle, pagesFor, scopeIncludesPage } from "../core/pages.ts";
+import { applyBookmark, auxHidesRandomize, clearFace, FOCUS_HOLD_MS, focusHoldTicks, HOLD_MS, HOLD_TICKS, holdIsShort, MACRO_RETURN_MS, PAGE_TITLE_MS, patternPadsVisible, RANDOMIZE_HINT_MS, rememberPage, restoreTrackPlace, screenPlace, settleRandomize, settleWheel, showPageTitle, toggleRandomize, type CaptureLine, type FaceMode, type MacroReturn, type Notice, type RandomizeLine, type UiState } from "./state.ts";
 import { journalPageCount } from "../core/journal.ts";
 
 export interface MidiMsg {
@@ -86,7 +86,9 @@ function onCc(session: Session, cc: number, value: number, press: boolean): Sess
   }
   if (cc === 60) return onCopy(session, press);
   if (cc === 119) return holdDelete(session, press);
-  if (cc === CAPTURE_CC) return onCapture(session, press);
+  if (cc === MUTE_CC) return onFace(session, "mixer", press);
+  if (cc === CAPTURE_CC) return onFace(session, "deck", press);
+  if (cc === SAMPLE_CC) return onSample(session, press);
   if (cc === JOG_CLICK_CC && press) {
     return { ...session, ui: toggleRandomize(session.ui) };
   }
@@ -101,6 +103,7 @@ function onCc(session: Session, cc: number, value: number, press: boolean): Sess
 }
 
 function onStep(session: Session, index: number, press: boolean): Session {
+  if (press && session.ui.face && !session.ui.faceHeld) session = { ...session, ui: clearFace(session.ui) };
   const step = contextAtStep(index);
   if (!step) return session;
   if (isLane(step)) {
@@ -140,6 +143,8 @@ function onPad(session: Session, index: number, press: boolean): Session {
   const col = index % 8;
   const top = row === 3;
   const second = row === 2;
+  if (session.ui.face === "mixer") return onMutePad(session, index);
+  if (session.ui.face === "deck") return pressDeckPad(session, index);
   const randomize = !auxHidesRandomize(session.ui) && (session.ui.wheelTouch || session.ui.randomizeLatched);
   if (randomize) return onRandomizePad(session, row, col);
   const holdingAux = session.ui.heldContext === "aux";
@@ -156,26 +161,15 @@ function onPad(session: Session, index: number, press: boolean): Session {
       ui: settleRandomize({ ...rememberPage(session.ui, held, page), heldContext: held, heldPage: page }),
     };
   }
-  if (facePageId(session.ui) === "mixer") return onMutePad(session, index);
-  if (facePageId(session.ui) === "deck") return pressDeckPad(session, index);
-  if ((session.ui.captureHeld || session.ui.captureLatched) && patternPadsVisible(session.ui)) {
+  if ((session.ui.sampleHeld || session.ui.sampleLatched) && patternPadsVisible(session.ui)) {
     if (row === 0) return onCaptureStrip(session, col);
     return onScenePad(session, index - 8);
   }
   return onScenePad(session, index);
 }
 
-/** Page whose pads are live. A held purple step uses the page under the finger, before release. */
-function facePageId(ui: UiState): string | null {
-  if (ui.heldContext === "aux") {
-    const index = ui.heldPage ?? ui.lanePages.aux ?? (ui.context === "aux" ? ui.page : 0);
-    return pageId("aux", index);
-  }
-  return pageId(ui.context, ui.page);
-}
-
 function onPadRelease(session: Session, index: number): Session {
-  if (facePageId(session.ui) !== "deck") return session;
+  if (session.ui.face !== "deck") return session;
   return releaseDeckPad(session, index);
 }
 
@@ -302,7 +296,7 @@ function showCaptureLine(session: Session, project: Project, line: CaptureLine):
   return {
     ...session,
     project,
-    ui: { ...session.ui, captureHint: { line, untilMs: Date.now() + RANDOMIZE_HINT_MS } },
+    ui: { ...session.ui, sampleHint: { line, untilMs: Date.now() + RANDOMIZE_HINT_MS } },
   };
 }
 
@@ -345,6 +339,7 @@ function touchWheel(session: Session, press: boolean): Session {
 }
 
 function turnWheel(session: Session, value: number): Session {
+  if (session.ui.face) return session;
   const delta = relDelta(value);
   if (!delta) return session;
   const count = pageCount(session.ui.context);
@@ -468,8 +463,14 @@ export function modulatedBase(path: string): string | null {
 }
 
 function currentBinding(session: Session, index: number) {
-  const page = livePage(session.project, session.ui.context, session.ui.page);
-  return page?.bindings[index] ?? null;
+  return shownPage(session)?.bindings[index] ?? null;
+}
+
+/** Knobs under the fingers. Mixer and DJ FX replace the page that was open. */
+function shownPage(session: Session) {
+  if (session.ui.face === "mixer") return mixerPage();
+  if (session.ui.face === "deck") return deckPage(focusedGroup(session.project.deck), session.project.deck);
+  return livePage(session.project, session.ui.context, session.ui.page);
 }
 
 /** Top row toggles mute, the next solos, the next locks. Fx takes the eighth column: mute and lock, no solo. */
@@ -489,35 +490,109 @@ function onMutePad(session: Session, index: number): Session {
   return session;
 }
 
-function onCapture(session: Session, press: boolean): Session {
+/**
+ * Mute opens the mixer, Capture opens DJ FX.
+ * The screen changes on the press. A short release leaves it there.
+ * A long release returns to the mode that was up before the press.
+ * A step button leaves a latched mode. The button stays lit while the finger is down,
+ * and while the mode is latched.
+ */
+function onFace(session: Session, which: FaceMode, press: boolean): Session {
+  if (press) {
+    if (session.ui.faceHeld) return session;
+    const leavingDeck = which !== "deck";
+    return {
+      ...session,
+      ui: settleRandomize({
+        ...session.ui,
+        face: which,
+        faceHeld: which,
+        faceDownTick: session.tick,
+        faceDownMs: Date.now(),
+        faceReturn: { latch: session.ui.faceLatch },
+        pageTitleUntilMs: null,
+        pageTitleSlide: null,
+        focus: null,
+        detent: null,
+        travel: null,
+        ...(leavingDeck
+          ? {
+              deckGesture: null,
+              deckGestureTick: null,
+              deckLatchedGesture: null,
+              deckLatchTick: null,
+              deckPads: 0,
+            }
+          : {}),
+      }),
+    };
+  }
+  if (session.ui.faceHeld !== which) return session;
+  const short = holdIsShort(session.ui.faceDownTick, session.ui.faceDownMs, session.tick);
+  const back = session.ui.faceReturn?.latch ?? null;
+  let ui: UiState = {
+    ...session.ui,
+    faceHeld: null,
+    faceDownTick: null,
+    faceDownMs: null,
+    faceReturn: null,
+  };
+  if (!short || back === which) {
+    const face = short ? null : back;
+    ui = { ...ui, face, faceLatch: face, focus: null, detent: null, travel: null };
+  } else {
+    ui = { ...ui, face: which, faceLatch: which };
+  }
+  if (ui.face !== "deck") {
+    ui = {
+      ...ui,
+      deckGesture: null,
+      deckGestureTick: null,
+      deckLatchedGesture: null,
+      deckLatchTick: null,
+      deckPads: 0,
+    };
+  }
+  return { ...session, ui: settleRandomize(ui) };
+}
+
+/** Transition and wander. Short tap latches the row, a long hold keeps it only while the finger is down. */
+function onSample(session: Session, press: boolean): Session {
   if (press) {
     return {
       ...session,
       ui: {
         ...session.ui,
-        captureHeld: true,
-        captureWasLatched: session.ui.captureLatched,
-        captureDownTick: session.tick,
-        captureDownMs: Date.now(),
+        sampleHeld: true,
+        sampleWasLatched: session.ui.sampleLatched,
+        sampleDownTick: session.tick,
+        sampleDownMs: Date.now(),
       },
     };
   }
-  const short = holdIsShort(session.ui.captureDownTick, session.ui.captureDownMs, session.tick);
-  const latched = short ? !session.ui.captureWasLatched : session.ui.captureWasLatched;
+  const short = holdIsShort(session.ui.sampleDownTick, session.ui.sampleDownMs, session.tick);
+  const latched = short ? !session.ui.sampleWasLatched : session.ui.sampleWasLatched;
   return {
     ...session,
     ui: {
       ...session.ui,
-      captureHeld: false,
-      captureLatched: latched,
-      captureDownTick: null,
-      captureDownMs: null,
+      sampleHeld: false,
+      sampleLatched: latched,
+      sampleDownTick: null,
+      sampleDownMs: null,
     },
   };
 }
 
 /** One randomize pass. Loop runs this from any screen and leaves the peek where it is. */
 function applyRandomize(session: Session): Session {
+  if (session.ui.face === "mixer") {
+    return { ...session, project: randomizeSurface(session.project, "mix", bindingPaths(mixerPage())) };
+  }
+  if (session.ui.face === "deck") {
+    const knobs = deckPage(focusedGroup(session.project.deck), session.project.deck);
+    return { ...session, project: randomizeSurface(session.project, "deck", bindingPaths(knobs)) };
+  }
   const { context, page } = randomizeTarget(session);
   let project = session.project;
   if (context === "aux") project = rerollAux(project, page);
@@ -532,18 +607,15 @@ function randomizeTarget(session: Session): { context: ContextId; page: number }
   return { context, page };
 }
 
-/** One budget per aux page. Each store keeps its own home. DJ FX uses the focused group's knobs. */
+/** One budget per aux page. Each store keeps its own home. */
 function rerollAux(project: Project, page: number): Project {
   let next = project;
   pagesFor("aux").forEach((item, index) => {
     if (!scopeIncludesPage(next.randomizeScope, "aux", index, page)) return;
-    const live = item.id === "deck" ? deckPage(focusedGroup(next.deck), next.deck) : item;
-    const paths = bindingPaths(live);
-    const store = live.bindings.find((binding) => binding)?.store;
+    const paths = bindingPaths(item);
+    const store = item.bindings.find((binding) => binding)?.store;
     if (store === "progression" || store === "global" || store === "bus") next = randomizeSurface(next, store, paths);
     else if (store === "macro") next = randomizeSurface(next, "perf", paths);
-    else if (store === "mixer") next = randomizeSurface(next, "mix", paths);
-    else if (store === "deck") next = randomizeSurface(next, "deck", paths);
   });
   return next;
 }

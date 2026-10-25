@@ -10,7 +10,7 @@ import { assembleDeck, behaviorOf, formatDeckCommand, isDeckGroup } from "../cor
 import { formatBus, packPhraseBody } from "../dsp/voice.ts";
 import { midiMessage, reduce, settleTrackPeek, type Session } from "../ui/input.ts";
 import { CAPTURE_CC, DOWN_CC, MENU_CC, MUTE_CC, PLAY_CC, SAMPLE_CC, UP_CC } from "../core/types.ts";
-import { advancePulseClock, blinkHalfMs, directionLit, dropLed, ledColorAt, menuLed, modeButtonLed, offerLed, padBlinkSteps, padLeds, padPackets, playLed, PULSE_CLOCK_IDLE, sceneShadeStep, stepLeds, takeLeds, trackLeds, type PulseClock } from "../ui/leds.ts";
+import { advancePulseClock, blinkHalfMs, directionLit, dropLed, faceButtonLed, ledColorAt, menuLed, modeButtonLed, offerLed, padBlinkSteps, padLeds, padPackets, playLed, PULSE_CLOCK_IDLE, sceneShadeStep, stepLeds, takeLeds, trackLeds, type PulseClock } from "../ui/leds.ts";
 import { plotAmount, plotMinus } from "../ui/digits.ts";
 import {
   CHAR_W,
@@ -33,7 +33,6 @@ import {
 } from "../ui/screen.ts";
 import { resetWaveform, serviceWaveform } from "../ui/wave-audio.ts";
 import { applyWavePages, strokeWaveform, type WaveTape } from "../ui/wave.ts";
-import { pageId } from "../core/pages.ts";
 import { defaultUi, focusVisible, peekKind, rememberPage, settleWheel, type UiState } from "../ui/state.ts";
 import type { Project } from "../core/types.ts";
 
@@ -202,18 +201,16 @@ function deckEdge(before: UiState, after: UiState): boolean {
   return before.deckGesture !== after.deckGesture
     || before.deckLatchedGesture !== after.deckLatchedGesture
     || before.deckPress !== after.deckPress
-    || before.context !== after.context
-    || before.page !== after.page;
+    || before.face !== after.face;
 }
 
-/** DJ FX is audible while its purple-lane page is the current one. */
+/** DJ FX is audible while Capture is showing it. */
 function deckOpen(ui: UiState): boolean {
-  return pageId(ui.context, ui.page) === "deck";
+  return ui.face === "deck";
 }
 
-/** The strip is on screen, including a held preview of the DJ page. */
+/** The strip is on screen, including a held preview. */
 function deckVisible(ui: UiState): boolean {
-  if (ui.heldContext) return pageId(ui.heldContext, ui.heldPage ?? ui.lanePages[ui.heldContext] ?? 0) === "deck";
   return deckOpen(ui);
 }
 
@@ -308,7 +305,7 @@ function screenDelta(): "same" | "full" | "head" {
   const now = Date.now();
   const notice = !!(ui.notice && now < ui.notice.untilMs);
   const hint = !!(ui.randomizeHint && now < ui.randomizeHint.untilMs);
-  const capture = !!(ui.captureHint && now < ui.captureHint.untilMs);
+  const capture = !!(ui.sampleHint && now < ui.sampleHint.untilMs);
   const focus = focusVisible(ui.focus, session.tick, now);
   const peek = peekKind(ui);
   const latch = Math.round(session.project.progression.count) <= 0 ? latchStamp() : "";
@@ -458,7 +455,7 @@ function paintHostReadout(screen: Screen): void {
 function deckOverlay(ui: UiState, now: number): boolean {
   if (ui.notice && now < ui.notice.untilMs) return true;
   if (ui.randomizeHint && now < ui.randomizeHint.untilMs) return true;
-  if (ui.captureHint && now < ui.captureHint.untilMs) return true;
+  if (ui.sampleHint && now < ui.sampleHint.untilMs) return true;
   if (pageTitleVisible(ui, now)) return true;
   return false;
 }
@@ -581,18 +578,20 @@ function paintLeds(): void {
     sentPlay = play;
     offerLed(ledOut, [0x0b, 0xb0, PLAY_CC, play]);
   }
-  if (sentMute !== 0) {
-    sentMute = 0;
-    offerLed(ledOut, [0x0b, 0xb0, MUTE_CC, 0]);
+  const mute = faceButtonLed(session.ui.face, session.ui.faceLatch, session.ui.faceHeld, "mixer");
+  if (sentMute !== mute) {
+    sentMute = mute;
+    offerLed(ledOut, [0x0b, 0xb0, MUTE_CC, mute]);
   }
-  const capture = modeButtonLed(session.ui.captureHeld || session.ui.captureLatched);
+  const capture = faceButtonLed(session.ui.face, session.ui.faceLatch, session.ui.faceHeld, "deck");
   if (sentCapture !== capture) {
     sentCapture = capture;
     offerLed(ledOut, [0x0b, 0xb0, CAPTURE_CC, capture]);
   }
-  if (sentSample !== 0) {
-    sentSample = 0;
-    offerLed(ledOut, [0x0b, 0xb0, SAMPLE_CC, 0]);
+  const sample = modeButtonLed(session.ui.sampleHeld || session.ui.sampleLatched);
+  if (sentSample !== sample) {
+    sentSample = sample;
+    offerLed(ledOut, [0x0b, 0xb0, SAMPLE_CC, sample]);
   }
 }
 

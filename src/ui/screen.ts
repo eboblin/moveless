@@ -8,7 +8,7 @@ import { applyVoiceEnvelope, evalModulated, voiceLane } from "../core/modulate.t
 import { isPitched, isVoice, LANES, LANE_CODE, type RandomizeDepth, type RandomizeIntensity, type RandomizeScope, type ContextId, type HarmonicEvent, type LaneId, type Phrase, type Project, type TimedEvent } from "../core/types.ts";
 import { DIGIT_H, displayAmount, divisionCell, type BigAmount, type DisplayAmount } from "./digits.ts";
 import { readControl } from "./controls.ts";
-import { bindingFor, livePage, pageTitle, pagesFor, type Binding, type Page } from "../core/pages.ts";
+import { bindingFor, deckPage, livePage, mixerPage, pageTitle, pagesFor, type Binding, type Page } from "../core/pages.ts";
 import { focusVisible, macroReturnValue, PAGE_TITLE_SLIDE_MS, screenPlace, type CaptureLine, type RandomizeLine, type UiState } from "./state.ts";
 import { lettersWidth, plotLetters } from "./letters.ts";
 import { readEnvelope } from "../dsp/envelope.ts";
@@ -101,13 +101,15 @@ export function renderScreen(
   const page = livePage(project, context, pageIndex);
   const notice = ui.notice && now < ui.notice.untilMs ? ui.notice : null;
   const randomize = ui.randomizeHint && now < ui.randomizeHint.untilMs ? ui.randomizeHint : null;
-  const capture = ui.captureHint && now < ui.captureHint.untilMs ? ui.captureHint : null;
-  const hint = !randomize ? capture : !capture ? randomize : capture.untilMs >= randomize.untilMs ? capture : randomize;
+  const sample = ui.sampleHint && now < ui.sampleHint.untilMs ? ui.sampleHint : null;
+  const hint = !randomize ? sample : !sample ? randomize : sample.untilMs >= randomize.untilMs ? sample : randomize;
   const focusState = !notice && focusVisible(ui.focus, tick, now) ? ui.focus : null;
   const focus = focusState?.label ?? null;
   const focusBinding = focusState ? bindingFor(focusState.path) : null;
-  const mixer = !notice && page?.id === "mixer";
-  const decking = !notice && page?.id === "deck";
+  const face = ui.face;
+  const mixer = !notice && face === "mixer";
+  const decking = !notice && face === "deck";
+  const shown = mixer ? mixerPage() : decking ? deckPage(focusedGroup(project.deck), project.deck) : page;
   const effectTitle = GROUP_PAD.find((pad) => pad.id === focusedGroup(project.deck))?.title ?? "BEAT REPEAT";
   const knobLine = decking && focus && focusBinding ? deckKnobHeader(project, focusBinding) : null;
   const header = mixer
@@ -125,7 +127,7 @@ export function renderScreen(
   clearPlayhead();
   const pageMark = Math.min(pageIndex, Math.max(0, pages.length - 1));
   const pageCount = pages.length;
-  if (ui.wheelTouch) drawPager(pixels, pageMark, pageCount);
+  if (ui.wheelTouch && !face) drawPager(pixels, pageMark, pageCount);
   else drawLoad(pixels, cpu);
   if (!mixer) drawParamSeparator(pixels);
   const chordRoll = vizLane === "chords";
@@ -148,8 +150,8 @@ export function renderScreen(
   const labels = mixer
     ? [{ x: 1, y: TITLE_Y, text: header.slice(0, LINE_LIMIT) }, ...mixerChannelLabels(project, focus)]
     : decking
-      ? drawLabels(project, context, page, deckFocus, header, ui, now, "DJ")
-    : drawLabels(project, context, page, focus, header, ui, now);
+      ? drawLabels(project, context, shown, deckFocus, header, ui, now, "DJ")
+    : drawLabels(project, context, shown, focus, header, ui, now);
   const menu = hint && !notice && !mixer ? hint.line : null;
   const titleOn = !notice && pageTitleVisible(ui, now);
   if (phrase && bars && !titleOn && !menu) labels.push(...chordNameLabels(project, phrase));
@@ -157,15 +159,16 @@ export function renderScreen(
   if ((menu || titleOn) && (phrase || mixer || decking)) dimPattern(pixels, mixer ? MIX_FADER_BOTTOM : undefined);
   if (menu && !titleOn) drawMenuCaption(pixels, project, menu);
   if (titleOn) drawPageTitle(pixels, project, ui, now);
-  const digits = mixer || !page ? [] : paramDigits(project, context, page, focus, ui, now);
+  const digits = mixer || !shown ? [] : paramDigits(project, context, shown, focus, ui, now);
   const dim: number[] = [];
   return { header, viz, pixels, labels, digits, dim };
 }
 
 function drawPageTitle(pixels: Uint8Array, project: Project, ui: UiState, now: number): void {
   const place = screenPlace(ui);
-  const title = pageTitle(project, place.context, place.page);
-  const lane = ui.pageTitleLane ? LANE_TITLE[place.context] : null;
+  const faceTitle = ui.face === "mixer" ? "MIXER" : ui.face === "deck" ? "DJ FX" : null;
+  const title = faceTitle ?? pageTitle(project, place.context, place.page);
+  const lane = faceTitle ? null : ui.pageTitleLane ? LANE_TITLE[place.context] : null;
   const pageY = lane ? CAPTION_PAGE_Y : CAPTION_SINGLE_Y;
   const parts: Caption[] = [];
   if (lane) parts.push({ text: lane, x: titleLeft(lane), y: CAPTION_LANE_Y });

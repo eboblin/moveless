@@ -15,10 +15,10 @@ import {
   type PatternId,
   type Project,
 } from "../core/types.ts";
-import { livePage, pageCount, pageGroupColor, pageId, scopeIncludesPage } from "../core/pages.ts";
+import { livePage, pageCount, pageGroupColor, scopeIncludesPage } from "../core/pages.ts";
 import { depthTouchesPath } from "../core/randomize.ts";
 import { DECK_GROUPS, GROUP_PAD, fieldAt, groupAt, type DeckKnobs } from "../core/deck.ts";
-import { patternPadsVisible, peekKind } from "./state.ts";
+import { patternPadsVisible, peekKind, type FaceMode } from "./state.ts";
 
 export const LED = {
   off: 0,
@@ -104,6 +104,16 @@ export function modeButtonLed(active: boolean): number {
   return active ? PLAY_LED_ON : 0;
 }
 
+/** Mute or Capture. Bright while that mode is held, latched, or showing under the finger. */
+export function faceButtonLed(
+  face: FaceMode | null,
+  latch: FaceMode | null,
+  held: FaceMode | null,
+  which: FaceMode,
+): number {
+  return modeButtonLed(face === which || latch === which || held === which);
+}
+
 /** Lit while the transport runs, dark when it is stopped. */
 export function playLed(playing: boolean): number {
   return playing ? PLAY_LED_ON : 0;
@@ -124,9 +134,9 @@ export function trackLeds(project: Project, context: ContextId, page: number): L
 export interface PadSurface {
   wheelTouch?: boolean;
   randomizeLatched?: boolean;
-  captureHeld?: boolean;
-  captureLatched?: boolean;
-  captureDownMs?: number | null;
+  sampleHeld?: boolean;
+  sampleLatched?: boolean;
+  face?: FaceMode | null;
   heldContext?: ContextId | null;
   heldPage?: number | null;
   context?: ContextId;
@@ -139,47 +149,37 @@ export interface PadSurface {
 /**
  * Playing and morph-target pads share one pulse. Target also shades
  * dark→dim→bright by morph progress. An empty journal/set still shows pad 0 as the
- * current working scene. Where those pads are showing, Capture lifts the first 24 patterns
+ * current working scene. Where those pads are showing, Sample lifts the first 24 patterns
  * one row and puts Transition and Wander on the bottom row.
- * Jog touch or a latched jog click shows randomize instead, so the Capture row stays hidden.
- * On the purple lane the jog still draws the page row, and the randomize rows stay off.
+ * Jog touch or a latched jog click shows randomize instead, so the Sample row stays hidden.
+ * Mixer and DJ FX take every pad. On the purple lane the jog still draws the page row,
+ * and the randomize rows stay off.
  */
 export function padLeds(project: Project, mode: "journal" | "set", surface?: PadSurface, tick = 0): Led[] {
   const context = surface?.context ?? "kick";
   const page = surface?.page ?? 0;
   const onAux = context === "aux" || surface?.heldContext === "aux";
-  if (!onAux && (surface?.wheelTouch || surface?.randomizeLatched)) return randomizePadLeds(project, context, page);
   const scenes = scenePadLeds(project, mode, tick, surface?.journalPage ?? 0, surface?.copyHeld ?? false);
+  if (surface?.face === "mixer") return mutePeekLeds(project);
+  if (surface?.face === "deck") return deckPadLeds(scenes, project.deck);
+  if (!onAux && (surface?.wheelTouch || surface?.randomizeLatched)) return randomizePadLeds(project, context, page);
   let leds: Led[];
   if (surface?.heldContext) {
     const shown = surface.heldPage ?? surface.lanePages?.[surface.heldContext] ?? (surface.heldContext === context ? page : -1);
-    leds = surface.heldContext === "aux"
-      ? pageOverlay(auxFaceLeds(project, scenes, shown), "aux", shown, 1)
-      : pageOverlay(scenes, surface.heldContext, shown);
+    leds = pageOverlay(scenes, surface.heldContext, shown, surface.heldContext === "aux" ? 1 : 2);
   } else {
-    const id = pageId(context, page);
-    const face = id === "mixer" ? mutePeekLeds(project) : id === "deck" ? deckPadLeds(scenes, project.deck) : scenes;
-    leds = context === "aux" && surface?.wheelTouch ? pageOverlay(face, "aux", page, 1) : face;
+    leds = context === "aux" && surface?.wheelTouch ? pageOverlay(scenes, "aux", page, 1) : scenes;
   }
-  if (peekKind(surface ?? {}) === "capture" && patternPadsVisible({ ...surface, context, page })) {
+  if (peekKind(surface ?? {}) === "sample" && patternPadsVisible({ ...surface, context, page })) {
     const lifted = liftPatterns(scenes, project);
     if (surface?.heldContext) {
       const shown = surface.heldPage ?? surface.lanePages?.[surface.heldContext] ?? (surface.heldContext === context ? page : -1);
-      return surface.heldContext === "aux" ? pageOverlay(lifted, "aux", shown, 1) : pageOverlay(lifted, surface.heldContext, shown);
+      return pageOverlay(lifted, surface.heldContext, shown, surface.heldContext === "aux" ? 1 : 2);
     }
     if (context === "aux" && surface?.wheelTouch) return pageOverlay(lifted, "aux", page, 1);
     return lifted;
   }
   return leds;
-}
-
-/** Mixer and DJ pads for the purple page under the finger. Other pages keep the scene grid. */
-function auxFaceLeds(project: Project, scenes: Led[], pageIndex: number): Led[] {
-  if (pageIndex < 0) return scenes;
-  const id = pageId("aux", pageIndex);
-  if (id === "mixer") return mutePeekLeds(project);
-  if (id === "deck") return deckPadLeds(scenes.slice(), project.deck);
-  return scenes;
 }
 
 function deckPadLeds(scenes: Led[], deck: DeckKnobs): Led[] {

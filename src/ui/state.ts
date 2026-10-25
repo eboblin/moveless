@@ -1,5 +1,5 @@
 import type { DeckGroup } from "../core/deck.ts";
-import { pageCount, pageId } from "../core/pages.ts";
+import { pageCount } from "../core/pages.ts";
 import { STEPS, type ContextId, type PageRef } from "../core/types.ts";
 
 export type UiMode = "journal" | "set";
@@ -38,7 +38,7 @@ export interface RandomizeHint {
 
 export type CaptureLine = "transition" | "wander";
 
-/** One Capture row, shown over the lane picture after its pad is pressed. */
+/** One Sample row, shown over the lane picture after its pad is pressed. */
 export interface CaptureHint {
   line: CaptureLine;
   untilMs: number;
@@ -66,6 +66,14 @@ export interface KnobTravel {
   pending: number;
 }
 
+/** A pad-taking screen on its own button. Mixer is Mute, DJ FX is Capture. */
+export type FaceMode = "mixer" | "deck";
+
+/** What a long press of Mute or Capture restores on release. */
+export interface FaceReturn {
+  latch: FaceMode | null;
+}
+
 export interface UiState {
   context: ContextId;
   page: number;
@@ -84,8 +92,8 @@ export interface UiState {
   randomizeParked: boolean | null;
   /** The randomize row last pressed, until its caption times out. */
   randomizeHint: RandomizeHint | null;
-  /** The Capture row last pressed, until its caption times out. */
-  captureHint: CaptureHint | null;
+  /** The Sample row last pressed, until its caption times out. */
+  sampleHint: CaptureHint | null;
   shiftHeld: boolean;
   copyHeld: boolean;
   /** Tick and wall clock when Copy went down, so a short click can paste. */
@@ -98,13 +106,27 @@ export interface UiState {
   /** Journal page. 0 is the newest 32 scenes. */
   journalPage: number;
   deleteHeld: boolean;
-  captureHeld: boolean;
-  /** Peek stays up after a short Capture tap. */
-  captureLatched: boolean;
-  /** Latch from before this Capture press, restored when the hold was long. */
-  captureWasLatched: boolean;
-  captureDownTick: number | null;
-  captureDownMs: number | null;
+  /** Sample strip is under the finger. Transition and wander sit on the bottom row. */
+  sampleHeld: boolean;
+  /** Strip stays up after a short Sample tap. */
+  sampleLatched: boolean;
+  /** Latch from before this Sample press, restored when the hold was long. */
+  sampleWasLatched: boolean;
+  sampleDownTick: number | null;
+  sampleDownMs: number | null;
+  /**
+   * Mixer or DJ FX, shown over the current page. Mute and Capture own these.
+   * They are not purple-lane pages: each one takes the pads.
+   */
+  face: FaceMode | null;
+  /** Short press left this mode up after the finger lifted. */
+  faceLatch: FaceMode | null;
+  /** Mute or Capture is down. The button stays lit for the whole press. */
+  faceHeld: FaceMode | null;
+  faceDownTick: number | null;
+  faceDownMs: number | null;
+  /** Latch from before this press. A long release puts it back. */
+  faceReturn: FaceReturn | null;
   /** Group currently under a finger. The deck page has to be showing. */
   deckGesture: DeckGroup | null;
   /** Transport tick when that finger went down. The picture counts the gesture from here. */
@@ -183,16 +205,16 @@ export function holdIsShort(downTick: number | null, downMs: number | null, tick
   return heldTicks < HOLD_TICKS && heldMs < HOLD_MS;
 }
 
-export type PeekKind = "capture";
+export type PeekKind = "sample";
 
 export interface PeekFlags {
-  captureHeld?: boolean;
-  captureLatched?: boolean;
+  sampleHeld?: boolean;
+  sampleLatched?: boolean;
 }
 
-/** Capture is latched. The wander strip is drawn only where pattern pads are showing. */
+/** Sample is latched. The wander strip is drawn only where pattern pads are showing. */
 export function peekKind(ui: PeekFlags): PeekKind | null {
-  if (ui.captureHeld || ui.captureLatched) return "capture";
+  if (ui.sampleHeld || ui.sampleLatched) return "sample";
   return null;
 }
 
@@ -205,18 +227,13 @@ export function patternPadsVisible(ui: {
   lanePages?: Partial<Record<ContextId, number>> | null;
   wheelTouch?: boolean;
   randomizeLatched?: boolean;
+  face?: FaceMode | null;
 }): boolean {
+  if (ui.face === "mixer" || ui.face === "deck") return false;
   const context = (ui.context ?? "kick") as ContextId;
-  const page = ui.page ?? 0;
   const onAux = context === "aux" || ui.heldContext === "aux";
   if (!onAux && (ui.wheelTouch || ui.randomizeLatched)) return false;
-  if (ui.heldContext === "aux") {
-    const shown = ui.heldPage ?? ui.lanePages?.aux ?? (context === "aux" ? page : 0);
-    const id = pageId("aux", shown);
-    return id !== "mixer" && id !== "deck";
-  }
-  const id = pageId(context, page);
-  return id !== "mixer" && id !== "deck";
+  return true;
 }
 
 /** 300 ms of musical time at the current tempo. */
@@ -250,9 +267,9 @@ function blankLanePages(): Record<ContextId, number> {
   return pages;
 }
 
-/** Purple lane ignores the randomize menu, latch and jog touch. A held purple step counts. */
-export function auxHidesRandomize(ui: { context?: string | null; heldContext?: string | null }): boolean {
-  return ui.context === "aux" || ui.heldContext === "aux";
+/** Purple lane, mixer, and DJ FX ignore the randomize menu. A held purple step counts. */
+export function auxHidesRandomize(ui: { context?: string | null; heldContext?: string | null; face?: FaceMode | null }): boolean {
+  return ui.context === "aux" || ui.heldContext === "aux" || ui.face === "mixer" || ui.face === "deck";
 }
 
 /** Park the jog latch on the purple lane and put it back on any other lane. */
@@ -284,7 +301,7 @@ export function rememberPage(ui: UiState, context: ContextId, page: number): UiS
   const count = Math.max(1, pageCount(context));
   const clamped = Math.min(Math.max(0, page), count - 1);
   const moved = context !== ui.context || clamped !== ui.page;
-  const deckLive = pageId(context, clamped) === "deck";
+  const deckLive = ui.face === "deck";
   const next: UiState = {
     ...ui,
     context,
@@ -315,7 +332,7 @@ export function defaultUi(): UiState {
     randomizeLatched: false,
     randomizeParked: null,
     randomizeHint: null,
-    captureHint: null,
+    sampleHint: null,
     shiftHeld: false,
     copyHeld: false,
     copyDownTick: null,
@@ -324,11 +341,17 @@ export function defaultUi(): UiState {
     copySnapshot: null,
     journalPage: 0,
     deleteHeld: false,
-    captureHeld: false,
-    captureLatched: false,
-    captureWasLatched: false,
-    captureDownTick: null,
-    captureDownMs: null,
+    sampleHeld: false,
+    sampleLatched: false,
+    sampleWasLatched: false,
+    sampleDownTick: null,
+    sampleDownMs: null,
+    face: null,
+    faceLatch: null,
+    faceHeld: null,
+    faceDownTick: null,
+    faceDownMs: null,
+    faceReturn: null,
     deckGesture: null,
     deckGestureTick: null,
     deckLatchedGesture: null,
@@ -367,14 +390,37 @@ export function openSetMode(ui: UiState): UiState {
   return { ...ui, mode: "set" };
 }
 
+/** Drop a latched mixer or deck so the page underneath is visible. A finger still down keeps its peek. */
+export function clearFace(ui: UiState): UiState {
+  if (ui.faceHeld) return ui;
+  if (!ui.face && !ui.faceLatch && !ui.faceReturn) return ui;
+  return settleRandomize({
+    ...ui,
+    face: null,
+    faceLatch: null,
+    faceHeld: null,
+    faceDownTick: null,
+    faceDownMs: null,
+    faceReturn: null,
+    focus: null,
+    detent: null,
+    travel: null,
+    deckGesture: null,
+    deckGestureTick: null,
+    deckLatchedGesture: null,
+    deckLatchTick: null,
+    deckPads: 0,
+  });
+}
+
 export function applyBookmark(ui: UiState, ref: PageRef): UiState {
-  return settleRandomize({ ...rememberPage(ui, ref.context, ref.page), heldContext: null, heldPage: null });
+  return settleRandomize({ ...rememberPage(clearFace(ui), ref.context, ref.page), heldContext: null, heldPage: null });
 }
 
 /** Back to the lane, page, and Journal/Set mode from before a track button press. */
 export function restoreTrackPlace(ui: UiState, place: TrackPlace): UiState {
   return settleRandomize({
-    ...rememberPage(ui, place.context, place.page),
+    ...rememberPage(clearFace(ui), place.context, place.page),
     mode: place.mode,
     heldContext: null,
     heldPage: null,

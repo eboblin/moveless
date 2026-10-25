@@ -1,4 +1,4 @@
-import { DECK_GROUPS, deckSlots, defaultDeck, focusedGroup, rowKnobName, type DeckGroup, type DeckKnobs, type DeckSlot } from "./deck.ts";
+import { DECK_GROUPS, deckSlots, defaultDeck, rowKnobName, type DeckGroup, type DeckKnobs, type DeckSlot } from "./deck.ts";
 import {
   LANE_CODE,
   LANES,
@@ -602,10 +602,6 @@ function mixPage(): Page {
   ]);
 }
 
-/** Purple-lane slot for DJ FX. Live knobs come from `deckPage` of the focused group. */
-function deckAuxPage(): Page {
-  return page("deck", "DJ FX", [null, null], "deck", []);
-}
 
 function globalPage(): Page {
   return page("settings", "GLOBAL", ["TIME", "FORM"], "global", [
@@ -674,12 +670,14 @@ function busPage(): Page {
   ]);
 }
 
-/** Global, progression, the macro page, the bus, then mixer and DJ FX. Fx is its own lane. */
-const AUX_PAGES: Page[] = [globalPage(), progPage(), perfPage(), busPage(), mixPage(), deckAuxPage()];
+/** Global, progression, the macro page, and the bus. Mixer and DJ FX are hardware modes, not pages. */
+const AUX_PAGES: Page[] = [globalPage(), progPage(), perfPage(), busPage()];
 
-/** Eight mixer faders on the purple lane. */
+const MIXER_PAGE: Page = mixPage();
+
+/** Eight mixer faders. The Mute button opens this; it is not a purple-lane page. */
 export function mixerPage(): Page {
-  return AUX_PAGES.find((item) => item.id === "mixer") ?? mixPage();
+  return MIXER_PAGE;
 }
 
 /** Id of one context page. The index clamps into the page list. */
@@ -714,15 +712,14 @@ function hideVoiceCycles(project: Project, context: ContextId, page: Page): Page
 }
 
 /**
- * Page the caller is showing. The deck slot expands to the knobs of the focused group.
- * A voice pattern hides its cycle slot.
+ * Page the caller is showing. A voice pattern hides its cycle slot.
+ * Mixer and DJ FX are not context pages; their knobs come from `mixerPage` and `deckPage`.
  */
 export function livePage(project: Project, context: ContextId, index: number): Page | undefined {
   const pages = pagesFor(context);
   const item = pages[Math.min(Math.max(0, index), Math.max(0, pages.length - 1))];
   if (!item) return undefined;
-  const page = item.id === "deck" ? deckPage(focusedGroup(project.deck), project.deck) : item;
-  return hideVoiceCycles(project, context, page);
+  return hideVoiceCycles(project, context, item);
 }
 
 /** Name the jog overlay prints. Mixer and DJ FX keep a fixed word even when the deck group changes. */
@@ -817,7 +814,7 @@ export function pageGroup(context: ContextId, index: number): PageGroup {
 /**
  * Pages the scope geometry includes. `lane` is every page, `page` is the current
  * one, `group` is the current page's group. Aux groups stay as they are
- * (progression, global, macro, bus, mix, deck). Lane pattern pages still share one group.
+ * (progression, global, macro, bus). Lane pattern pages still share one group.
  */
 export function scopeIncludesPage(scope: RandomizeScope, context: ContextId, index: number, page: number): boolean {
   const item = pagesFor(context)[index];

@@ -244,13 +244,13 @@ export const PLAY_CC = 85;
 /** Large circle beside Play. Press writes a new scene. */
 export const RECORD_CC = 86;
 /**
- * Small Rec button on the right, under the volume knob beside Capture.
- * Press opens the deck screen and does not write a scene.
+ * Sample. White button, bright while the transition/wander row is held or latched.
+ * It does not open DJ FX and does not write a scene.
  */
 export const SAMPLE_CC = 118;
-/** Mute peek. White button, bright while the peek is held or latched. */
+/** Mixer. White button, bright while the mixer is held or latched. */
 export const MUTE_CC = 88;
-/** Capture peek. White button, bright while the peek is held or latched. */
+/** DJ FX. White button, bright while the deck is held or latched. */
 export const CAPTURE_CC = 52;
 /** Loop. Runs one randomize pass with the stored depth, scope and intensity. */
 export const LOOP_CC = 58;
