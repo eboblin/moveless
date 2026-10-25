@@ -2038,9 +2038,9 @@ static float plate_hp(void) {
     return coef;
 }
 
-/** One gain per side. DECAY 0 is 0.4 s, DECAY 1 is 12 s. */
+/** One gain per side. DECAY 0 is 0.4 s, DECAY 1 is 60 s. */
 static float decay_gain(float decay, float scale) {
-    float seconds = 0.4f * powf(30.0f, clampf01(decay));
+    float seconds = 0.4f * powf(150.0f, clampf01(decay));
     float loop = (21589.0f / 29761.0f) * scale;
     float coef = expf((logf(0.001f) * loop) / (2.0f * seconds));
     return coef > 0.99f ? 0.99f : coef;

@@ -111,9 +111,9 @@ function sized(base: number, scale: number): number {
   return base * PAPER * scale;
 }
 
-/** DECAY 0 is 0.4 s, DECAY 1 is 12 s. One gain per side, so the round trip is gain². */
+/** DECAY 0 is 0.4 s, DECAY 1 is 60 s. One gain per side, so the round trip is gain². */
 function decayGain(decay: number, scale: number): number {
-  const seconds = 0.4 * 30 ** unit(decay);
+  const seconds = 0.4 * 150 ** unit(decay);
   const loop = LOOP_PAPER * scale;
   const coef = Math.exp((Math.log(0.001) * loop) / (2 * seconds));
   return coef > 0.99 ? 0.99 : coef;
