@@ -222,6 +222,13 @@ export function heardFx(project: Project): Fx {
   };
 }
 
+/** Factory parameters for every lane. Mute, lock and the mixer stay. A running morph keeps the reset. */
+export function resetPattern(project: Project): Project {
+  let next = project;
+  for (const lane of PATTERN_LANES) next = resetLane(next, lane);
+  return next;
+}
+
 /** Factory parameters for one lane. Mute, lock and the mixer stay. A running morph keeps the reset. */
 export function resetLane(project: Project, lane: PatternId): Project {
   const working = clone(project.working);

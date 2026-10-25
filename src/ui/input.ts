@@ -7,6 +7,7 @@ import {
   cycleSet,
   deleteSet,
   resetLane,
+  resetPattern,
   launchScene,
   pasteClipboard,
   recordInto,
@@ -75,7 +76,7 @@ function onNote(session: Session, note: number, press: boolean): Session {
 }
 
 function onCc(session: Session, cc: number, value: number, press: boolean): Session {
-  if (cc === SHIFT) return { ...session, ui: { ...session.ui, shiftHeld: press } };
+  if (cc === SHIFT) return holdShift(session, press);
   if (cc === MENU_CC && press) {
     const mode = session.ui.mode === "set" ? "journal" : "set";
     return {
@@ -84,7 +85,7 @@ function onCc(session: Session, cc: number, value: number, press: boolean): Sess
     };
   }
   if (cc === 60) return onCopy(session, press);
-  if (cc === 119) return { ...session, ui: { ...session.ui, deleteHeld: press } };
+  if (cc === 119) return holdDelete(session, press);
   if (cc === CAPTURE_CC) return onCapture(session, press);
   if (cc === JOG_CLICK_CC && press) {
     return { ...session, ui: toggleRandomize(session.ui) };
@@ -598,6 +599,19 @@ function onCopy(session: Session, press: boolean): Session {
     project,
     ui: { ...session.ui, copyHeld: false, copyDownTick: null, copyDownMs: null, copyPicked: false, copySnapshot: null },
   };
+}
+
+/** Shift and Delete together restore every lane. No confirm. Mute, lock and the mixer stay. */
+function holdShift(session: Session, press: boolean): Session {
+  const next = { ...session, ui: { ...session.ui, shiftHeld: press } };
+  if (press && next.ui.deleteHeld) return { ...next, project: resetPattern(next.project) };
+  return next;
+}
+
+function holdDelete(session: Session, press: boolean): Session {
+  const next = { ...session, ui: { ...session.ui, deleteHeld: press } };
+  if (press && next.ui.shiftHeld) return { ...next, project: resetPattern(next.project) };
+  return next;
 }
 
 /** Delete clears the stored page. The screen stays where it is. */

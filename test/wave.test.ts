@@ -31,6 +31,9 @@ function lit(pixels: Uint8Array, x: number, y: number): number {
 function onlyLane(lane: LaneId): ReturnType<typeof defaultProject> {
   const project = clone(defaultProject());
   for (const id of LANES) project.mute[id] = id !== lane;
+  const part = project.working[lane];
+  part.gen1.hits = 1;
+  if ("gen2" in part) part.gen2.hits = 1;
   return project;
 }
 

@@ -28,25 +28,16 @@ function home(value: number) {
   return modulated(value);
 }
 
-function euclid(rotate: number, velocity: number): EuclidGen {
+/** Hits and rotate sit at zero, so a fresh pattern is silent and unshifted. */
+function euclid(velocity: number): EuclidGen {
   return {
     length: 16,
-    hits: 1,
-    rotate,
+    hits: 0,
+    rotate: 0,
     probability: 1,
     velocity: home(velocity),
   };
 }
-
-/** One hit per generator. Drums and lead each take a free sixteenth. Bass is the dialed line. */
-const ROTATE = {
-  kick: [0, 8],
-  snare: [4, 12],
-  hat: [2, 10],
-  perc: [6, 14],
-  bass: [0, 4],
-  lead: [5, 13],
-} as const;
 
 /**
  * Musical resting points per lane. Chords stay near mid — that set already
@@ -166,10 +157,9 @@ const DRUM_VELOCITY: Record<DrumId, number> = {
 };
 
 function drum(id: DrumId): DrumLane {
-  const [first, second] = ROTATE[id];
   return {
-    gen1: euclid(first, DRUM_VELOCITY[id]),
-    gen2: euclid(second, 0.55),
+    gen1: euclid(DRUM_VELOCITY[id]),
+    gen2: euclid(0.55),
     ratchet: { count: home(0), rate: home(0) },
     sound: sound(id),
     filter: laneFilter(),
@@ -178,11 +168,10 @@ function drum(id: DrumId): DrumLane {
 }
 
 function pitched(lane: "bass" | "lead"): PitchedLane {
-  const [first, second] = ROTATE[lane];
   const bass = lane === "bass";
   return {
-    gen1: euclid(first, bass ? 0.8 : 0.4),
-    gen2: euclid(second, bass ? 0.3 : 0.55),
+    gen1: euclid(bass ? 0.8 : 0.4),
+    gen2: euclid(bass ? 0.3 : 0.55),
     follow: 1,
     pitch: home(0.5),
     octave: home(unitForOctave(homeOctave(lane))),
@@ -210,8 +199,8 @@ export function defaultProgression(): Progression {
 
 function chords(): ChordLane {
   return {
-    // One step per bar. Size 1 lets that step fill the bar, so the factory pulse stays one note.
-    gen1: euclid(0, 0.85),
+    // Hits stay at zero with the other generators. Size 1 fills the bar once a hit is placed.
+    gen1: euclid(0.85),
     tone: home(0),
     octave: home(unitForOctave(4)),
     // First step above a block: one root note per bar, about a sixteenth long.

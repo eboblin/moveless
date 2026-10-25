@@ -201,26 +201,33 @@ function deckPadLeds(scenes: Led[], deck: DeckKnobs): Led[] {
   return scenes;
 }
 
-/** Drums, melody, and lock sit in palette 1–26 so a muted or unlocked pad can dim. */
-const PEEK_DRUM = 5;
-const PEEK_TONE = 8;
-const PEEK_LOCK = 22;
-const PEEK_DIM = 0.5;
+/** Same lamp the lane step uses: drums red, melody yellow, fx green, lock blue. */
+function laneLamp(lane: LaneId | "fx"): { family: LedFamily; color: number } {
+  if (lane === "fx") return { family: "green", color: COLOR.green };
+  const family = laneFamily(lane);
+  return { family, color: COLOR[family] };
+}
+
+/**
+ * Lit in the lane colour, or fully dark. A dim shade of the same hue is too close
+ * to the bright one on these pads, so off has to be black.
+ */
+function flagLed(family: LedFamily, color: number, on: boolean): Led {
+  return on ? { family, color, blink: false } : led("off", false);
+}
 
 function mutePeekLeds(project: Project): Led[] {
   const out = Array.from({ length: 32 }, () => led("off", false));
   LANES.forEach((lane, col) => {
-    const hue = isDrum(lane) ? PEEK_DRUM : PEEK_TONE;
-    const muted = shadeColor(hue, project.mute[lane] ? PEEK_DIM : 1);
-    const soloed = shadeColor(hue, project.solo[lane] ? 1 : PEEK_DIM);
-    const locked = shadeColor(PEEK_LOCK, project.lock[lane] ? 1 : PEEK_DIM);
-    out[24 + col] = { family: "yellow", color: muted, blink: false };
-    out[16 + col] = { family: "yellow", color: soloed, blink: false };
-    out[8 + col] = { family: "purple", color: locked, blink: false };
+    const lamp = laneLamp(lane);
+    out[24 + col] = flagLed(lamp.family, lamp.color, !project.mute[lane]);
+    out[16 + col] = flagLed(lamp.family, lamp.color, project.solo[lane]);
+    out[8 + col] = flagLed("lock", LED.lock, project.lock[lane]);
   });
   const fxCol = LANES.length;
-  out[24 + fxCol] = { family: "green", color: shadeColor(9, project.mute.fx ? PEEK_DIM : 1), blink: false };
-  out[8 + fxCol] = { family: "purple", color: shadeColor(PEEK_LOCK, project.lock.fx ? 1 : PEEK_DIM), blink: false };
+  const fx = laneLamp("fx");
+  out[24 + fxCol] = flagLed(fx.family, fx.color, !project.mute.fx);
+  out[8 + fxCol] = flagLed("lock", LED.lock, project.lock.fx);
   return out;
 }
 

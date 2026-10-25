@@ -23,6 +23,27 @@ function session(): Session {
   return { project: defaultProject(), ui: defaultUi(), tick: 0, playing: false };
 }
 
+/** Old one-hit rings, for pictures and phrases that need something on the grid. */
+const PLACED_ROTATE = {
+  kick: [0, 8],
+  snare: [4, 12],
+  hat: [2, 10],
+  perc: [6, 14],
+  bass: [0, 4],
+  lead: [5, 13],
+} as const;
+
+function placeHits(project: ReturnType<typeof defaultProject>): void {
+  for (const lane of ["kick", "snare", "hat", "perc", "bass", "lead"] as const) {
+    const [first, second] = PLACED_ROTATE[lane];
+    project.working[lane].gen1.hits = 1;
+    project.working[lane].gen2.hits = 1;
+    project.working[lane].gen1.rotate = first;
+    project.working[lane].gen2.rotate = second;
+  }
+  project.working.chords.gen1.hits = 1;
+}
+
 /** White glyphs on a solid black rectangle padded by `CAPTION_OUTLINE`, and the picture everywhere else. */
 function assertOutline(screen: Screen, plain: Screen, parts: { text: string; x: number; y: number }[]): void {
   const ink = new Uint8Array(WIDTH * HEIGHT);
@@ -275,6 +296,36 @@ describe("pages and leds", () => {
     assert.equal(stepLed(project, "bass", "bass").family, "lock");
     assert.equal(stepLed(project, "bass", "bass").blink, true);
     assert.equal(stepLed(project, "kick", "bass").family, "off");
+  });
+
+  it("lights mixer pads in the track colour, and leaves a row dark until it is on", () => {
+    const project = defaultProject();
+    const face = () => padLeds(project, "journal", { context: "aux", page: auxIndex("mixer") });
+    const heard = face();
+    const lanes = ["kick", "snare", "hat", "perc", "bass", "lead", "chords"] as const;
+    lanes.forEach((lane, col) => {
+      assert.equal(heard[24 + col].color, stepLed(project, "aux", lane).color);
+      assert.equal(heard[24 + col].color, lane === "kick" || lane === "snare" || lane === "hat" || lane === "perc" ? LED.red : LED.yellow);
+      assert.equal(heard[16 + col].color, LED.off);
+      assert.equal(heard[8 + col].color, LED.off);
+    });
+    assert.equal(heard[31].color, stepLed(project, "kick", "fx").color);
+    assert.equal(heard[23].color, LED.off);
+    assert.equal(heard[15].color, LED.off);
+
+    project.mute.kick = true;
+    project.solo.bass = true;
+    project.lock.lead = true;
+    project.mute.fx = true;
+    project.lock.fx = true;
+    const next = face();
+    assert.equal(next[24].color, LED.off);
+    assert.equal(next[25].color, LED.red);
+    assert.equal(next[20].color, LED.yellow);
+    assert.equal(next[13].color, LED.lock);
+    assert.equal(next[12].color, LED.off);
+    assert.equal(next[31].color, LED.off);
+    assert.equal(next[15].color, LED.lock);
   });
 
   it("lights saved scene pads; active and morph target share beat blink, target shades", () => {
@@ -1034,6 +1085,8 @@ describe("surface", () => {
 
   it("wraps ratchet tails into the phrase so the playhead still reaches the end", () => {
     const project = defaultProject();
+    project.working.kick.gen1.hits = 1;
+    project.working.kick.gen2.hits = 1;
     project.working.kick.ratchet.count = modulated(1);
     project.working.kick.ratchet.rate = modulated(unitForIndex(0, 6));
     const screen = renderScreen(project, defaultUi(), 0, false);
@@ -1199,6 +1252,7 @@ describe("surface", () => {
 
   it("draws chord names with duration blocks, and a piano roll on the arp page", () => {
     const project = defaultProject();
+    project.working.chords.gen1.hits = 1;
     project.progression.count = 3;
     project.progression.length = 4;
     project.progression.variation = 0;
@@ -1611,6 +1665,7 @@ describe("surface", () => {
 
   it("draws a generator over the phrase and darkens the phrase with a 1px checker", () => {
     const project = defaultProject();
+    placeHits(project);
     const phrase = renderScreen(project, defaultUi(), 0);
     const over = renderScreen(project, {
       ...defaultUi(),
@@ -1704,14 +1759,14 @@ describe("surface", () => {
     const held = padLeds(state.project, state.ui.mode, state.ui);
     assert.equal(held[28].color, 18);
     assert.equal(held[28].blink, true);
-    assert.equal(held[16].color, shadeColor(5, 0.5));
-    assert.equal(held[8].color, shadeColor(22, 0.5));
+    assert.equal(held[16].color, LED.off);
+    assert.equal(held[8].color, LED.off);
     state = reduce(state, { kind: "note", data1: 84, data2: 127 });
     assert.equal(state.project.solo.kick, true);
     assert.equal(state.ui.heldContext, "aux");
     state = reduce(state, { kind: "note", data1: 31, data2: 0 });
     assert.equal(state.ui.heldContext, null);
-    assert.equal(padLeds(state.project, state.ui.mode, state.ui)[24].color, 5);
+    assert.equal(padLeds(state.project, state.ui.mode, state.ui)[24].color, LED.red);
 
     state = openAux(session(), 0);
     state = reduce(state, { kind: "note", data1: 31, data2: 127 });
@@ -1756,6 +1811,7 @@ describe("surface", () => {
 
   it("sets transition and clears wander from the Capture row", () => {
     let state = session();
+    placeHits(state.project);
     state = reduce(state, { kind: "cc", data1: 52, data2: 127 });
     state = reduce(state, { kind: "note", data1: 68, data2: 127 });
     assert.equal(state.project.transition, "now");
@@ -2052,6 +2108,7 @@ describe("surface", () => {
 
   it("writes one randomize row over the phrase for a second after its pad", () => {
     let state = session();
+    placeHits(state.project);
     state = reduce(state, { kind: "note", data1: 9, data2: 127 });
     assert.equal(state.ui.wheelTouch, true);
     const pads = padLeds(state.project, state.ui.mode, state.ui);
@@ -2344,10 +2401,69 @@ describe("surface", () => {
     assert.equal(kept.working.kick.gen1.hits, defaultProject().working.kick.gen1.hits);
   });
 
+  it("resets every lane with Shift and Delete and asks nothing", () => {
+    let state = session();
+    state.project.working.kick.gen1.hits = 7;
+    state.project.working.kick.sound.pitch.value = 0.9;
+    state.project.working.snare.gen2.hits = 3;
+    state.project.working.bass.gen1.hits = 5;
+    state.project.working.lead.gen2.hits = 2;
+    state.project.working.chords.gen1.hits = 4;
+    state.project.working.fx.reverb.size = 0.1;
+    state.project.mute.kick = true;
+    state.project.lock.bass = true;
+    state.project.mixer.lead = 0.2;
+    state.project.progression.start = 5;
+    const factory = defaultProject().working;
+    state = reduce(state, { kind: "cc", data1: 49, data2: 127 });
+    state = reduce(state, { kind: "cc", data1: 119, data2: 127 });
+    assert.equal(state.ui.shiftHeld, true);
+    assert.equal(state.ui.deleteHeld, true);
+    assert.equal(state.project.working.kick.gen1.hits, 0);
+    assert.equal(state.project.working.kick.sound.pitch.value, factory.kick.sound.pitch.value);
+    assert.equal(state.project.working.snare.gen2.hits, 0);
+    assert.equal(state.project.working.bass.gen1.hits, 0);
+    assert.equal(state.project.working.lead.gen2.hits, 0);
+    assert.equal(state.project.working.chords.gen1.hits, 0);
+    assert.equal(state.project.working.fx.reverb.size, factory.fx.reverb.size);
+    assert.equal(state.project.mute.kick, true);
+    assert.equal(state.project.lock.bass, true);
+    assert.equal(state.project.mixer.lead, 0.2);
+    assert.equal(state.project.progression.start, 5);
+    assert.equal(generatePhrase(state.project).lanes.kick.length, 0);
+    assert.equal(generatePhrase(state.project).lanes.chords.length, 0);
+
+    state = reduce(state, { kind: "cc", data1: 49, data2: 0 });
+    state = reduce(state, { kind: "cc", data1: 119, data2: 0 });
+    state.project.working.hat.gen1.hits = 6;
+    state.project.working.perc.gen2.hits = 2;
+    state = reduce(state, { kind: "cc", data1: 119, data2: 127 });
+    assert.equal(state.project.working.hat.gen1.hits, 6);
+    state = reduce(state, { kind: "cc", data1: 49, data2: 127 });
+    assert.equal(state.project.working.hat.gen1.hits, 0);
+    assert.equal(state.project.working.perc.gen2.hits, 0);
+    assert.equal(state.project.journal.length, 0);
+
+    let morph = record(defaultProject());
+    morph.working.kick.gen1.hits = 8;
+    morph.working.bass.pitch.value = 0.2;
+    morph = launchScene(morph, morph.journal[0].id, 0);
+    assert.ok(morph.morph);
+    morph.working.kick.gen1.hits = 3;
+    morph.working.bass.pitch.value = 0.8;
+    morph.working.chords.gen1.hits = 2;
+    state = { project: morph, ui: { ...defaultUi(), shiftHeld: true }, tick: 0, playing: false };
+    state = reduce(state, { kind: "cc", data1: 119, data2: 127 });
+    const stuck = applyMorph(state.project, (state.project.morph?.originTick ?? 0) + 1);
+    assert.equal(stuck.working.kick.gen1.hits, 0);
+    assert.equal(stuck.working.bass.pitch.value, factory.bass.pitch.value);
+    assert.equal(stuck.working.chords.gen1.hits, 0);
+  });
+
   it("locks from the mixer page and switches journal and set from the menu button", () => {
     let state = openMixer(session());
     const leds = padLeds(state.project, "journal", state.ui);
-    assert.equal(leds[24].color, 5);
+    assert.equal(leds[24].color, LED.red);
     assert.equal(leds[24].blink, false);
     assert.equal(leds[25].blink, false);
     assert.equal(leds[31].color, 9);
@@ -2362,18 +2478,18 @@ describe("surface", () => {
     assert.equal(state.project.mute.fx, false);
     assert.equal(state.project.lock.fx, false);
     state.project.mute.snare = true;
-    assert.equal(padLeds(state.project, "journal", state.ui)[25].color, shadeColor(5, 0.5));
+    assert.equal(padLeds(state.project, "journal", state.ui)[25].color, LED.off);
     state = reduce(state, { kind: "note", data1: 77, data2: 127 });
     assert.equal(state.project.lock.snare, true);
-    assert.equal(padLeds(state.project, "journal", state.ui)[9].color, 22);
+    assert.equal(padLeds(state.project, "journal", state.ui)[9].color, LED.lock);
     assert.equal(state.ui.context, "aux");
     state = reduce(state, { kind: "note", data1: 85, data2: 127 });
     assert.equal(state.project.mute.snare, true);
     assert.equal(state.project.mute.kick, false);
     assert.equal(state.project.solo.snare, true);
-    assert.equal(padLeds(state.project, "journal", state.ui)[25].color, shadeColor(5, 0.5));
-    assert.equal(padLeds(state.project, "journal", state.ui)[17].color, 5);
-    assert.equal(padLeds(state.project, "journal", state.ui)[16].color, shadeColor(5, 0.5));
+    assert.equal(padLeds(state.project, "journal", state.ui)[25].color, LED.off);
+    assert.equal(padLeds(state.project, "journal", state.ui)[17].color, LED.red);
+    assert.equal(padLeds(state.project, "journal", state.ui)[16].color, LED.off);
     assert.equal(stepLed(state.project, "kick", "hat").family, "off");
     state = reduce(state, { kind: "note", data1: 86, data2: 127 });
     assert.equal(state.project.solo.hat, true);
@@ -3007,7 +3123,9 @@ describe("page title", () => {
     assert.ok(CAPTION_PAGE_Y + DIGIT_H + CAPTION_OUTLINE < SEP_Y);
     assert.ok(SEP_Y < DIGIT_Y);
 
-    let state = reduce(session(), { kind: "note", data1: 9, data2: 127 });
+    let state = session();
+    placeHits(state.project);
+    state = reduce(state, { kind: "note", data1: 9, data2: 127 });
     assert.equal(state.ui.pageTitleSlide, null);
     const until = state.ui.pageTitleUntilMs ?? 0;
     assert.ok(until - Date.now() <= PAGE_TITLE_MS && until - Date.now() > PAGE_TITLE_MS - 1000);
@@ -3032,7 +3150,9 @@ describe("page title", () => {
   });
 
   it("slides the title when the jog changes page and snaps when a pad does", () => {
-    let state = reduce(session(), { kind: "note", data1: 9, data2: 127 });
+    let state = session();
+    placeHits(state.project);
+    state = reduce(state, { kind: "note", data1: 9, data2: 127 });
     const touchedUntil = state.ui.pageTitleUntilMs ?? 0;
     const stuck = reduce(state, { kind: "cc", data1: 14, data2: 127 });
     assert.equal(stuck.ui.page, 0);
@@ -3081,7 +3201,9 @@ describe("page title", () => {
       return { shown, bare };
     };
 
-    let state = reduce(session(), { kind: "note", data1: 20, data2: 127 });
+    let state = session();
+    placeHits(state.project);
+    state = reduce(state, { kind: "note", data1: 20, data2: 127 });
     assert.equal(state.ui.heldContext, "bass");
     assert.equal(state.ui.pageTitleSlide, null);
     assert.equal(state.ui.pageTitleLane, true);

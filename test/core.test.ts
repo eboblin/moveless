@@ -50,8 +50,10 @@ function bar(project: Project, bars = 1): Project {
   const steps = Math.max(1, Math.round(bars)) * Math.max(1, Math.round(next.global.bar)) * 4;
   for (const lane of ["kick", "snare", "hat", "perc", "bass", "lead"] as const) {
     next.working[lane].gen1.length = steps;
+    next.working[lane].gen1.hits = 1;
     next.working[lane].gen2.length = 0;
   }
+  next.working.chords.gen1.hits = 1;
   next.global.phrase = bars;
   return next;
 }
@@ -89,33 +91,19 @@ describe("motif and clock", () => {
 });
 
 describe("euclid generator", () => {
-  it("parks one hit of length 16 on a different sixteenth of each generator", () => {
+  it("parks a silent unshifted ring of length 16 on every generator", () => {
     const lanes = defaultProject().working;
-    const expected = {
-      kick: [0, 8],
-      snare: [4, 12],
-      hat: [2, 10],
-      perc: [6, 14],
-      bass: [0, 4],
-      lead: [5, 13],
-    } as const;
-    const rotates = new Set<number>();
     for (const id of ["kick", "snare", "hat", "perc", "bass", "lead"] as const) {
-      for (const [gen, rotate] of [
-        ["gen1", expected[id][0]],
-        ["gen2", expected[id][1]],
-      ] as const) {
+      for (const gen of ["gen1", "gen2"] as const) {
         const item = lanes[id][gen];
         assert.equal(item.length, 16);
-        assert.equal(item.hits, 1);
-        assert.equal(item.rotate, rotate);
+        assert.equal(item.hits, 0);
+        assert.equal(item.rotate, 0);
         assert.equal(item.probability, 1);
-        rotates.add(rotate);
       }
     }
-    assert.equal(rotates.size, 10);
     assert.equal(lanes.chords.gen1.length, 16);
-    assert.equal(lanes.chords.gen1.hits, 1);
+    assert.equal(lanes.chords.gen1.hits, 0);
     assert.equal(lanes.chords.gen1.rotate, 0);
     assert.equal(lanes.chords.gen1.probability, 1);
     assert.equal(lanes.chords.size.value, 1);
@@ -570,6 +558,8 @@ describe("morph, journal, macros", () => {
     project = setMacro(project, "cutoff", 0.25);
     project.mixer.kick = 0.3;
     project = punch(project, "bass.filter.cutoff.value", 0.2);
+    project.working.bass.gen1.hits = 1;
+    project.working.bass.gen2.hits = 1;
     project = record(project);
     project = punch(project, "bass.filter.cutoff.value", 0.9);
     assert.equal(project.journal[0].lanes.bass.filter.cutoff.value, 0.2);
@@ -867,6 +857,10 @@ describe("morph, journal, macros", () => {
 
   it("pulls repeats and density across lanes without rewriting them", () => {
     const project = defaultProject();
+    project.working.bass.gen1.hits = 1;
+    project.working.bass.gen2.hits = 1;
+    project.working.kick.gen1.hits = 1;
+    project.working.kick.gen2.hits = 1;
     project.working.bass.repeat = modulated(0.5);
     project.working.kick.ratchet.count = modulated(0.5);
     const open = generatePhrase(project);
@@ -882,6 +876,8 @@ describe("morph, journal, macros", () => {
     assert.ok(held.lanes.kick.length < open.lanes.kick.length);
 
     const dense = defaultProject();
+    dense.working.kick.gen1.hits = 1;
+    dense.working.kick.gen2.hits = 1;
     const kickHits = generatePhrase(dense).lanes.kick.length;
     assert.ok(kickHits > 0);
     dense.macros = { probability: -1 };
@@ -934,6 +930,8 @@ describe("harmony", () => {
 
   it("lets bass follow later chords by spanning the global phrase, not only the euclid ring", () => {
     const project = defaultProject();
+    project.working.bass.gen1.hits = 1;
+    project.working.bass.gen2.hits = 1;
     const phrase = generatePhrase(project);
     assert.ok(phrase.harmony.length >= 2, "defaults build more than one chord");
     assert.equal(phrase.steps.bass, phrase.steps.chords);
@@ -995,8 +993,10 @@ describe("harmony", () => {
     }
   });
 
-  it("keeps the factory pulse to one short note per bar", () => {
-    const chords = generatePhrase(defaultProject()).lanes.chords;
+  it("places one short chord note per bar when the generator has one hit", () => {
+    const project = defaultProject();
+    project.working.chords.gen1.hits = 1;
+    const chords = generatePhrase(project).lanes.chords;
     assert.deepEqual(
       chords.map((event) => event.tick),
       [0, 16, 32, 48].map((step) => step * SIXTEENTH_TICKS),
@@ -1280,6 +1280,7 @@ describe("harmony", () => {
     project.progression.variation = 0;
     project.global.phrase = 4;
     project.global.bar = 4;
+    project.working.chords.gen1.hits = 1;
 
     const roots = (scale: ScaleId, root: number, transpose = 0) => {
       project.global.scale = scale;
@@ -1538,7 +1539,7 @@ describe("randomize, wander, sets", () => {
     assert.equal(cleared.working.kick.sound.pitch.cycle, 1);
     assert.equal(cleared.working.kick.sound.pitch.amount, 0);
     assert.equal(cleared.working.kick.gen1.length, 16);
-    assert.equal(cleared.working.kick.gen1.hits, 1);
+    assert.equal(cleared.working.kick.gen1.hits, factory.gen1.hits);
     assert.equal(cleared.working.kick.gen1.rotate, factory.gen1.rotate);
     assert.equal(cleared.working.kick.gen1.probability, 1);
     assert.equal(cleared.working.kick.gen1.velocity.value, factory.gen1.velocity.value);
@@ -1974,6 +1975,11 @@ describe("randomize, wander, sets", () => {
 
   it("rolls a non-empty subset of unlocked lanes and falls back to one", () => {
     const project = defaultProject();
+    for (const lane of ["kick", "snare", "hat", "perc", "bass", "lead"] as const) {
+      project.working[lane].gen1.hits = 1;
+      project.working[lane].gen2.hits = 1;
+    }
+    project.working.chords.gen1.hits = 1;
     project.lock.snare = true;
     project.lock.fx = true;
     const open: PatternId[] = PATTERN_LANES.filter((lane) => lane !== "snare" && lane !== "fx");
@@ -2081,6 +2087,8 @@ describe("randomize, wander, sets", () => {
     live = punch(live, "kick.gen2.hits", 0);
     live = punch(live, "snare.gen1.probability", 0);
     live = punch(live, "snare.gen2.probability", 0);
+    live = punch(live, "hat.gen1.hits", 1);
+    live = punch(live, "hat.gen2.hits", 1);
     live = record(live);
     const dest = live.journal[1].lanes;
     live.working = clone(live.journal[0].lanes);

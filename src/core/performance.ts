@@ -18,6 +18,7 @@ export {
   removeSceneFromJournal,
   removeSceneFromSet,
   resetLane,
+  resetPattern,
   sceneColor,
   sceneIdsForPads,
   sameHeard,

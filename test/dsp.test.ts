@@ -152,6 +152,7 @@ describe("dsp adapter", () => {
 
   it("sounds the kick, pans the hat, and widens chords", () => {
     const project = defaultProject();
+    project.working.kick.gen1.hits = 1;
     const engine = createEngine();
     const first = renderBlock(engine, eventsInBlock(project, 0), project.global.tempo);
     const again = renderBlock(createEngine(), eventsInBlock(project, 0), project.global.tempo);
