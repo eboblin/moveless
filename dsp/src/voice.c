@@ -134,7 +134,7 @@ typedef struct {
 
 typedef struct {
     Line preL, preR, earlyL, earlyR, in0, in1, in2, in3, modL, modR, dL1, dL2, dR1, dR2, apL, apR;
-    float dampL, dampR, hpL, hpR, bw, right, lfo;
+    float dampL, dampR, hpL, hpR, bw, right, lfo, scale;
     int quiet;
     float size, decay, air, spin, level;
 } Plate;
@@ -1978,6 +1978,7 @@ static void fx_clear(Engine *engine) {
     p->bw = 0;
     p->right = 0;
     p->lfo = 0;
+    p->scale = 0;
     p->quiet = 0;
     line_clear(&engine->echo.l);
     line_clear(&engine->echo.r);
@@ -2049,11 +2050,12 @@ static void air_hz(float air, float *bw, float *damp) {
     }
 }
 
-static void room_of(float size, float *scale, float *pre, float *early) {
-    float u = clampf01(size);
-    *scale = 0.8f + u * 0.55f;
-    *pre = (0.006f + u * 0.03f) * SR;
-    *early = 0.7f + u * 0.6f;
+static float follow_scale(float current, float target) {
+    float slew = 0.25f / sized_delay(4453.0f, 1.0f);
+    float d = target - current;
+    if (d > slew) return current + slew;
+    if (d < -slew) return current - slew;
+    return target;
 }
 
 static void spin_of(float spin, float scale, float *rate, float *excursion) {
@@ -2079,15 +2081,21 @@ static void plate_sample(Engine *engine, float inL, float inR, float *outL, floa
     static const float early_r_g[4] = { 0.40f, -0.26f, 0.16f, -0.10f };
     Plate *p = &engine->plate;
     float energy = fabsf(inL) + fabsf(inR);
-    float scale, pre_samples, early_scale, pre_l, pre_r, early_l, early_r;
+    float target, u, scale, pre_samples, early_scale, pre_l, pre_r, early_l, early_r;
     float bw_hz, damp_hz, damp_coef, decay, rate, excursion, wobble, swirl, s;
     float x, left, body, left_end, right, taps_l, taps_r;
+    target = 0.8f + clampf01(p->size) * 0.55f;
+    if (p->scale == 0.0f) p->scale = target;
+    else p->scale = follow_scale(p->scale, target);
     if (energy < 1e-7f && p->quiet > (int)(SR / 2.0f)) {
         *outL = 0;
         *outR = 0;
         return;
     }
-    room_of(p->size, &scale, &pre_samples, &early_scale);
+    scale = p->scale;
+    u = (scale - 0.8f) / 0.55f;
+    pre_samples = (0.006f + u * 0.03f) * SR;
+    early_scale = 0.7f + u * 0.6f;
     if (pre_samples < 1.0f) pre_samples = 1.0f;
     pre_l = line_delay(&p->preL, pre_samples, inL);
     pre_r = line_delay(&p->preR, pre_samples, inR);

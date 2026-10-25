@@ -80,10 +80,28 @@ function unit(x: number): number {
   return x < 0 ? 0 : x > 1 ? 1 : x;
 }
 
-/** Room scale 0.8…1.35, predelay samples 6…36 ms, early-time scale. */
+/** Room scale 0.8…1.35. Predelay and early spacing come from the same scale. */
 function roomOf(size: number): [number, number, number] {
   const u = unit(size);
-  return [0.8 + u * 0.55, (0.006 + u * 0.03) * SR, 0.7 + u * 0.6];
+  return roomFromScale(0.8 + u * 0.55);
+}
+
+function roomFromScale(scale: number): [number, number, number] {
+  const u = (scale - 0.8) / 0.55;
+  return [scale, (0.006 + u * 0.03) * SR, 0.7 + u * 0.6];
+}
+
+/**
+ * Longest tank line, in samples per unit of scale. SIZE may move the read
+ * by only a fraction of a sample each sample, or the tail clicks.
+ */
+const SCALE_SLEW = 0.25 / (4453 * PAPER);
+
+function followScale(current: number, target: number): number {
+  const d = target - current;
+  if (d > SCALE_SLEW) return current + SCALE_SLEW;
+  if (d < -SCALE_SLEW) return current - SCALE_SLEW;
+  return target;
 }
 
 function sized(base: number, scale: number): number {
@@ -143,6 +161,8 @@ export interface Tank {
   bw: number;
   right: number;
   lfo: number;
+  /** Followed room scale. Zero means the next sample snaps to the knob. */
+  scale: number;
   quiet: number;
 }
 
@@ -179,6 +199,7 @@ export function createTank(): Tank {
     bw: 0,
     right: 0,
     lfo: 0,
+    scale: 0,
     quiet: 0,
   };
 }
@@ -200,6 +221,7 @@ export function clearTank(tank: Tank): void {
   tank.bw = 0;
   tank.right = 0;
   tank.lfo = 0;
+  tank.scale = 0;
   tank.quiet = 0;
 }
 
@@ -230,8 +252,10 @@ function cluster(line: Line, x: number, taps: readonly (readonly [number, number
 /** Plate. SIZE sets the room, DECAY the tail, AIR the top, SPIN the drift. */
 export function tankSample(tank: Tank, knobs: Fx["reverb"], inL: number, inR: number): [number, number] {
   const energyIn = Math.abs(inL) + Math.abs(inR);
+  const [target] = roomOf(knobs.size);
+  tank.scale = tank.scale === 0 ? target : followScale(tank.scale, target);
   if (energyIn < 1e-7 && tank.quiet > SR / 2) return [0, 0];
-  const [scale, preSamples, earlyScale] = roomOf(knobs.size);
+  const [scale, preSamples, earlyScale] = roomFromScale(tank.scale);
   const preL = delayed(tank.preL, Math.max(1, preSamples), inL);
   const preR = delayed(tank.preR, Math.max(1, preSamples), inR);
   const earlyL = cluster(tank.earlyL, preL, EARLY_L, earlyScale);

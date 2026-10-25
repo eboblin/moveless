@@ -147,6 +147,8 @@ describe("dsp adapter", () => {
     const large = fallSeconds(plateKnobs({ size: 1, decay: 0.55 }), 12);
     const ratio = large / small;
     assert.ok(ratio > 2 / 3 && ratio < 3 / 2, `size moved the tail by ${ratio}`);
+    const jump = sizeJumpStep();
+    assert.ok(jump.at < jump.before * 4, `size jump stepped ${jump.at} against ${jump.before}`);
     for (const size of [0, 1]) {
       for (const decay of [0, 1]) {
         for (const air of [0, 1]) {
@@ -1186,6 +1188,22 @@ function fallSeconds(knobs: FxReverb, dropDb: number): number {
   let last = refAt;
   for (let i = refAt; i < rms.length; i++) if (rms[i] >= gate) last = i;
   return (last - refAt) * 0.05;
+}
+
+function sizeJumpStep(): { at: number; before: number } {
+  const knobs = plateKnobs({ size: 0.15, decay: 0.85, spin: 0, level: 1 });
+  const tank = createTank();
+  const jumpAt = Math.round(SAMPLE_RATE * 0.25);
+  let prev = 0;
+  const deltas: number[] = [];
+  for (let i = 0; i < jumpAt + 8; i++) {
+    if (i === jumpAt) knobs.size = 0.95;
+    const [l, r] = tankSample(tank, knobs, i === 0 ? 0.8 : 0, 0);
+    deltas.push(Math.abs(l + r - prev));
+    prev = l + r;
+  }
+  const before = deltas.slice(jumpAt - 40, jumpAt).sort((a, b) => a - b);
+  return { at: deltas[jumpAt] ?? 0, before: before[before.length >> 1] ?? 0 };
 }
 
 function impulsePeak(knobs: FxReverb): number {
