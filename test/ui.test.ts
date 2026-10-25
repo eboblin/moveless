@@ -186,10 +186,11 @@ describe("pages and leds", () => {
     assert.deepEqual(fx[0].groups, ["REV ROOM", "REV LIFE"]);
     assert.deepEqual(
       fx[0].bindings.map((binding) => binding?.label ?? null),
-      ["SIZE", "DECAY", "AIR", null, "SPIN", "LEVEL", null, null],
+      ["SIZE", "DECAY", "AIR", null, "SPIN", "SHIM", "LEVEL", null],
     );
     assert.deepEqual(fx[0].bindings[2]?.detents, [0.5]);
     assert.deepEqual(fx[0].bindings[4]?.detents, [0]);
+    assert.deepEqual(fx[0].bindings[5]?.detents, [0]);
     assert.deepEqual(fx[1].groups, ["DLY TIME", "DLY ECHO"]);
     assert.equal(fx[0].bindings[0]?.label, "SIZE");
     assert.equal(fx[1].bindings[0]?.label, "TIME");

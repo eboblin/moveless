@@ -162,6 +162,13 @@ describe("dsp adapter", () => {
     }
   });
 
+  it("lifts a low tone's tail when shim is up", () => {
+    const dry = tailHigh(0);
+    const up = tailHigh(1);
+    assert.ok(Number.isFinite(up.peak) && up.peak < 4, `peak ${up.peak}`);
+    assert.ok(up.energy > dry.energy * 4, `octave in the tail ${up.energy} against ${dry.energy}`);
+  });
+
   it("schedules the downbeat kick inside the first audio block", () => {
     const project = defaultProject();
     project.working.kick.gen1 = { ...project.working.kick.gen1, length: 16, hits: 4, rotate: 0, probability: 1 };
@@ -1161,7 +1168,34 @@ function peak(buf: Float32Array): number {
 }
 
 function plateKnobs(over: Partial<FxReverb>): FxReverb {
-  return { size: 0.42, decay: 0.42, air: 0.5, spin: 0, level: 1, ...over };
+  return { size: 0.42, decay: 0.42, air: 0.5, spin: 0, shim: 0, level: 1, ...over };
+}
+
+/** Octave-bin level in the tail of a 180 Hz tone. */
+function tailHigh(shim: number): { energy: number; peak: number } {
+  const tank = createTank();
+  const knobs = plateKnobs({ decay: 0.75, shim, spin: 0 });
+  const from = Math.round(SAMPLE_RATE * 0.7);
+  const total = Math.round(SAMPLE_RATE * 1.8);
+  const w = (2 * Math.PI * 360) / SAMPLE_RATE;
+  let re = 0;
+  let im = 0;
+  let n = 0;
+  let peak = 0;
+  for (let i = 0; i < total; i++) {
+    const x = i < SAMPLE_RATE * 0.08 ? Math.sin((2 * Math.PI * 180 * i) / SAMPLE_RATE) : 0;
+    const [l, r] = tankSample(tank, knobs, x, 0);
+    const s = l + r;
+    if (!Number.isFinite(s)) return { energy: Number.NaN, peak: Number.NaN };
+    const a = Math.abs(s);
+    if (a > peak) peak = a;
+    if (i >= from) {
+      re += s * Math.cos(w * n);
+      im -= s * Math.sin(w * n);
+      n++;
+    }
+  }
+  return { energy: Math.sqrt(re * re + im * im) / n, peak };
 }
 
 /** Time for the tail, measured from 0.4 s, to fall `dropDb` from that level. */

@@ -133,10 +133,10 @@ typedef struct {
 } Line;
 
 typedef struct {
-    Line preL, preR, earlyL, earlyR, in0, in1, in2, in3, modL, modR, dL1, dL2, dR1, dR2, apL, apR;
-    float dampL, dampR, hpL, hpR, bw, right, lfo, scale;
+    Line preL, preR, earlyL, earlyR, in0, in1, in2, in3, modL, modR, dL1, dL2, dR1, dR2, apL, apR, shimLine;
+    float dampL, dampR, hpL, hpR, bw, right, lfo, scale, shimPhase, shimLp;
     int quiet;
-    float size, decay, air, spin, level;
+    float size, decay, air, spin, shim, level;
 } Plate;
 
 typedef struct {
@@ -1741,12 +1741,14 @@ static int fx_init(Engine *engine) {
     ok = line_make(&p->dR2, tank_len(3163.0f)) && ok;
     ok = line_make(&p->apL, tank_len(1800.0f)) && ok;
     ok = line_make(&p->apR, tank_len(2656.0f)) && ok;
+    ok = line_make(&p->shimLine, 2048 + 8) && ok;
     ok = line_make(&e->l, (int)ceilf(SR * 2.0f) + 8) && ok;
     ok = line_make(&e->r, (int)ceilf(SR * 2.0f) + 8) && ok;
     p->size = 0.42f;
     p->decay = 0.42f;
     p->air = 0.5f;
     p->spin = 0.3f;
+    p->shim = 0.0f;
     p->level = 0.6f;
     e->time = 0.4f;
     e->feed = 0.4f;
@@ -1807,6 +1809,7 @@ static void fx_free(Engine *engine) {
     line_free(&p->dR2);
     line_free(&p->apL);
     line_free(&p->apR);
+    line_free(&p->shimLine);
     line_free(&engine->echo.l);
     line_free(&engine->echo.r);
 }
@@ -1971,6 +1974,7 @@ static void fx_clear(Engine *engine) {
     line_clear(&p->dR2);
     line_clear(&p->apL);
     line_clear(&p->apR);
+    line_clear(&p->shimLine);
     p->dampL = 0;
     p->dampR = 0;
     p->hpL = 0;
@@ -1979,6 +1983,8 @@ static void fx_clear(Engine *engine) {
     p->right = 0;
     p->lfo = 0;
     p->scale = 0;
+    p->shimPhase = 0;
+    p->shimLp = 0;
     p->quiet = 0;
     line_clear(&engine->echo.l);
     line_clear(&engine->echo.r);
@@ -1992,33 +1998,34 @@ static void fx_clear(Engine *engine) {
 }
 
 static void apply_fx(Engine *engine, const char *text) {
-    float v[14];
+    float v[15];
     int n = 0;
     const char *cursor = text;
-    while (n < 14 && cursor && *cursor) {
+    while (n < 15 && cursor && *cursor) {
         char *end = NULL;
         float value = strtof(cursor, &end);
         if (end == cursor) break;
         v[n++] = value;
         cursor = (*end == ',') ? end + 1 : end;
     }
-    if (n < 13) return;
+    if (n < 14) return;
     Plate *p = &engine->plate;
     Echo *e = &engine->echo;
     p->size = clampf01(v[0]);
     p->decay = clampf01(v[1]);
     p->air = clampf01(v[2]);
     p->spin = clampf01(v[3]);
-    p->level = clampf01(v[4]);
-    e->time = clampf01(v[5]);
-    e->feed = clampf01(v[6]);
-    e->hi = clampf01(v[7]);
-    e->lo = clampf01(v[8]);
-    e->width = clampf01(v[9]);
-    e->mod = clampf01(v[10]);
-    e->rate = clampf01(v[11]);
-    e->level = clampf01(v[12]);
-    if (n >= 14 && v[13] >= 1.0f) engine->beats = v[13];
+    p->shim = clampf01(v[4]);
+    p->level = clampf01(v[5]);
+    e->time = clampf01(v[6]);
+    e->feed = clampf01(v[7]);
+    e->hi = clampf01(v[8]);
+    e->lo = clampf01(v[9]);
+    e->width = clampf01(v[10]);
+    e->mod = clampf01(v[11]);
+    e->rate = clampf01(v[12]);
+    e->level = clampf01(v[13]);
+    if (n >= 15 && v[14] >= 1.0f) engine->beats = v[14];
 }
 
 static float smooth_pole(float state, float x, float coef) {
@@ -2074,6 +2081,32 @@ static float early_cluster(Line *line, float x, const float *sec, const float *g
     return y;
 }
 
+static float raised(float t) {
+    return 0.5f * (1.0f - cosf(TWO_PI * t));
+}
+
+static float shim_pole(void) {
+    static float coef = -1.0f;
+    if (coef < 0.0f) coef = pole_coef(6000.0f);
+    return coef;
+}
+
+/** Octave up, once per round trip. Amount 0 leaves the line unwritten. */
+static float shimmer(Plate *p, float x, float amount) {
+    float n, phase, q, pitched;
+    if (amount <= 0.0f) return x;
+    n = 2048.0f;
+    phase = p->shimPhase;
+    if (phase >= n) phase -= n;
+    q = phase >= 1024.0f ? phase - 1024.0f : phase + 1024.0f;
+    pitched = line_read(&p->shimLine, n - phase) * raised(phase / n)
+        + line_read(&p->shimLine, n - q) * raised(q / n);
+    line_write(&p->shimLine, x);
+    p->shimPhase = phase + 1.0f;
+    p->shimLp = smooth_pole(p->shimLp, pitched, shim_pole());
+    return x * (1.0f - amount) + p->shimLp * amount;
+}
+
 static void plate_sample(Engine *engine, float inL, float inR, float *outL, float *outR) {
     static const float early_l_s[4] = { 0.0059f, 0.0112f, 0.0178f, 0.0294f };
     static const float early_l_g[4] = { 0.42f, -0.28f, 0.18f, -0.11f };
@@ -2124,7 +2157,7 @@ static void plate_sample(Engine *engine, float inL, float inR, float *outL, floa
     body = p->dampL - p->hpL;
     left = line_ap(&p->apL, sized_delay(1800.0f, scale) + wobble, body, 0.5f);
     left_end = line_delay(&p->dL2, sized_delay(3720.0f, scale) + wobble, left);
-    right = x + left_end * decay;
+    right = x + shimmer(p, left_end, p->shim * 0.75f) * decay;
     right = line_ap(&p->modR, sized_delay(908.0f, scale) + swirl, right, 0.7f);
     body = line_delay(&p->dR1, sized_delay(4217.0f, scale) + swirl, right);
     p->dampR = smooth_pole(p->dampR, body, damp_coef);

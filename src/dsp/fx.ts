@@ -4,6 +4,9 @@ import { FX_DELAY, FX_REVERB, type Fx } from "../core/types.ts";
 const SR = SAMPLE_RATE;
 /** Dattorro published the plate at 29761 Hz. Delay lengths scale from there. */
 const PAPER = SR / 29761;
+/** Two grains on one line, about 46 ms. Zero does not write it. */
+const SHIM_N = 2048;
+const SHIM_POLE = 1 - Math.exp((-2 * Math.PI * 6000) / SR);
 
 interface Line {
   buf: Float32Array;
@@ -154,6 +157,10 @@ export interface Tank {
   dR2: Line;
   apL: Line;
   apR: Line;
+  /** Octave grains, about 46 ms. Written only while SHIM is up. */
+  shim: Line;
+  shimPhase: number;
+  shimLp: number;
   dampL: number;
   dampR: number;
   hpL: number;
@@ -192,6 +199,9 @@ export function createTank(): Tank {
     dR2: makeLine(tankLen(TANK.dR2)),
     apL: makeLine(tankLen(TANK.apL)),
     apR: makeLine(tankLen(TANK.apR)),
+    shim: makeLine(SHIM_N + 8),
+    shimPhase: 0,
+    shimLp: 0,
     dampL: 0,
     dampR: 0,
     hpL: 0,
@@ -210,7 +220,7 @@ export function createEcho(): Echo {
 }
 
 export function clearTank(tank: Tank): void {
-  for (const line of [tank.preL, tank.preR, tank.earlyL, tank.earlyR, ...tank.inn, tank.modL, tank.modR, tank.dL1, tank.dL2, tank.dR1, tank.dR2, tank.apL, tank.apR]) {
+  for (const line of [tank.preL, tank.preR, tank.earlyL, tank.earlyR, ...tank.inn, tank.modL, tank.modR, tank.dL1, tank.dL2, tank.dR1, tank.dR2, tank.apL, tank.apR, tank.shim]) {
     line.buf.fill(0);
     line.i = 0;
   }
@@ -222,6 +232,8 @@ export function clearTank(tank: Tank): void {
   tank.right = 0;
   tank.lfo = 0;
   tank.scale = 0;
+  tank.shimPhase = 0;
+  tank.shimLp = 0;
   tank.quiet = 0;
 }
 
@@ -249,7 +261,29 @@ function cluster(line: Line, x: number, taps: readonly (readonly [number, number
   return y;
 }
 
-/** Plate. SIZE sets the room, DECAY the tail, AIR the top, SPIN the drift. */
+/** Raised cosine. A pair half a window apart sums to one. */
+function raised(t: number): number {
+  return 0.5 * (1 - Math.cos(Math.PI * 2 * t));
+}
+
+/**
+ * Octave up, once. The delay falls by one sample per sample, so each head
+ * reads twice as fast as the write. At amount 0 the line stays untouched.
+ */
+function shimmer(tank: Tank, x: number, amount: number): number {
+  if (amount <= 0) return x;
+  const n = SHIM_N;
+  let p = tank.shimPhase;
+  if (p >= n) p -= n;
+  const q = p >= n / 2 ? p - n / 2 : p + n / 2;
+  const pitched = read(tank.shim, n - p) * raised(p / n) + read(tank.shim, n - q) * raised(q / n);
+  write(tank.shim, x);
+  tank.shimPhase = p + 1;
+  tank.shimLp = smooth(tank.shimLp, pitched, SHIM_POLE);
+  return x * (1 - amount) + tank.shimLp * amount;
+}
+
+/** Plate. SIZE sets the room, DECAY the tail, AIR the top, SPIN the drift, SHIM the octave in the loop. */
 export function tankSample(tank: Tank, knobs: Fx["reverb"], inL: number, inR: number): [number, number] {
   const energyIn = Math.abs(inL) + Math.abs(inR);
   const [target] = roomOf(knobs.size);
@@ -279,7 +313,8 @@ export function tankSample(tank: Tank, knobs: Fx["reverb"], inL: number, inR: nu
   body = tank.dampL - tank.hpL;
   left = ap(tank.apL, sized(TANK.apL, scale) + wobble, body, 0.5);
   const leftEnd = delayed(tank.dL2, sized(TANK.dL2, scale) + wobble, left);
-  let right = x + leftEnd * decay;
+  const fed = shimmer(tank, leftEnd, unit(knobs.shim) * 0.75);
+  let right = x + fed * decay;
   right = ap(tank.modR, sized(TANK.modR, scale) + swirl, right, 0.7);
   body = delayed(tank.dR1, sized(TANK.dR1, scale) + swirl, right);
   tank.dampR = smooth(tank.dampR, body, dampCoef);
@@ -347,7 +382,7 @@ function color(echo: Echo, side: "l" | "r", x: number, knobs: Fx["delay"]): numb
   return lp * (1 - knobs.lo) + (lp - hpState) * knobs.lo;
 }
 
-/** Five reverb knobs, eight delay knobs, then beats per bar, already mixed for this moment. */
+/** Six reverb knobs, eight delay knobs, then beats per bar, already mixed for this moment. */
 export function formatFx(fx: Fx, beats: number): string {
   const nums = [
     ...FX_REVERB.map((key) => fx.reverb[key]),

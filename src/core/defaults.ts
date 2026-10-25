@@ -222,6 +222,7 @@ export function defaultFx(): Fx {
       decay: 0.42,
       air: 0.5,
       spin: 0.3,
+      shim: 0,
       level: 0.6,
     },
     delay: {

@@ -554,6 +554,7 @@ const FX_PAGES: Page[] = [
     reverbKnob("air", "AIR", [0.5]),
     null,
     reverbKnob("spin", "SPIN", [0]),
+    reverbKnob("shim", "SHIM", [0]),
     reverbKnob("level", "LEVEL"),
   ]),
   plainPage("delay", "DELAY", "DLY TIME", "DLY ECHO", "fx", "lane", [

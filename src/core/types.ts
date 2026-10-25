@@ -79,15 +79,16 @@ export interface LaneSend {
   delay: Modulated;
 }
 
-export const FX_REVERB = ["size", "decay", "air", "spin", "level"] as const;
+export const FX_REVERB = ["size", "decay", "air", "spin", "shim", "level"] as const;
 export const FX_DELAY = ["time", "feed", "hi", "lo", "width", "mod", "rate", "level"] as const;
 
-/** Plate. SIZE is the room, DECAY is the tail in time, AIR is brightness, SPIN is drift, LEVEL is the return. */
+/** Plate. SIZE is the room, DECAY is the tail in time, AIR is brightness, SPIN is drift, SHIM lifts the tail an octave, LEVEL is the return. */
 export interface FxReverb {
   size: number;
   decay: number;
   air: number;
   spin: number;
+  shim: number;
   level: number;
 }
 
