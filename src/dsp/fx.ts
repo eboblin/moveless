@@ -48,18 +48,85 @@ function delayed(line: Line, samples: number, x: number): number {
 }
 
 const IN_AP = [142, 107, 379, 277];
+const IN_GAIN = [0.75, 0.75, 0.625, 0.625];
 const TANK = { modL: 672, dL1: 4453, apL: 1800, dL2: 3720, modR: 908, dR1: 4217, apR: 2656, dR2: 3163 };
+/** Paper delays of one round trip, in seconds at the published rate. */
+const LOOP_PAPER = (672 + 4453 + 1800 + 3720 + 908 + 4217 + 2656 + 3163) / 29761;
+/** Seven taps would sit well above the dry hit. This parks LEVEL 0.7 beside it. */
+const TAP_TRIM = 0.15;
+/** Early cluster, fixed against the trimmed tail. */
+const EARLY_TRIM = 0.4;
+const HP = 1 - Math.exp((-2 * Math.PI * 40) / SR);
+
+/** Seconds, then gain. Left and right keep the source's side. */
+const EARLY_L: readonly (readonly [number, number])[] = [
+  [0.0059, 0.42],
+  [0.0112, -0.28],
+  [0.0178, 0.18],
+  [0.0294, -0.11],
+];
+const EARLY_R: readonly (readonly [number, number])[] = [
+  [0.0074, 0.4],
+  [0.0131, -0.26],
+  [0.0236, 0.16],
+  [0.037, -0.1],
+];
 
 function tankLen(base: number): number {
   return Math.ceil(base * PAPER * 1.85) + 32;
 }
 
-function sized(base: number, size: number): number {
-  return base * PAPER * (0.5 + size * 1.3);
+function unit(x: number): number {
+  return x < 0 ? 0 : x > 1 ? 1 : x;
+}
+
+/** Room scale 0.8…1.35, predelay samples 6…36 ms, early-time scale. */
+function roomOf(size: number): [number, number, number] {
+  const u = unit(size);
+  return [0.8 + u * 0.55, (0.006 + u * 0.03) * SR, 0.7 + u * 0.6];
+}
+
+function sized(base: number, scale: number): number {
+  return base * PAPER * scale;
+}
+
+/** DECAY 0 is 0.4 s, DECAY 1 is 12 s. One gain per side, so the round trip is gain². */
+function decayGain(decay: number, scale: number): number {
+  const seconds = 0.4 * 30 ** unit(decay);
+  const loop = LOOP_PAPER * scale;
+  const coef = Math.exp((Math.log(0.001) * loop) / (2 * seconds));
+  return coef > 0.99 ? 0.99 : coef;
+}
+
+/** Input bandwidth and tank damping, Hz. Center is the natural plate. */
+function airHz(air: number): [number, number] {
+  const u = unit(air);
+  const bw = u < 0.5 ? 2000 * 6 ** (u / 0.5) : 12000 * (4 / 3) ** ((u - 0.5) / 0.5);
+  const damp = u < 0.5 ? 2000 * 3 ** (u / 0.5) : 6000 * (5 / 3) ** ((u - 0.5) / 0.5);
+  return [bw, damp];
+}
+
+function pole(hz: number): number {
+  const c = 1 - Math.exp((-2 * Math.PI * hz) / SR);
+  return c < 0 ? 0 : c > 1 ? 1 : c;
+}
+
+/**
+ * Rate in Hz and excursion in samples. Zero does not move.
+ * Depth is capped by the shortest output tap so a small room cannot pinch it.
+ * The top is a few hertz and well over a semitone: the tail itself swirls.
+ */
+function spinOf(spin: number, scale: number): [number, number] {
+  const u = unit(spin);
+  const room = Math.max(1, sized(121, scale) - 8);
+  return [0.5 + u * 3, (u * 0.35 + u * u * 0.65) * room];
 }
 
 export interface Tank {
-  pre: Line;
+  preL: Line;
+  preR: Line;
+  earlyL: Line;
+  earlyR: Line;
   inn: Line[];
   modL: Line;
   modR: Line;
@@ -71,8 +138,9 @@ export interface Tank {
   apR: Line;
   dampL: number;
   dampR: number;
-  lowL: number;
-  lowR: number;
+  hpL: number;
+  hpR: number;
+  bw: number;
   right: number;
   lfo: number;
   quiet: number;
@@ -91,7 +159,10 @@ export interface Echo {
 
 export function createTank(): Tank {
   return {
-    pre: makeLine(Math.ceil(SR * 0.2) + 8),
+    preL: makeLine(Math.ceil(SR * 0.05) + 8),
+    preR: makeLine(Math.ceil(SR * 0.05) + 8),
+    earlyL: makeLine(Math.ceil(SR * 0.08) + 8),
+    earlyR: makeLine(Math.ceil(SR * 0.08) + 8),
     inn: IN_AP.map((n) => makeLine(Math.ceil(n * PAPER) + 8)),
     modL: makeLine(tankLen(TANK.modL)),
     modR: makeLine(tankLen(TANK.modR)),
@@ -103,8 +174,9 @@ export function createTank(): Tank {
     apR: makeLine(tankLen(TANK.apR)),
     dampL: 0,
     dampR: 0,
-    lowL: 0,
-    lowR: 0,
+    hpL: 0,
+    hpR: 0,
+    bw: 0,
     right: 0,
     lfo: 0,
     quiet: 0,
@@ -117,14 +189,15 @@ export function createEcho(): Echo {
 }
 
 export function clearTank(tank: Tank): void {
-  for (const line of [tank.pre, ...tank.inn, tank.modL, tank.modR, tank.dL1, tank.dL2, tank.dR1, tank.dR2, tank.apL, tank.apR]) {
+  for (const line of [tank.preL, tank.preR, tank.earlyL, tank.earlyR, ...tank.inn, tank.modL, tank.modR, tank.dL1, tank.dL2, tank.dR1, tank.dR2, tank.apL, tank.apR]) {
     line.buf.fill(0);
     line.i = 0;
   }
   tank.dampL = 0;
   tank.dampR = 0;
-  tank.lowL = 0;
-  tank.lowR = 0;
+  tank.hpL = 0;
+  tank.hpR = 0;
+  tank.bw = 0;
   tank.right = 0;
   tank.lfo = 0;
   tank.quiet = 0;
@@ -147,38 +220,65 @@ function smooth(state: number, x: number, coef: number): number {
   return state + (x - state) * coef;
 }
 
-/** Plate. SIZE stretches the tank. DECAY is the crossfeed. DAMP darkens it, LOW thins the bottom. */
+function cluster(line: Line, x: number, taps: readonly (readonly [number, number])[], scale: number): number {
+  let y = 0;
+  for (let i = 0; i < taps.length; i++) y += read(line, taps[i][0] * scale * SR) * taps[i][1];
+  write(line, x);
+  return y;
+}
+
+/** Plate. SIZE sets the room, DECAY the tail, AIR the top, SPIN the drift. */
 export function tankSample(tank: Tank, knobs: Fx["reverb"], inL: number, inR: number): [number, number] {
   const energyIn = Math.abs(inL) + Math.abs(inR);
   if (energyIn < 1e-7 && tank.quiet > SR / 2) return [0, 0];
-  const pre = delayed(tank.pre, Math.max(1, knobs.pre * 0.2 * SR), (inL + inR) * 0.5);
-  const diffuse = 0.25 + knobs.diff * 0.5;
-  let x = pre;
-  for (let i = 0; i < IN_AP.length; i++) x = ap(tank.inn[i], IN_AP[i] * PAPER, x, diffuse);
-  const decay = 0.25 + knobs.decay * 0.7;
-  tank.lfo += (Math.PI * 1.6) / SR;
+  const [scale, preSamples, earlyScale] = roomOf(knobs.size);
+  const preL = delayed(tank.preL, Math.max(1, preSamples), inL);
+  const preR = delayed(tank.preR, Math.max(1, preSamples), inR);
+  const earlyL = cluster(tank.earlyL, preL, EARLY_L, earlyScale);
+  const earlyR = cluster(tank.earlyR, preR, EARLY_R, earlyScale);
+  const [bwHz, dampHz] = airHz(knobs.air);
+  tank.bw = smooth(tank.bw, (preL + preR) * 0.5, pole(bwHz));
+  let x = tank.bw;
+  for (let i = 0; i < IN_AP.length; i++) x = ap(tank.inn[i], IN_AP[i] * PAPER, x, IN_GAIN[i]);
+  const decay = decayGain(knobs.decay, scale);
+  const [rate, excursion] = spinOf(knobs.spin, scale);
+  tank.lfo += (Math.PI * 2 * rate) / SR;
   if (tank.lfo > Math.PI * 2) tank.lfo -= Math.PI * 2;
-  const wobble = Math.sin(tank.lfo) * 12 * PAPER;
+  const wobble = Math.sin(tank.lfo) * excursion;
+  const swirl = Math.cos(tank.lfo) * excursion;
+  const dampCoef = pole(dampHz);
   let left = x + tank.right * decay;
-  left = ap(tank.modL, sized(TANK.modL, knobs.size) + wobble, left, 0.7);
-  let body = delayed(tank.dL1, sized(TANK.dL1, knobs.size), left);
-  tank.dampL = smooth(tank.dampL, body, 0.8 - knobs.damp * 0.75);
-  tank.lowL = smooth(tank.lowL, tank.dampL, 0.002 + knobs.low * 0.03);
-  body = (tank.dampL * (1 - knobs.low) + (tank.dampL - tank.lowL) * knobs.low) * decay;
-  left = ap(tank.apL, sized(TANK.apL, knobs.size), body, 0.5);
-  const leftLast = delayed(tank.dL2, sized(TANK.dL2, knobs.size), left);
-  let right = x + leftLast * decay;
-  right = ap(tank.modR, sized(TANK.modR, knobs.size) - wobble, right, 0.7);
-  body = delayed(tank.dR1, sized(TANK.dR1, knobs.size), right);
-  tank.dampR = smooth(tank.dampR, body, 0.8 - knobs.damp * 0.75);
-  tank.lowR = smooth(tank.lowR, tank.dampR, 0.002 + knobs.low * 0.03);
-  body = (tank.dampR * (1 - knobs.low) + (tank.dampR - tank.lowR) * knobs.low) * decay;
-  right = ap(tank.apR, sized(TANK.apR, knobs.size), body, 0.5);
-  tank.right = delayed(tank.dR2, sized(TANK.dR2, knobs.size), right);
-  const mid = (leftLast + tank.right) * 0.5;
-  const side = (leftLast - tank.right) * 0.5 * knobs.width;
-  const outL = (mid + side) * knobs.level;
-  const outR = (mid - side) * knobs.level;
+  left = ap(tank.modL, sized(TANK.modL, scale) + wobble, left, 0.7);
+  let body = delayed(tank.dL1, sized(TANK.dL1, scale) + wobble, left);
+  tank.dampL = smooth(tank.dampL, body, dampCoef);
+  tank.hpL = smooth(tank.hpL, tank.dampL, HP);
+  body = tank.dampL - tank.hpL;
+  left = ap(tank.apL, sized(TANK.apL, scale) + wobble, body, 0.5);
+  const leftEnd = delayed(tank.dL2, sized(TANK.dL2, scale) + wobble, left);
+  let right = x + leftEnd * decay;
+  right = ap(tank.modR, sized(TANK.modR, scale) + swirl, right, 0.7);
+  body = delayed(tank.dR1, sized(TANK.dR1, scale) + swirl, right);
+  tank.dampR = smooth(tank.dampR, body, dampCoef);
+  tank.hpR = smooth(tank.hpR, tank.dampR, HP);
+  body = tank.dampR - tank.hpR;
+  right = ap(tank.apR, sized(TANK.apR, scale) + swirl, body, 0.5);
+  tank.right = delayed(tank.dR2, sized(TANK.dR2, scale) + swirl, right);
+  const tapsL = read(tank.dL1, sized(266, scale) + wobble)
+    + read(tank.dL1, sized(2974, scale) + wobble)
+    - read(tank.apL, sized(1913, scale) + wobble)
+    + read(tank.dL2, sized(1996, scale) + wobble)
+    - read(tank.dR1, sized(1990, scale) + swirl)
+    - read(tank.apR, sized(187, scale) + swirl)
+    - read(tank.dR2, sized(1066, scale) + swirl);
+  const tapsR = read(tank.dR1, sized(353, scale) + swirl)
+    + read(tank.dR1, sized(3627, scale) + swirl)
+    - read(tank.apR, sized(1228, scale) + swirl)
+    + read(tank.dR2, sized(2673, scale) + swirl)
+    - read(tank.dL1, sized(2111, scale) + wobble)
+    - read(tank.apL, sized(335, scale) + wobble)
+    - read(tank.dL2, sized(121, scale) + wobble);
+  const outL = (earlyL * EARLY_TRIM + tapsL * TAP_TRIM) * knobs.level;
+  const outR = (earlyR * EARLY_TRIM + tapsR * TAP_TRIM) * knobs.level;
   tank.quiet = energyIn + Math.abs(outL) + Math.abs(outR) < 1e-6 ? tank.quiet + 1 : 0;
   return [outL, outR];
 }
@@ -223,7 +323,7 @@ function color(echo: Echo, side: "l" | "r", x: number, knobs: Fx["delay"]): numb
   return lp * (1 - knobs.lo) + (lp - hpState) * knobs.lo;
 }
 
-/** Sixteen knobs, then beats per bar, already mixed for this moment. */
+/** Five reverb knobs, eight delay knobs, then beats per bar, already mixed for this moment. */
 export function formatFx(fx: Fx, beats: number): string {
   const nums = [
     ...FX_REVERB.map((key) => fx.reverb[key]),

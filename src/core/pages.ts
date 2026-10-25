@@ -533,17 +533,29 @@ function progPage(): Page {
   ]);
 }
 
+function reverbKnob(key: string, label: string, detents?: readonly number[]): Binding {
+  return bind({
+    path: `reverb.${key}`,
+    label,
+    min: 0,
+    max: 1,
+    step: 0.01,
+    store: "lane",
+    weight: PLAIN_WEIGHT,
+    morph: "lerp",
+    ...(detents ? { detents } : {}),
+  });
+}
+
 const FX_PAGES: Page[] = [
-  plainPage("reverb", "REVERB", "REV SIZE", "REV TAIL", "fx", "lane", [
-    ["size", "SIZE"],
-    ["decay", "DECAY"],
-    ["damp", "DAMP"],
-    ["diff", "DIFF"],
-    ["pre", "PRE"],
-    ["width", "WIDTH"],
-    ["low", "LOW"],
-    ["level", "LEVEL"],
-  ], "lerp"),
+  page("reverb", "REVERB", ["REV ROOM", "REV LIFE"], "fx", [
+    reverbKnob("size", "SIZE"),
+    reverbKnob("decay", "DECAY"),
+    reverbKnob("air", "AIR", [0.5]),
+    null,
+    reverbKnob("spin", "SPIN", [0]),
+    reverbKnob("level", "LEVEL"),
+  ]),
   plainPage("delay", "DELAY", "DLY TIME", "DLY ECHO", "fx", "lane", [
     ["time", "TIME"],
     ["feed", "FEED"],

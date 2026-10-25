@@ -218,14 +218,11 @@ function chords(): ChordLane {
 export function defaultFx(): Fx {
   return {
     reverb: {
-      size: 0.45,
-      decay: 0.55,
-      damp: 0.4,
-      diff: 0.7,
-      pre: 0.08,
-      width: 0.85,
-      low: 0.25,
-      level: 0.75,
+      size: 0.42,
+      decay: 0.42,
+      air: 0.5,
+      spin: 0.3,
+      level: 0.6,
     },
     delay: {
       // 0.4 is an eighth note when the bar is four beats.

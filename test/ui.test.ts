@@ -183,7 +183,13 @@ describe("pages and leds", () => {
     const fx = pagesFor("fx");
     assert.equal(pageCount("fx"), 2);
     assert.deepEqual(fx.map((page) => page.id), ["reverb", "delay"]);
-    assert.deepEqual(fx[0].groups, ["REV SIZE", "REV TAIL"]);
+    assert.deepEqual(fx[0].groups, ["REV ROOM", "REV LIFE"]);
+    assert.deepEqual(
+      fx[0].bindings.map((binding) => binding?.label ?? null),
+      ["SIZE", "DECAY", "AIR", null, "SPIN", "LEVEL", null, null],
+    );
+    assert.deepEqual(fx[0].bindings[2]?.detents, [0.5]);
+    assert.deepEqual(fx[0].bindings[4]?.detents, [0]);
     assert.deepEqual(fx[1].groups, ["DLY TIME", "DLY ECHO"]);
     assert.equal(fx[0].bindings[0]?.label, "SIZE");
     assert.equal(fx[1].bindings[0]?.label, "TIME");

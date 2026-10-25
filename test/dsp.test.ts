@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { clamp01, SIXTEENTH_TICKS, tickToSample } from "../src/core/clock.ts";
+import { clamp01, SAMPLE_RATE, SIXTEENTH_TICKS, tickToSample } from "../src/core/clock.ts";
 import { defaultProject } from "../src/core/defaults.ts";
 import { evalModulated } from "../src/core/modulate.ts";
 import { applyMorph } from "../src/core/morph.ts";
@@ -11,7 +11,8 @@ import { eventsInBlock, phraseLoop, soundMotions } from "../src/dsp/schedule.ts"
 import { envelopeTable, laneEnvelopeAt, readEnvelope } from "../src/dsp/envelope.ts";
 import { createEngine, filterSample, formatBus, glideSeconds, loadPhrase, melodyCutoff, packBlock, packPhrase, packPhraseBody, pluckSeconds, renderBlock, renderClock } from "../src/dsp/voice.ts";
 import type { BlockEvent } from "../src/dsp/schedule.ts";
-import type { LaneId } from "../src/core/types.ts";
+import type { FxReverb, LaneId } from "../src/core/types.ts";
+import { createTank, tankSample } from "../src/dsp/fx.ts";
 
 describe("dsp adapter", () => {
   it("maps kick semantics onto v01 chain keys", () => {
@@ -136,6 +137,27 @@ describe("dsp adapter", () => {
     assert.ok(tail(dry) < 1e-3);
     assert.ok(tail(wet) > tail(dry) + 0.05);
     for (const sample of wet) assert.ok(Number.isFinite(sample));
+  });
+
+  it("keeps plate decay orthogonal to room size", () => {
+    const short = fallSeconds(plateKnobs({ decay: 0.2 }), 12);
+    const long = fallSeconds(plateKnobs({ decay: 0.7 }), 12);
+    assert.ok(long > short * 2, `tail ${long}s should outlast ${short}s`);
+    const small = fallSeconds(plateKnobs({ size: 0, decay: 0.55 }), 12);
+    const large = fallSeconds(plateKnobs({ size: 1, decay: 0.55 }), 12);
+    const ratio = large / small;
+    assert.ok(ratio > 2 / 3 && ratio < 3 / 2, `size moved the tail by ${ratio}`);
+    for (const size of [0, 1]) {
+      for (const decay of [0, 1]) {
+        for (const air of [0, 1]) {
+          for (const spin of [0, 1]) {
+            const heard = impulsePeak(plateKnobs({ size, decay, air, spin }));
+            assert.ok(Number.isFinite(heard));
+            assert.ok(heard < 1, `peak ${heard} at size ${size} decay ${decay} air ${air} spin ${spin}`);
+          }
+        }
+      }
+    }
   });
 
   it("schedules the downbeat kick inside the first audio block", () => {
@@ -1131,6 +1153,49 @@ function peak(buf: Float32Array): number {
   let best = 0;
   for (let i = 0; i < Math.min(buf.length, 256); i++) {
     const a = Math.abs(buf[i]);
+    if (a > best) best = a;
+  }
+  return best;
+}
+
+function plateKnobs(over: Partial<FxReverb>): FxReverb {
+  return { size: 0.42, decay: 0.42, air: 0.5, spin: 0, level: 1, ...over };
+}
+
+/** Time for the tail, measured from 0.4 s, to fall `dropDb` from that level. */
+function fallSeconds(knobs: FxReverb, dropDb: number): number {
+  const tank = createTank();
+  tankSample(tank, knobs, 1, 0);
+  const hop = Math.round(SAMPLE_RATE * 0.05);
+  const rms: number[] = [];
+  let acc = 0;
+  let n = 0;
+  const total = Math.round(SAMPLE_RATE * 4);
+  for (let i = 0; i < total; i++) {
+    const [l, r] = tankSample(tank, knobs, 0, 0);
+    acc += l * l + r * r;
+    if (++n === hop) {
+      rms.push(Math.sqrt(acc / n));
+      acc = 0;
+      n = 0;
+    }
+  }
+  const refAt = 8;
+  const ref = rms[refAt] ?? 0;
+  const gate = ref * 10 ** (-dropDb / 20);
+  let last = refAt;
+  for (let i = refAt; i < rms.length; i++) if (rms[i] >= gate) last = i;
+  return (last - refAt) * 0.05;
+}
+
+function impulsePeak(knobs: FxReverb): number {
+  const tank = createTank();
+  let best = 0;
+  const total = Math.round(SAMPLE_RATE * 2);
+  for (let i = 0; i < total; i++) {
+    const [l, r] = tankSample(tank, knobs, i === 0 ? 1 : 0, 0);
+    if (!Number.isFinite(l) || !Number.isFinite(r)) return Number.NaN;
+    const a = Math.max(Math.abs(l), Math.abs(r));
     if (a > best) best = a;
   }
   return best;

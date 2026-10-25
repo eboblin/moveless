@@ -133,10 +133,10 @@ typedef struct {
 } Line;
 
 typedef struct {
-    Line pre, in0, in1, in2, in3, modL, modR, dL1, dL2, dR1, dR2, apL, apR;
-    float dampL, dampR, lowL, lowR, right, lfo;
+    Line preL, preR, earlyL, earlyR, in0, in1, in2, in3, modL, modR, dL1, dL2, dR1, dR2, apL, apR;
+    float dampL, dampR, hpL, hpR, bw, right, lfo;
     int quiet;
-    float size, decay, damp, diff, predelay, width, low, level;
+    float size, decay, air, spin, level;
 } Plate;
 
 typedef struct {
@@ -1716,8 +1716,8 @@ static int tank_len(float base) {
     return (int)ceilf(base * paper_scale() * 1.85f) + 32;
 }
 
-static float sized_delay(float base, float size) {
-    return base * paper_scale() * (0.5f + size * 1.3f);
+static float sized_delay(float base, float scale) {
+    return base * paper_scale() * scale;
 }
 
 static int fx_init(Engine *engine) {
@@ -1725,7 +1725,10 @@ static int fx_init(Engine *engine) {
     Echo *e = &engine->echo;
     float s = paper_scale();
     int ok = 1;
-    ok = line_make(&p->pre, (int)ceilf(SR * 0.2f) + 8) && ok;
+    ok = line_make(&p->preL, (int)ceilf(SR * 0.05f) + 8) && ok;
+    ok = line_make(&p->preR, (int)ceilf(SR * 0.05f) + 8) && ok;
+    ok = line_make(&p->earlyL, (int)ceilf(SR * 0.08f) + 8) && ok;
+    ok = line_make(&p->earlyR, (int)ceilf(SR * 0.08f) + 8) && ok;
     ok = line_make(&p->in0, (int)ceilf(142.0f * s) + 8) && ok;
     ok = line_make(&p->in1, (int)ceilf(107.0f * s) + 8) && ok;
     ok = line_make(&p->in2, (int)ceilf(379.0f * s) + 8) && ok;
@@ -1740,14 +1743,11 @@ static int fx_init(Engine *engine) {
     ok = line_make(&p->apR, tank_len(2656.0f)) && ok;
     ok = line_make(&e->l, (int)ceilf(SR * 2.0f) + 8) && ok;
     ok = line_make(&e->r, (int)ceilf(SR * 2.0f) + 8) && ok;
-    p->size = 0.45f;
-    p->decay = 0.55f;
-    p->damp = 0.4f;
-    p->diff = 0.7f;
-    p->predelay = 0.08f;
-    p->width = 0.85f;
-    p->low = 0.25f;
-    p->level = 0.75f;
+    p->size = 0.42f;
+    p->decay = 0.42f;
+    p->air = 0.5f;
+    p->spin = 0.3f;
+    p->level = 0.6f;
     e->time = 0.4f;
     e->feed = 0.4f;
     e->hi = 0.65f;
@@ -1791,7 +1791,10 @@ static void fx_free(Engine *engine) {
     engine->deck_peak_r = NULL;
     engine->deck_r = NULL;
     Plate *p = &engine->plate;
-    line_free(&p->pre);
+    line_free(&p->preL);
+    line_free(&p->preR);
+    line_free(&p->earlyL);
+    line_free(&p->earlyR);
     line_free(&p->in0);
     line_free(&p->in1);
     line_free(&p->in2);
@@ -1952,7 +1955,10 @@ static void apply_bus(Engine *engine, const char *text) {
 
 static void fx_clear(Engine *engine) {
     Plate *p = &engine->plate;
-    line_clear(&p->pre);
+    line_clear(&p->preL);
+    line_clear(&p->preR);
+    line_clear(&p->earlyL);
+    line_clear(&p->earlyR);
     line_clear(&p->in0);
     line_clear(&p->in1);
     line_clear(&p->in2);
@@ -1967,8 +1973,9 @@ static void fx_clear(Engine *engine) {
     line_clear(&p->apR);
     p->dampL = 0;
     p->dampR = 0;
-    p->lowL = 0;
-    p->lowR = 0;
+    p->hpL = 0;
+    p->hpR = 0;
+    p->bw = 0;
     p->right = 0;
     p->lfo = 0;
     p->quiet = 0;
@@ -1984,82 +1991,155 @@ static void fx_clear(Engine *engine) {
 }
 
 static void apply_fx(Engine *engine, const char *text) {
-    float v[17];
+    float v[14];
     int n = 0;
     const char *cursor = text;
-    while (n < 17 && cursor && *cursor) {
+    while (n < 14 && cursor && *cursor) {
         char *end = NULL;
         float value = strtof(cursor, &end);
         if (end == cursor) break;
         v[n++] = value;
         cursor = (*end == ',') ? end + 1 : end;
     }
-    if (n < 16) return;
+    if (n < 13) return;
     Plate *p = &engine->plate;
     Echo *e = &engine->echo;
     p->size = clampf01(v[0]);
     p->decay = clampf01(v[1]);
-    p->damp = clampf01(v[2]);
-    p->diff = clampf01(v[3]);
-    p->predelay = clampf01(v[4]);
-    p->width = clampf01(v[5]);
-    p->low = clampf01(v[6]);
-    p->level = clampf01(v[7]);
-    e->time = clampf01(v[8]);
-    e->feed = clampf01(v[9]);
-    e->hi = clampf01(v[10]);
-    e->lo = clampf01(v[11]);
-    e->width = clampf01(v[12]);
-    e->mod = clampf01(v[13]);
-    e->rate = clampf01(v[14]);
-    e->level = clampf01(v[15]);
-    if (n >= 17 && v[16] >= 1.0f) engine->beats = v[16];
+    p->air = clampf01(v[2]);
+    p->spin = clampf01(v[3]);
+    p->level = clampf01(v[4]);
+    e->time = clampf01(v[5]);
+    e->feed = clampf01(v[6]);
+    e->hi = clampf01(v[7]);
+    e->lo = clampf01(v[8]);
+    e->width = clampf01(v[9]);
+    e->mod = clampf01(v[10]);
+    e->rate = clampf01(v[11]);
+    e->level = clampf01(v[12]);
+    if (n >= 14 && v[13] >= 1.0f) engine->beats = v[13];
 }
 
 static float smooth_pole(float state, float x, float coef) {
     return state + (x - state) * coef;
 }
 
+static float plate_hp(void) {
+    static float coef = -1.0f;
+    if (coef < 0.0f) coef = pole_coef(40.0f);
+    return coef;
+}
+
+/** One gain per side. DECAY 0 is 0.4 s, DECAY 1 is 12 s. */
+static float decay_gain(float decay, float scale) {
+    float seconds = 0.4f * powf(30.0f, clampf01(decay));
+    float loop = (21589.0f / 29761.0f) * scale;
+    float coef = expf((logf(0.001f) * loop) / (2.0f * seconds));
+    return coef > 0.99f ? 0.99f : coef;
+}
+
+static void air_hz(float air, float *bw, float *damp) {
+    float u = clampf01(air);
+    if (u < 0.5f) {
+        *bw = 2000.0f * powf(6.0f, u / 0.5f);
+        *damp = 2000.0f * powf(3.0f, u / 0.5f);
+    } else {
+        *bw = 12000.0f * powf(4.0f / 3.0f, (u - 0.5f) / 0.5f);
+        *damp = 6000.0f * powf(5.0f / 3.0f, (u - 0.5f) / 0.5f);
+    }
+}
+
+static void room_of(float size, float *scale, float *pre, float *early) {
+    float u = clampf01(size);
+    *scale = 0.8f + u * 0.55f;
+    *pre = (0.006f + u * 0.03f) * SR;
+    *early = 0.7f + u * 0.6f;
+}
+
+static void spin_of(float spin, float scale, float *rate, float *excursion) {
+    float u = clampf01(spin);
+    float room = sized_delay(121.0f, scale) - 8.0f;
+    if (room < 1.0f) room = 1.0f;
+    *rate = 0.5f + u * 3.0f;
+    *excursion = (u * 0.35f + u * u * 0.65f) * room;
+}
+
+static float early_cluster(Line *line, float x, const float *sec, const float *gain, float scale) {
+    float y = 0.0f;
+    int i;
+    for (i = 0; i < 4; i++) y += line_read(line, sec[i] * scale * SR) * gain[i];
+    line_write(line, x);
+    return y;
+}
+
 static void plate_sample(Engine *engine, float inL, float inR, float *outL, float *outR) {
+    static const float early_l_s[4] = { 0.0059f, 0.0112f, 0.0178f, 0.0294f };
+    static const float early_l_g[4] = { 0.42f, -0.28f, 0.18f, -0.11f };
+    static const float early_r_s[4] = { 0.0074f, 0.0131f, 0.0236f, 0.037f };
+    static const float early_r_g[4] = { 0.40f, -0.26f, 0.16f, -0.10f };
     Plate *p = &engine->plate;
     float energy = fabsf(inL) + fabsf(inR);
+    float scale, pre_samples, early_scale, pre_l, pre_r, early_l, early_r;
+    float bw_hz, damp_hz, damp_coef, decay, rate, excursion, wobble, swirl, s;
+    float x, left, body, left_end, right, taps_l, taps_r;
     if (energy < 1e-7f && p->quiet > (int)(SR / 2.0f)) {
         *outL = 0;
         *outR = 0;
         return;
     }
-    float s = paper_scale();
-    float pre = line_delay(&p->pre, fmaxf(1.0f, p->predelay * 0.2f * SR), (inL + inR) * 0.5f);
-    float diffuse = 0.25f + p->diff * 0.5f;
-    float x = pre;
-    x = line_ap(&p->in0, 142.0f * s, x, diffuse);
-    x = line_ap(&p->in1, 107.0f * s, x, diffuse);
-    x = line_ap(&p->in2, 379.0f * s, x, diffuse);
-    x = line_ap(&p->in3, 277.0f * s, x, diffuse);
-    float decay = 0.25f + p->decay * 0.7f;
-    p->lfo += (3.14159265f * 1.6f) / SR;
-    if (p->lfo > 6.2831853f) p->lfo -= 6.2831853f;
-    float wobble = sinf(p->lfo) * 12.0f * s;
-    float left = x + p->right * decay;
-    left = line_ap(&p->modL, sized_delay(672.0f, p->size) + wobble, left, 0.7f);
-    float body = line_delay(&p->dL1, sized_delay(4453.0f, p->size), left);
-    p->dampL = smooth_pole(p->dampL, body, 0.8f - p->damp * 0.75f);
-    p->lowL = smooth_pole(p->lowL, p->dampL, 0.002f + p->low * 0.03f);
-    body = (p->dampL * (1.0f - p->low) + (p->dampL - p->lowL) * p->low) * decay;
-    left = line_ap(&p->apL, sized_delay(1800.0f, p->size), body, 0.5f);
-    float left_last = line_delay(&p->dL2, sized_delay(3720.0f, p->size), left);
-    float right = x + left_last * decay;
-    right = line_ap(&p->modR, sized_delay(908.0f, p->size) - wobble, right, 0.7f);
-    body = line_delay(&p->dR1, sized_delay(4217.0f, p->size), right);
-    p->dampR = smooth_pole(p->dampR, body, 0.8f - p->damp * 0.75f);
-    p->lowR = smooth_pole(p->lowR, p->dampR, 0.002f + p->low * 0.03f);
-    body = (p->dampR * (1.0f - p->low) + (p->dampR - p->lowR) * p->low) * decay;
-    right = line_ap(&p->apR, sized_delay(2656.0f, p->size), body, 0.5f);
-    p->right = line_delay(&p->dR2, sized_delay(3163.0f, p->size), right);
-    float mid = (left_last + p->right) * 0.5f;
-    float side = (left_last - p->right) * 0.5f * p->width;
-    *outL = (mid + side) * p->level;
-    *outR = (mid - side) * p->level;
+    room_of(p->size, &scale, &pre_samples, &early_scale);
+    if (pre_samples < 1.0f) pre_samples = 1.0f;
+    pre_l = line_delay(&p->preL, pre_samples, inL);
+    pre_r = line_delay(&p->preR, pre_samples, inR);
+    early_l = early_cluster(&p->earlyL, pre_l, early_l_s, early_l_g, early_scale);
+    early_r = early_cluster(&p->earlyR, pre_r, early_r_s, early_r_g, early_scale);
+    air_hz(p->air, &bw_hz, &damp_hz);
+    p->bw = smooth_pole(p->bw, (pre_l + pre_r) * 0.5f, pole_coef(bw_hz));
+    s = paper_scale();
+    x = p->bw;
+    x = line_ap(&p->in0, 142.0f * s, x, 0.75f);
+    x = line_ap(&p->in1, 107.0f * s, x, 0.75f);
+    x = line_ap(&p->in2, 379.0f * s, x, 0.625f);
+    x = line_ap(&p->in3, 277.0f * s, x, 0.625f);
+    decay = decay_gain(p->decay, scale);
+    spin_of(p->spin, scale, &rate, &excursion);
+    p->lfo += (TWO_PI * rate) / SR;
+    if (p->lfo > TWO_PI) p->lfo -= TWO_PI;
+    wobble = sinf(p->lfo) * excursion;
+    swirl = cosf(p->lfo) * excursion;
+    damp_coef = pole_coef(damp_hz);
+    left = x + p->right * decay;
+    left = line_ap(&p->modL, sized_delay(672.0f, scale) + wobble, left, 0.7f);
+    body = line_delay(&p->dL1, sized_delay(4453.0f, scale) + wobble, left);
+    p->dampL = smooth_pole(p->dampL, body, damp_coef);
+    p->hpL = smooth_pole(p->hpL, p->dampL, plate_hp());
+    body = p->dampL - p->hpL;
+    left = line_ap(&p->apL, sized_delay(1800.0f, scale) + wobble, body, 0.5f);
+    left_end = line_delay(&p->dL2, sized_delay(3720.0f, scale) + wobble, left);
+    right = x + left_end * decay;
+    right = line_ap(&p->modR, sized_delay(908.0f, scale) + swirl, right, 0.7f);
+    body = line_delay(&p->dR1, sized_delay(4217.0f, scale) + swirl, right);
+    p->dampR = smooth_pole(p->dampR, body, damp_coef);
+    p->hpR = smooth_pole(p->hpR, p->dampR, plate_hp());
+    body = p->dampR - p->hpR;
+    right = line_ap(&p->apR, sized_delay(2656.0f, scale) + swirl, body, 0.5f);
+    p->right = line_delay(&p->dR2, sized_delay(3163.0f, scale) + swirl, right);
+    taps_l = line_read(&p->dL1, sized_delay(266.0f, scale) + wobble)
+        + line_read(&p->dL1, sized_delay(2974.0f, scale) + wobble)
+        - line_read(&p->apL, sized_delay(1913.0f, scale) + wobble)
+        + line_read(&p->dL2, sized_delay(1996.0f, scale) + wobble)
+        - line_read(&p->dR1, sized_delay(1990.0f, scale) + swirl)
+        - line_read(&p->apR, sized_delay(187.0f, scale) + swirl)
+        - line_read(&p->dR2, sized_delay(1066.0f, scale) + swirl);
+    taps_r = line_read(&p->dR1, sized_delay(353.0f, scale) + swirl)
+        + line_read(&p->dR1, sized_delay(3627.0f, scale) + swirl)
+        - line_read(&p->apR, sized_delay(1228.0f, scale) + swirl)
+        + line_read(&p->dR2, sized_delay(2673.0f, scale) + swirl)
+        - line_read(&p->dL1, sized_delay(2111.0f, scale) + wobble)
+        - line_read(&p->apL, sized_delay(335.0f, scale) + wobble)
+        - line_read(&p->dL2, sized_delay(121.0f, scale) + wobble);
+    *outL = (early_l * 0.4f + taps_l * 0.15f) * p->level;
+    *outR = (early_r * 0.4f + taps_r * 0.15f) * p->level;
     p->quiet = energy + fabsf(*outL) + fabsf(*outR) < 1e-6f ? p->quiet + 1 : 0;
 }
 
