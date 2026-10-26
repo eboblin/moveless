@@ -122,14 +122,20 @@ function destinationSpeaks(lanes: Lanes, lane: PatternId): boolean {
   return false;
 }
 
-/** Unlocked lanes this wander step will move. A silent destination lane stays on the source. */
+/** Unlocked lanes this wander step will move. A speaking destination is taken at one half, a silent one at one quarter. When every coin misses, the fallback stays on a speaking lane. */
 export function wanderLanes(project: Project, origin: number, target: Lanes): PatternId[] {
-  const open = PATTERN_LANES.filter((lane) => !project.lock[lane] && destinationSpeaks(target, lane));
-  if (!open.length) return [];
-  const picked = open.filter((lane) => hash01(project.global.seed, "wander-lane", origin, lane) < 0.5);
+  const picked: PatternId[] = [];
+  const speaking: PatternId[] = [];
+  for (const lane of PATTERN_LANES) {
+    if (project.lock[lane]) continue;
+    const speaks = destinationSpeaks(target, lane);
+    if (speaks) speaking.push(lane);
+    if (hash01(project.global.seed, "wander-lane", origin, lane) < (speaks ? 0.5 : 0.25)) picked.push(lane);
+  }
   if (picked.length) return picked;
-  const index = Math.min(open.length - 1, Math.floor(hash01(project.global.seed, "wander-lane", origin, "fallback") * open.length));
-  return [open[index]];
+  if (!speaking.length) return [];
+  const index = Math.min(speaking.length - 1, Math.floor(hash01(project.global.seed, "wander-lane", origin, "fallback") * speaking.length));
+  return [speaking[index]];
 }
 
 export function pickWanderCandidate(ids: readonly string[], previous: string | null, seed: number, salt: number): string | null {

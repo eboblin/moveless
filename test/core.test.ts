@@ -2097,7 +2097,7 @@ describe("randomize, wander, sets", () => {
     }
   });
 
-  it("keeps the source lane when every destination generator is silent", () => {
+  it("takes a silent destination lane on a quarter coin", () => {
     const project = defaultProject();
     const quiet = clone(project.working);
     quiet.kick.gen1.hits = 0;
@@ -2111,20 +2111,29 @@ describe("randomize, wander, sets", () => {
     quiet.lead.gen2.length = 0;
     quiet.hat.gen1.hits = 0;
     quiet.hat.gen2.hits = 4;
+    const silent = ["kick", "snare", "perc", "bass", "lead", "chords"] as const;
+    let sawSilent = false;
     let sawHat = false;
     for (let origin = 0; origin < 64; origin++) {
       const lanes = wanderLanes(project, origin, quiet);
-      assert.equal(lanes.includes("kick"), false);
-      assert.equal(lanes.includes("snare"), false);
-      assert.equal(lanes.includes("bass"), false);
-      assert.equal(lanes.includes("chords"), false);
-      assert.equal(lanes.includes("lead"), false);
+      for (const lane of silent) {
+        const take = hash01(project.global.seed, "wander-lane", origin, lane) < 0.25;
+        assert.equal(lanes.includes(lane), take);
+        if (take) sawSilent = true;
+      }
       if (lanes.includes("hat")) sawHat = true;
     }
+    assert.equal(sawSilent, true);
     assert.equal(sawHat, true);
     const onlyKick = defaultProject();
     for (const lane of PATTERN_LANES) if (lane !== "kick") onlyKick.lock[lane] = true;
-    assert.deepEqual(wanderLanes(onlyKick, 1, quiet), []);
+    let movedKick = 0;
+    for (let origin = 0; origin < 64; origin++) {
+      const take = hash01(onlyKick.global.seed, "wander-lane", origin, "kick") < 0.25;
+      assert.deepEqual(wanderLanes(onlyKick, origin, quiet), take ? ["kick"] : []);
+      if (take) movedKick++;
+    }
+    assert.ok(movedKick > 0 && movedKick < 64);
 
     const mark = (lane: PatternId) => lane === "fx" ? "fx.reverb.size" : lane === "chords" ? "chords.velocity.value" : `${lane}.gen1.velocity.value`;
     let live = record(defaultProject());
@@ -2142,16 +2151,18 @@ describe("randomize, wander, sets", () => {
     live.wanderPreviousTarget = "001";
     live.transition = "now";
     let origin = 0;
-    for (; origin < 128; origin++) {
-      if (wanderLanes(live, origin, dest).includes("hat")) break;
+    for (; origin < 512; origin++) {
+      const kick = hash01(live.global.seed, "wander-lane", origin, "kick") < 0.25;
+      const snare = hash01(live.global.seed, "wander-lane", origin, "snare") < 0.25;
+      if (wanderLanes(live, origin, dest).includes("hat") && kick && !snare) break;
     }
-    assert.ok(origin < 128);
+    assert.ok(origin < 512);
     const interval = 2 * 4 * 192;
     live.wanderOriginTick = origin - interval;
     const home = live.journal[0].lanes;
     const later = advance(live, origin);
-    assert.equal(getPath(later.working, mark("kick")), getPath(home, mark("kick")));
-    assert.equal(later.working.kick.gen1.hits, home.kick.gen1.hits);
+    assert.equal(getPath(later.working, mark("kick")), getPath(dest, mark("kick")));
+    assert.equal(later.working.kick.gen1.hits, dest.kick.gen1.hits);
     assert.equal(getPath(later.working, mark("snare")), getPath(home, mark("snare")));
     assert.equal(getPath(later.working, mark("hat")), getPath(dest, mark("hat")));
     const armed = launchScene(later, "002", origin);
