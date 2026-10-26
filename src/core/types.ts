@@ -80,7 +80,7 @@ export interface LaneSend {
 }
 
 export const FX_REVERB = ["size", "decay", "air", "spin", "shim", "level"] as const;
-export const FX_DELAY = ["time", "feed", "hi", "lo", "width", "mod", "rate", "level"] as const;
+export const FX_DELAY = ["time", "feed", "tone", "duck", "ping", "taps", "wow", "level"] as const;
 
 /** Plate. SIZE is the room, DECAY is the tail in time, AIR is brightness, SPIN is drift, SHIM lifts the tail an octave, LEVEL is the return. */
 export interface FxReverb {
@@ -92,14 +92,15 @@ export interface FxReverb {
   level: number;
 }
 
+/** TIME is the repeat, FEED how many, TONE the color, DUCK the dip under the hit, PING the bounce, TAPS the extra hits, WOW the tape drift, LEVEL the return. */
 export interface FxDelay {
   time: number;
   feed: number;
-  hi: number;
-  lo: number;
-  width: number;
-  mod: number;
-  rate: number;
+  tone: number;
+  duck: number;
+  ping: number;
+  taps: number;
+  wow: number;
   level: number;
 }
 

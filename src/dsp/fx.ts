@@ -7,6 +7,8 @@ const PAPER = SR / 29761;
 /** Two grains on one line, about 46 ms. Zero does not write it. */
 const SHIM_N = 2048;
 const SHIM_POLE = 1 - Math.exp((-2 * Math.PI * 6000) / SR);
+/** A hit slams the delay shut. It eases back over about 0.9 s, so the first repeat is still sitting down. */
+const DUCK_RELEASE = Math.exp(-1 / (0.9 * SR));
 
 interface Line {
   buf: Float32Array;
@@ -178,9 +180,11 @@ export interface Echo {
   r: Line;
   lpL: number;
   lpR: number;
-  hpL: number;
-  hpR: number;
   phase: number;
+  /** How hard the last hit is still holding the delay down. Falls over about 0.9 s. */
+  hold: number;
+  /** Delay in samples the read is actually using. 0 snaps to the knob. */
+  follow: number;
   quiet: number;
 }
 
@@ -216,7 +220,7 @@ export function createTank(): Tank {
 
 export function createEcho(): Echo {
   const n = Math.ceil(SR * 2) + 8;
-  return { l: makeLine(n), r: makeLine(n), lpL: 0, lpR: 0, hpL: 0, hpR: 0, phase: 0, quiet: 0 };
+  return { l: makeLine(n), r: makeLine(n), lpL: 0, lpR: 0, phase: 0, hold: 0, follow: 0, quiet: 0 };
 }
 
 export function clearTank(tank: Tank): void {
@@ -244,9 +248,9 @@ export function clearEcho(echo: Echo): void {
   echo.r.i = 0;
   echo.lpL = 0;
   echo.lpR = 0;
-  echo.hpL = 0;
-  echo.hpR = 0;
   echo.phase = 0;
+  echo.hold = 0;
+  echo.follow = 0;
   echo.quiet = 0;
 }
 
@@ -342,44 +346,123 @@ export function tankSample(tank: Tank, knobs: Fx["reverb"], inL: number, inR: nu
   return [outL, outR];
 }
 
+/** The read may move by only half a sample each sample, or the repeat clicks. */
+const DELAY_SLEW = 0.5;
+
+function followDelay(current: number, target: number): number {
+  const d = target - current;
+  if (d > DELAY_SLEW) return current + DELAY_SLEW;
+  if (d < -DELAY_SLEW) return current - DELAY_SLEW;
+  return target;
+}
+
 /** Stereo delay. TIME runs from a 32nd note to one bar, never longer than two seconds. */
 export function echoSample(echo: Echo, knobs: Fx["delay"], beats: number, tempo: number, inL: number, inR: number): [number, number] {
   const energyIn = Math.abs(inL) + Math.abs(inR);
-  if (energyIn < 1e-7 && echo.quiet > SR / 2) return [0, 0];
+  if (energyIn < 1e-7 && echo.quiet > SR / 2) {
+    echo.hold = 0;
+    return [0, 0];
+  }
   const bar = Math.max(1, beats);
-  const unit = Math.max(0, Math.min(1, knobs.time));
-  let seconds = 0.125 * (bar / 0.125) ** unit * 60 / Math.max(1, tempo);
+  const clock = Math.max(0, Math.min(1, knobs.time));
+  let seconds = 0.125 * (bar / 0.125) ** clock * 60 / Math.max(1, tempo);
   if (seconds > 2) seconds = 2;
   if (seconds < 0.001) seconds = 0.001;
-  echo.phase += (Math.PI * 2 * (0.05 + knobs.rate * 4)) / SR;
-  if (echo.phase > Math.PI * 2) echo.phase -= Math.PI * 2;
-  const samples = seconds * SR + Math.sin(echo.phase) * knobs.mod * 0.008 * SR;
-  const stereo = Math.min(1, knobs.width * 2);
-  const ping = Math.max(0, knobs.width * 2 - 1);
+  const base = seconds * SR;
+  echo.follow = echo.follow === 0 ? base : followDelay(echo.follow, base);
+  const wow = unit(knobs.wow);
+  let driftL = 0;
+  let driftR = 0;
+  if (wow > 0) {
+    echo.phase += (Math.PI * 2 * (0.5 + wow * 2.5)) / SR;
+    if (echo.phase > Math.PI * 2) echo.phase -= Math.PI * 2;
+    const depth = wow * 0.01 * SR;
+    driftL = Math.sin(echo.phase) * depth;
+    driftR = Math.cos(echo.phase) * depth;
+  }
+  const timeL = Math.max(1, echo.follow + driftL);
+  const timeR = Math.max(1, echo.follow + driftR);
+  const delL = read(echo.l, timeL);
+  const delR = read(echo.r, timeR);
+  const taps = extraTaps(echo, knobs.taps, timeL, timeR, tempo);
+  const bounce = unit(knobs.ping);
   const mono = (inL + inR) * 0.5;
-  const srcL = mono * (1 - stereo) + inL * stereo;
-  const srcR = mono * (1 - stereo) + inR * stereo;
-  const delL = read(echo.l, samples);
-  const delR = read(echo.r, samples);
+  const srcL = inL * (1 - bounce) + mono * bounce;
+  const srcR = inR * (1 - bounce);
+  const fbL = delL * (1 - bounce) + delR * bounce;
+  const fbR = delR * (1 - bounce) + delL * bounce;
   const feed = knobs.feed * 0.92;
-  write(echo.l, srcL + color(echo, "l", (delL * (1 - ping) + delR * ping) * feed, knobs));
-  write(echo.r, srcR + color(echo, "r", (delR * (1 - ping) + delL * ping) * feed, knobs));
-  const outL = delL * knobs.level;
-  const outR = delR * knobs.level;
+  write(echo.l, toneSample(echo, "l", srcL + fbL * feed, knobs.tone));
+  write(echo.r, toneSample(echo, "r", srcR + fbR * feed, knobs.tone));
+  const hit = Math.min(1, energyIn * 12);
+  if (hit > echo.hold) echo.hold = hit;
+  else echo.hold *= DUCK_RELEASE;
+  const env = echo.hold > 1 ? 1 : echo.hold;
+  const open = (1 - unit(knobs.duck) * env) * knobs.level;
+  const outL = (delL + taps[0]) * open;
+  const outR = (delR + taps[1]) * open;
   echo.quiet = energyIn + Math.abs(outL) + Math.abs(outR) < 1e-6 ? echo.quiet + 1 : 0;
   return [outL, outR];
 }
 
-function color(echo: Echo, side: "l" | "r", x: number, knobs: Fx["delay"]): number {
-  const hi = 0.05 + knobs.hi * 0.95;
-  if (side === "l") echo.lpL = smooth(echo.lpL, x, hi);
-  else echo.lpR = smooth(echo.lpR, x, hi);
-  const lp = side === "l" ? echo.lpL : echo.lpR;
-  const lo = 0.001 + knobs.lo * 0.08;
-  if (side === "l") echo.hpL = smooth(echo.hpL, lp, lo);
-  else echo.hpR = smooth(echo.hpR, lp, lo);
-  const hpState = side === "l" ? echo.hpL : echo.hpR;
-  return lp * (1 - knobs.lo) + (lp - hpState) * knobs.lo;
+/**
+ * Up to three hits on the sixteenth grid, beside the main repeat.
+ * They sit before it while there is room, and after it when TIME is too short.
+ * The step stays a sixteenth, so the knob does not stretch with TIME.
+ */
+function extraTaps(echo: Echo, taps: number, timeL: number, timeR: number, tempo: number): [number, number] {
+  const step = (60 / Math.max(1, tempo) / 4) * SR;
+  let left = 0;
+  let right = 0;
+  for (let i = 0; i < 3; i++) {
+    const gain = tapLevel(taps, i);
+    if (gain <= 0) continue;
+    const tap = (read(echo.l, tapPlace(timeL, step, i + 1)) + read(echo.r, tapPlace(timeR, step, i + 1))) * 0.5 * gain;
+    if (i === 0) {
+      left += tap * 0.65;
+      right += tap;
+    } else if (i === 1) {
+      left += tap;
+      right += tap * 0.65;
+    } else {
+      left += tap;
+      right += tap;
+    }
+  }
+  return [left, right];
+}
+
+function tapPlace(main: number, step: number, k: number): number {
+  const minGap = Math.max(0.012 * SR, step * 0.4);
+  const back = main - k * step;
+  if (back >= minGap && main - back >= minGap) return back;
+  return Math.max(1, main + k * step);
+}
+
+function tapLevel(taps: number, index: number): number {
+  const u = unit(taps);
+  const start = index / 3;
+  const end = (index + 1) / 3;
+  if (u <= start) return 0;
+  if (u >= end) return 1;
+  return (u - start) / (end - start);
+}
+
+/** Center is a wire. Left of it is a lowpass down to 400 Hz, right a highpass up to 2.5 kHz. */
+function toneSample(echo: Echo, side: "l" | "r", x: number, tone: number): number {
+  const u = unit(tone);
+  if (u === 0.5) {
+    if (side === "l") echo.lpL = x;
+    else echo.lpR = x;
+    return x;
+  }
+  const hp = u > 0.5;
+  const hz = hp ? 80 * (2500 / 80) ** ((u - 0.5) / 0.5) : 400 * 35 ** (u / 0.5);
+  const state = side === "l" ? echo.lpL : echo.lpR;
+  const y = smooth(state, x, pole(hz));
+  if (side === "l") echo.lpL = y;
+  else echo.lpR = y;
+  return hp ? x - y : y;
 }
 
 /** Six reverb knobs, eight delay knobs, then beats per bar, already mixed for this moment. */

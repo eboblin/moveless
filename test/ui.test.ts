@@ -192,6 +192,15 @@ describe("pages and leds", () => {
     assert.deepEqual(fx[0].bindings[4]?.detents, [0]);
     assert.deepEqual(fx[0].bindings[5]?.detents, [0]);
     assert.deepEqual(fx[1].groups, ["DLY TIME", "DLY ECHO"]);
+    assert.deepEqual(
+      fx[1].bindings.map((binding) => binding?.label ?? null),
+      ["TIME", "FEED", "TONE", "DUCK", "PING", "TAPS", "WOW", "LEVEL"],
+    );
+    assert.deepEqual(fx[1].bindings[2]?.detents, [0.5]);
+    assert.deepEqual(fx[1].bindings[3]?.detents, [0]);
+    assert.deepEqual(fx[1].bindings[4]?.detents, [0]);
+    assert.deepEqual(fx[1].bindings[5]?.detents, [0]);
+    assert.deepEqual(fx[1].bindings[6]?.detents, [0]);
     assert.equal(fx[0].bindings[0]?.label, "SIZE");
     assert.equal(fx[1].bindings[0]?.label, "TIME");
     assert.equal(pageGroup("fx", 0), "fx");
@@ -1515,6 +1524,25 @@ describe("surface", () => {
       0,
     );
     assert.deepEqual(big(arp, 0), { kind: "big", n: 1, negative: false });
+  });
+
+  it("draws delay time as the note it plays", () => {
+    const held = { label: "TIME", path: "delay.time", generator: null, showPattern: false, held: true, untilTick: 0, untilMs: 0 };
+    const eighth = renderScreen(defaultProject(), { ...defaultUi(), context: "fx", page: 1, focus: held }, 0);
+    assert.equal(eighth.header, "1/8");
+    assert.deepEqual(eighth.digits.find((digit) => digit.cell === 0)?.amount, { kind: "big", n: 8, negative: false });
+    const project = defaultProject();
+    project.working.fx.delay.time = 0;
+    const thirty = renderScreen(project, { ...defaultUi(), context: "fx", page: 1 }, 0);
+    assert.deepEqual(thirty.digits.find((digit) => digit.cell === 0)?.amount, { kind: "big", n: 32, negative: false });
+    project.working.fx.delay.time = 0.6;
+    const quarter = renderScreen(project, { ...defaultUi(), context: "fx", page: 1, focus: held }, 0);
+    assert.equal(quarter.header, "1/4");
+    assert.deepEqual(quarter.digits.find((digit) => digit.cell === 0)?.amount, { kind: "big", n: 4, negative: false });
+    project.working.fx.delay.time = 1;
+    const bar = renderScreen(project, { ...defaultUi(), context: "fx", page: 1, focus: held }, 0);
+    assert.equal(bar.header, "1/1");
+    assert.deepEqual(bar.digits.find((digit) => digit.cell === 0)?.amount, { kind: "big", n: 1, negative: false });
   });
 
   it("shows a modulated generator while its knob is held and the lane phrase after release", () => {

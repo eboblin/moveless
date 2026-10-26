@@ -1,6 +1,6 @@
 import { GROUP_PAD, DIV_LABEL, BRAKE_LABEL, QUANT_LABEL, RATE_LABEL, assembleDeck, behaviorOf, brakeShort, deckPicture, divShort, focusedGroup, isDeckGroup, lenCount, lenLabel, quantShort, readDeckSlot, rowValueLabel, rowValueWord, type DeckPicture } from "../core/deck.ts";
 import { laneHeard } from "../core/journal.ts";
-import { clamp01, SIXTEENTH_TICKS, countFromUnit, rateFromUnit, tickToSample } from "../core/clock.ts";
+import { clamp01, SIXTEENTH_TICKS, countFromUnit, delayDivision, rateFromUnit, tickToSample } from "../core/clock.ts";
 import { phraseStepsOf } from "../core/events.ts";
 import { chordSymbol, degreeNumeral, pitchClassName, scaleShort, scaleTitle } from "../core/harmony.ts";
 import { chordFigure, generatePhrase, laneEnvelope, laneSteps, octaveNumber, restingChordToneLabel, restingPitchLabel, restingSliceLabel } from "../core/phrase.ts";
@@ -1054,6 +1054,8 @@ function figureHeader(project: Project, context: ContextId, binding: Binding): s
       const label = context === "chords" ? chordFigure(unit).label : rateFromUnit(unit).id;
       return label.slice(0, LINE_LIMIT);
     }
+    case "time":
+      return delayDivision(readControl(project, context, binding.path), project.global.bar, project.global.tempo);
     case "count":
       return String(countFromUnit(readControl(project, context, binding.path)));
     case "slice":
@@ -1086,6 +1088,9 @@ function knobAmount(project: Project, context: ContextId, binding: Binding, ui: 
       const label = context === "chords" ? chordFigure(unit).label : rateFromUnit(unit).id;
       return divisionCell(label) ?? { kind: "wide", text: label.slice(0, 3), negative: false };
     }
+    case "time":
+      return divisionCell(delayDivision(readControl(project, context, binding.path), project.global.bar, project.global.tempo))
+        ?? { kind: "wide", text: "TIM", negative: false };
     default:
       break;
   }

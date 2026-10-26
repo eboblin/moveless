@@ -141,9 +141,9 @@ typedef struct {
 
 typedef struct {
     Line l, r;
-    float lpL, lpR, hpL, hpR, phase;
+    float lpL, lpR, phase, hold, follow;
     int quiet;
-    float time, feed, hi, lo, width, mod, rate, level;
+    float time, feed, tone, duck, ping, taps, wow, level;
 } Echo;
 
 typedef struct {
@@ -1752,12 +1752,13 @@ static int fx_init(Engine *engine) {
     p->level = 0.6f;
     e->time = 0.4f;
     e->feed = 0.4f;
-    e->hi = 0.65f;
-    e->lo = 0.12f;
-    e->width = 0.55f;
-    e->mod = 0.12f;
-    e->rate = 0.3f;
+    e->tone = 0.5f;
+    e->duck = 0.0f;
+    e->ping = 0.0f;
+    e->taps = 0.0f;
+    e->wow = 0.0f;
     e->level = 0.7f;
+    e->follow = 0.0f;
     engine->beats = 4.0f;
     engine->deck_mask = (1 << 18) - 1;
     engine->deck_l = calloc((size_t)(engine->deck_mask + 1), sizeof(float));
@@ -1990,9 +1991,9 @@ static void fx_clear(Engine *engine) {
     line_clear(&engine->echo.r);
     engine->echo.lpL = 0;
     engine->echo.lpR = 0;
-    engine->echo.hpL = 0;
-    engine->echo.hpR = 0;
     engine->echo.phase = 0;
+    engine->echo.hold = 0;
+    engine->echo.follow = 0;
     engine->echo.quiet = 0;
     bus_clear(engine);
 }
@@ -2019,11 +2020,11 @@ static void apply_fx(Engine *engine, const char *text) {
     p->level = clampf01(v[5]);
     e->time = clampf01(v[6]);
     e->feed = clampf01(v[7]);
-    e->hi = clampf01(v[8]);
-    e->lo = clampf01(v[9]);
-    e->width = clampf01(v[10]);
-    e->mod = clampf01(v[11]);
-    e->rate = clampf01(v[12]);
+    e->tone = clampf01(v[8]);
+    e->duck = clampf01(v[9]);
+    e->ping = clampf01(v[10]);
+    e->taps = clampf01(v[11]);
+    e->wow = clampf01(v[12]);
     e->level = clampf01(v[13]);
     if (n >= 15 && v[14] >= 1.0f) engine->beats = v[14];
 }
@@ -2184,45 +2185,134 @@ static void plate_sample(Engine *engine, float inL, float inR, float *outL, floa
     p->quiet = energy + fabsf(*outL) + fabsf(*outR) < 1e-6f ? p->quiet + 1 : 0;
 }
 
-static float echo_color(Echo *e, int right, float x) {
-    float hi = 0.05f + e->hi * 0.95f;
-    float *lp = right ? &e->lpR : &e->lpL;
-    float *hp = right ? &e->hpR : &e->hpL;
-    *lp = smooth_pole(*lp, x, hi);
-    *hp = smooth_pole(*hp, *lp, 0.001f + e->lo * 0.08f);
-    return *lp * (1.0f - e->lo) + (*lp - *hp) * e->lo;
+static float duck_release(void) {
+    static float coef = -1.0f;
+    if (coef < 0.0f) coef = expf(-1.0f / (0.9f * SR));
+    return coef;
+}
+
+static float tap_place(float main, float step, int k) {
+    float min_gap = 0.012f * SR;
+    float back;
+    if (step * 0.4f > min_gap) min_gap = step * 0.4f;
+    back = main - (float)k * step;
+    if (back >= min_gap && main - back >= min_gap) return back;
+    back = main + (float)k * step;
+    if (back < 1.0f) back = 1.0f;
+    return back;
+}
+
+static float tap_gain(float taps, int index) {
+    float u = clampf01(taps);
+    float start = (float)index / 3.0f;
+    float end = (float)(index + 1) / 3.0f;
+    if (u <= start) return 0.0f;
+    if (u >= end) return 1.0f;
+    return (u - start) / (end - start);
+}
+
+/** Center is a wire. Left is a lowpass down to 400 Hz, right a highpass up to 2.5 kHz. */
+static float tone_sample(Echo *e, int right, float x) {
+    float u = clampf01(e->tone);
+    float *state = right ? &e->lpR : &e->lpL;
+    float hz, y;
+    int hp;
+    if (u == 0.5f) {
+        *state = x;
+        return x;
+    }
+    hp = u > 0.5f;
+    hz = hp ? 80.0f * powf(31.25f, (u - 0.5f) / 0.5f) : 400.0f * powf(35.0f, u / 0.5f);
+    y = smooth_pole(*state, x, pole_coef(hz));
+    *state = y;
+    return hp ? x - y : y;
+}
+
+/* The read may move by only half a sample each sample, or the repeat clicks. */
+static float follow_delay(float current, float target) {
+    float d = target - current;
+    if (d > 0.5f) return current + 0.5f;
+    if (d < -0.5f) return current - 0.5f;
+    return target;
 }
 
 static void echo_sample(Engine *engine, float inL, float inR, float *outL, float *outR) {
     Echo *e = &engine->echo;
     float energy = fabsf(inL) + fabsf(inR);
+    float bar, clock, seconds, base, wow, driftL, driftR, rate, depth, step;
+    float timeL, timeR, delL, delR, bounce, mono, srcL, srcR, fbL, fbR, feed;
+    float wetL, wetR, env, open;
+    int i;
     if (energy < 1e-7f && e->quiet > (int)(SR / 2.0f)) {
+        e->hold = 0.0f;
         *outL = 0;
         *outR = 0;
         return;
     }
-    float bar = engine->beats > 1.0f ? engine->beats : 1.0f;
-    float unit = clampf01(e->time);
-    float seconds = 0.125f * powf(bar / 0.125f, unit) * 60.0f / (engine->tempo > 1.0f ? engine->tempo : 1.0f);
+    bar = engine->beats > 1.0f ? engine->beats : 1.0f;
+    clock = clampf01(e->time);
+    seconds = 0.125f * powf(bar / 0.125f, clock) * 60.0f / (engine->tempo > 1.0f ? engine->tempo : 1.0f);
     if (seconds > 2.0f) seconds = 2.0f;
     if (seconds < 0.001f) seconds = 0.001f;
-    e->phase += (6.2831853f * (0.05f + e->rate * 4.0f)) / SR;
-    if (e->phase > 6.2831853f) e->phase -= 6.2831853f;
-    float samples = seconds * SR + sinf(e->phase) * e->mod * 0.008f * SR;
-    float stereo = e->width * 2.0f;
-    if (stereo > 1.0f) stereo = 1.0f;
-    float ping = e->width * 2.0f - 1.0f;
-    if (ping < 0.0f) ping = 0.0f;
-    float mono = (inL + inR) * 0.5f;
-    float srcL = mono * (1.0f - stereo) + inL * stereo;
-    float srcR = mono * (1.0f - stereo) + inR * stereo;
-    float delL = line_read(&e->l, samples);
-    float delR = line_read(&e->r, samples);
-    float feed = e->feed * 0.92f;
-    line_write(&e->l, srcL + echo_color(e, 0, (delL * (1.0f - ping) + delR * ping) * feed));
-    line_write(&e->r, srcR + echo_color(e, 1, (delR * (1.0f - ping) + delL * ping) * feed));
-    *outL = delL * e->level;
-    *outR = delR * e->level;
+    base = seconds * SR;
+    e->follow = e->follow <= 0.0f ? base : follow_delay(e->follow, base);
+    wow = clampf01(e->wow);
+    driftL = 0.0f;
+    driftR = 0.0f;
+    if (wow > 0.0f) {
+        rate = 0.5f + wow * 2.5f;
+        e->phase += (TWO_PI * rate) / SR;
+        if (e->phase > TWO_PI) e->phase -= TWO_PI;
+        depth = wow * 0.01f * SR;
+        driftL = sinf(e->phase) * depth;
+        driftR = cosf(e->phase) * depth;
+    }
+    timeL = e->follow + driftL;
+    timeR = e->follow + driftR;
+    if (timeL < 1.0f) timeL = 1.0f;
+    if (timeR < 1.0f) timeR = 1.0f;
+    step = (60.0f / (engine->tempo > 1.0f ? engine->tempo : 1.0f)) / 4.0f * SR;
+    delL = line_read(&e->l, timeL);
+    delR = line_read(&e->r, timeR);
+    wetL = delL;
+    wetR = delR;
+    for (i = 0; i < 3; i++) {
+        float g = tap_gain(e->taps, i);
+        float dL, dR, tap;
+        if (g <= 0.0f) continue;
+        dL = tap_place(timeL, step, i + 1);
+        dR = tap_place(timeR, step, i + 1);
+        tap = (line_read(&e->l, dL) + line_read(&e->r, dR)) * 0.5f * g;
+        if (i == 0) {
+            wetL += tap * 0.65f;
+            wetR += tap;
+        } else if (i == 1) {
+            wetL += tap;
+            wetR += tap * 0.65f;
+        } else {
+            wetL += tap;
+            wetR += tap;
+        }
+    }
+    bounce = clampf01(e->ping);
+    mono = (inL + inR) * 0.5f;
+    srcL = inL * (1.0f - bounce) + mono * bounce;
+    srcR = inR * (1.0f - bounce);
+    fbL = delL * (1.0f - bounce) + delR * bounce;
+    fbR = delR * (1.0f - bounce) + delL * bounce;
+    feed = e->feed * 0.92f;
+    line_write(&e->l, tone_sample(e, 0, srcL + fbL * feed));
+    line_write(&e->r, tone_sample(e, 1, srcR + fbR * feed));
+    {
+        float hit = energy * 12.0f;
+        if (hit > 1.0f) hit = 1.0f;
+        if (hit > e->hold) e->hold = hit;
+        else e->hold *= duck_release();
+    }
+    env = e->hold > 1.0f ? 1.0f : e->hold;
+    open = (1.0f - clampf01(e->duck) * env) * e->level;
+    *outL = wetL * open;
+    *outR = wetR * open;
     e->quiet = energy + fabsf(*outL) + fabsf(*outR) < 1e-6f ? e->quiet + 1 : 0;
 }
 

@@ -20,7 +20,7 @@ import {
 export type MorphKind = "lerp" | "switch";
 export type KnobStore = "lane" | "progression" | "global" | "mixer" | "macro" | "bus" | "deck";
 /** How the screen draws a knob. `number` is the plain 0..99 cell. */
-export type KnobDisplay = "number" | "pitch" | "octave" | "note" | "scale" | "division" | "chordTone" | "slice" | "count";
+export type KnobDisplay = "number" | "pitch" | "octave" | "note" | "scale" | "division" | "chordTone" | "slice" | "count" | "time";
 
 export interface Binding {
   path: string;
@@ -533,6 +533,21 @@ function progPage(): Page {
   ]);
 }
 
+function delayKnob(key: string, label: string, detents?: readonly number[], display?: KnobDisplay): Binding {
+  return bind({
+    path: `delay.${key}`,
+    label,
+    min: 0,
+    max: 1,
+    step: 0.01,
+    store: "lane",
+    weight: PLAIN_WEIGHT,
+    morph: "lerp",
+    ...(display ? { display } : {}),
+    ...(detents ? { detents } : {}),
+  });
+}
+
 function reverbKnob(key: string, label: string, detents?: readonly number[]): Binding {
   return bind({
     path: `reverb.${key}`,
@@ -557,16 +572,16 @@ const FX_PAGES: Page[] = [
     reverbKnob("shim", "SHIM", [0]),
     reverbKnob("level", "LEVEL"),
   ]),
-  plainPage("delay", "DELAY", "DLY TIME", "DLY ECHO", "fx", "lane", [
-    ["time", "TIME"],
-    ["feed", "FEED"],
-    ["hi", "HI"],
-    ["lo", "LO"],
-    ["width", "WIDTH"],
-    ["mod", "MOD"],
-    ["rate", "RATE"],
-    ["level", "LEVEL"],
-  ], "lerp"),
+  page("delay", "DELAY", ["DLY TIME", "DLY ECHO"], "fx", [
+    delayKnob("time", "TIME", undefined, "time"),
+    delayKnob("feed", "FEED"),
+    delayKnob("tone", "TONE", [0.5]),
+    delayKnob("duck", "DUCK", [0]),
+    delayKnob("ping", "PING", [0]),
+    delayKnob("taps", "TAPS", [0]),
+    delayKnob("wow", "WOW", [0]),
+    delayKnob("level", "LEVEL"),
+  ]),
 ];
 
 const DECK_FACE: Record<DeckSlot, { label: string; min: number; max: number; step: number; integer: boolean }> = {

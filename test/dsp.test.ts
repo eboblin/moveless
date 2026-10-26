@@ -11,8 +11,8 @@ import { eventsInBlock, phraseLoop, soundMotions } from "../src/dsp/schedule.ts"
 import { envelopeTable, laneEnvelopeAt, readEnvelope } from "../src/dsp/envelope.ts";
 import { createEngine, filterSample, formatBus, glideSeconds, loadPhrase, melodyCutoff, packBlock, packPhrase, packPhraseBody, pluckSeconds, renderBlock, renderClock } from "../src/dsp/voice.ts";
 import type { BlockEvent } from "../src/dsp/schedule.ts";
-import type { FxReverb, LaneId } from "../src/core/types.ts";
-import { createTank, tankSample } from "../src/dsp/fx.ts";
+import type { FxDelay, FxReverb, LaneId } from "../src/core/types.ts";
+import { createEcho, createTank, echoSample, tankSample } from "../src/dsp/fx.ts";
 
 describe("dsp adapter", () => {
   it("maps kick semantics onto v01 chain keys", () => {
@@ -167,6 +167,92 @@ describe("dsp adapter", () => {
     const up = tailHigh(1);
     assert.ok(Number.isFinite(up.peak) && up.peak < 4, `peak ${up.peak}`);
     assert.ok(up.energy > dry.energy * 4, `octave in the tail ${up.energy} against ${dry.energy}`);
+  });
+
+  it("bounces a mono hit from left to right when ping is up", () => {
+    const heard = renderDelay(delayKnobs({ ping: 1, feed: 0.9 }), DELAY_AT * 2 + 400, (i) => (i === 0 ? 1 : 0));
+    const firstL = windowEnergy(heard, DELAY_AT - 40, DELAY_AT + 40, "l");
+    const firstR = windowEnergy(heard, DELAY_AT - 40, DELAY_AT + 40, "r");
+    const secondL = windowEnergy(heard, DELAY_AT * 2 - 40, DELAY_AT * 2 + 40, "l");
+    const secondR = windowEnergy(heard, DELAY_AT * 2 - 40, DELAY_AT * 2 + 40, "r");
+    assert.ok(firstL > firstR * 4, `first ${firstL} against ${firstR}`);
+    assert.ok(secondR > secondL * 4, `second ${secondL} against ${secondR}`);
+    assert.ok(Number.isFinite(firstL + secondR));
+  });
+
+  it("colors the first repeat", () => {
+    const tone = (i: number) => (i < 200 ? Math.sin((2 * Math.PI * 120 * i) / SAMPLE_RATE) : 0);
+    const click = (i: number) => (i === 0 ? 1 : 0);
+    const total = Math.round(SAMPLE_RATE * 0.4);
+    const from = DELAY_AT - 8;
+    const to = DELAY_AT + 220;
+    const plainClick = renderDelay(delayKnobs(), total, click);
+    const darkClick = renderDelay(delayKnobs({ tone: 0 }), total, click);
+    const plainTone = renderDelay(delayKnobs(), total, tone);
+    const thinTone = renderDelay(delayKnobs({ tone: 1 }), total, tone);
+    assert.ok(highEnergy(darkClick, from, to) < highEnergy(plainClick, from, to) * 0.5);
+    assert.ok(bandEnergy(thinTone, from, to) < bandEnergy(plainTone, from, to) * 0.25);
+    const peak = peakIndex(darkClick, 0, total).peak;
+    assert.ok(Number.isFinite(peak) && peak < 4, `peak ${peak}`);
+  });
+
+  it("puts extra hits in the gap when taps is up", () => {
+    const from = Math.round(DELAY_AT * 0.5) - 20;
+    const to = Math.round(DELAY_AT * 0.5) + 80;
+    const click = (i: number) => (i === 0 ? 1 : 0);
+    const off = renderDelay(delayKnobs(), DELAY_AT + 200, click, click);
+    const on = renderDelay(delayKnobs({ taps: 1 }), DELAY_AT + 200, click, click);
+    const quiet = windowEnergy(off, from, to, "both");
+    const hit = windowEnergy(on, from, to, "both");
+    const main = windowEnergy(on, DELAY_AT - 20, DELAY_AT + 80, "both");
+    assert.ok(hit > quiet * 8 + 1e-8, `gap ${hit} against ${quiet}`);
+    assert.ok(hit > main * 0.3, `gap ${hit} against the main repeat ${main}`);
+  });
+
+  it("keeps tap spacing on the sixteenth grid when time changes", () => {
+    const click = (i: number) => (i === 0 ? 1 : 0);
+    const step = Math.round((60 / 120 / 4) * SAMPLE_RATE);
+    const longAt = delaySamples(0.57);
+    const heard = renderDelay(delayKnobs({ time: 0.57, taps: 1 }), longAt + 80, click, click);
+    const beside = windowEnergy(heard, longAt - step - 30, longAt - step + 80, "both");
+    const halfway = windowEnergy(heard, Math.round(longAt / 2) - 40, Math.round(longAt / 2) + 40, "both");
+    assert.ok(beside > halfway * 8, `beside ${beside} halfway ${halfway}`);
+    const shortAt = delaySamples(0);
+    const after = shortAt + step;
+    const off = renderDelay(delayKnobs({ time: 0 }), after + 200, click, click);
+    const on = renderDelay(delayKnobs({ time: 0, taps: 1 }), after + 200, click, click);
+    const tail = windowEnergy(on, after - 30, after + 80, "both");
+    const quiet = windowEnergy(off, after - 30, after + 80, "both");
+    assert.ok(tail > quiet * 8 + 1e-8, `after ${tail} against ${quiet}`);
+  });
+
+  it("drifts the repeat when wow is up", () => {
+    const input = (i: number) => (i === 0 ? 1 : 0);
+    const still = peakIndex(renderDelay(delayKnobs(), DELAY_AT + 2000, input), DELAY_AT - 800, DELAY_AT + 800);
+    const moved = peakIndex(renderDelay(delayKnobs({ wow: 1 }), DELAY_AT + 2000, input), DELAY_AT - 800, DELAY_AT + 800);
+    assert.ok(Number.isFinite(moved.peak) && moved.peak < 4, `peak ${moved.peak}`);
+    assert.ok(Math.abs(moved.at - still.at) > 40, `wow moved ${moved.at} from ${still.at}`);
+  });
+
+  it("glides the delay when time jumps", () => {
+    const jump = timeJumpStep();
+    assert.ok(jump.at < jump.before * 4, `time jump stepped ${jump.at} against ${jump.before}`);
+  });
+
+  it("sits the first repeat back and lets the tail return", () => {
+    const click = (i: number) => (i === 0 ? 0.2 : 0);
+    const span = Math.round(SAMPLE_RATE * 1.6);
+    const open = renderDelay(delayKnobs({ feed: 0.85 }), span, click);
+    const ducked = renderDelay(delayKnobs({ feed: 0.85, duck: 1 }), span, click);
+    const firstFrom = DELAY_AT - 20;
+    const firstTo = DELAY_AT + 80;
+    const under = windowEnergy(ducked, firstFrom, firstTo, "both");
+    const bare = windowEnergy(open, firstFrom, firstTo, "both");
+    const after = Math.round(SAMPLE_RATE * 1.15);
+    const back = windowEnergy(ducked, after, after + Math.round(SAMPLE_RATE * 0.2), "both");
+    const later = windowEnergy(open, after, after + Math.round(SAMPLE_RATE * 0.2), "both");
+    assert.ok(under < bare * 0.2, `first repeat ${under} against ${bare}`);
+    assert.ok(back > later * 0.5, `tail ${back} against ${later}`);
   });
 
   it("schedules the downbeat kick inside the first audio block", () => {
@@ -1165,6 +1251,90 @@ function peak(buf: Float32Array): number {
     if (a > best) best = a;
   }
   return best;
+}
+
+function timeJumpStep(): { at: number; before: number } {
+  const knobs = delayKnobs({ time: 0.2, feed: 0.4, level: 1 });
+  const echo = createEcho();
+  const jumpAt = Math.round(SAMPLE_RATE * 0.4);
+  let prev = 0;
+  const deltas: number[] = [];
+  for (let i = 0; i < jumpAt + 8; i++) {
+    if (i === jumpAt) knobs.time = 0.8;
+    const x = Math.sin((2 * Math.PI * 220 * i) / SAMPLE_RATE) * 0.5;
+    const [l, r] = echoSample(echo, knobs, 4, 120, x, x);
+    deltas.push(Math.abs(l + r - prev));
+    prev = l + r;
+  }
+  const before = deltas.slice(jumpAt - 40, jumpAt).sort((a, b) => a - b);
+  return { at: deltas[jumpAt] ?? 0, before: before[before.length >> 1] ?? 0 };
+}
+
+function delayKnobs(over: Partial<FxDelay> = {}): FxDelay {
+  return { time: 0.4, feed: 0, tone: 0.5, duck: 0, ping: 0, taps: 0, wow: 0, level: 1, ...over };
+}
+
+/** Eighth note at 120 bpm in a bar of four: 0.25 s. */
+const DELAY_AT = Math.round(SAMPLE_RATE * 0.25);
+
+function delaySamples(time: number): number {
+  let seconds = 0.0625 * 32 ** time;
+  if (seconds > 2) seconds = 2;
+  if (seconds < 0.001) seconds = 0.001;
+  return Math.round(seconds * SAMPLE_RATE);
+}
+
+function renderDelay(knobs: FxDelay, total: number, input: (i: number) => number, right: (i: number) => number = () => 0): Float32Array {
+  const echo = createEcho();
+  const out = new Float32Array(total * 2);
+  for (let i = 0; i < total; i++) {
+    const [l, r] = echoSample(echo, knobs, 4, 120, input(i), right(i));
+    out[i * 2] = l;
+    out[i * 2 + 1] = r;
+  }
+  return out;
+}
+
+function windowEnergy(buf: Float32Array, from: number, to: number, side: "l" | "r" | "both"): number {
+  let sum = 0;
+  const end = Math.min(to, buf.length / 2);
+  for (let i = Math.max(0, from); i < end; i++) {
+    if (side !== "r") sum += buf[i * 2] * buf[i * 2];
+    if (side !== "l") sum += buf[i * 2 + 1] * buf[i * 2 + 1];
+  }
+  return sum;
+}
+
+function bandEnergy(buf: Float32Array, from: number, to: number): number {
+  return windowEnergy(buf, from, to, "both");
+}
+
+function highEnergy(buf: Float32Array, from: number, to: number): number {
+  const coef = 1 - Math.exp((-2 * Math.PI * 2000) / SAMPLE_RATE);
+  let lp = 0;
+  let sum = 0;
+  const end = Math.min(to, buf.length / 2);
+  for (let i = 0; i < end; i++) {
+    const s = buf[i * 2] + buf[i * 2 + 1];
+    lp += coef * (s - lp);
+    if (i >= from) sum += (s - lp) * (s - lp);
+  }
+  return sum;
+}
+
+function peakIndex(buf: Float32Array, from: number, to: number): { at: number; peak: number } {
+  let best = 0;
+  let at = from;
+  const end = Math.min(to, buf.length / 2);
+  for (let i = Math.max(0, from); i < end; i++) {
+    const a = Math.abs(buf[i * 2]) + Math.abs(buf[i * 2 + 1]);
+    if (!Number.isFinite(a)) return { at: i, peak: Number.NaN };
+    if (a > best) {
+      best = a;
+      at = i;
+    }
+  }
+  return { at, peak: best };
 }
 
 function plateKnobs(over: Partial<FxReverb>): FxReverb {

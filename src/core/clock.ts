@@ -57,6 +57,34 @@ export function clamp01(n: number): number {
   return n;
 }
 
+/**
+ * Seconds the delay plays at this tempo. A 32nd at the bottom, one bar at the
+ * top, never longer than two seconds. The delay line uses this same curve.
+ */
+export function delaySeconds(unit: number, beats: number, tempo: number): number {
+  const bar = Math.max(1, beats);
+  const clock = clamp01(unit);
+  let seconds = 0.125 * (bar / 0.125) ** clock * 60 / Math.max(1, tempo);
+  if (seconds > 2) seconds = 2;
+  if (seconds < 0.001) seconds = 0.001;
+  return seconds;
+}
+
+/** Nearest straight note on that curve. An eighth is `1/8`. */
+export function delayDivision(unit: number, beats: number, tempo: number): string {
+  const length = delaySeconds(unit, beats, tempo) * Math.max(1, tempo) / 60;
+  let best = 8;
+  let bestDist = Infinity;
+  for (const den of [1, 2, 4, 8, 16, 32]) {
+    const dist = Math.abs(Math.log(length / (4 / den)));
+    if (dist < bestDist) {
+      bestDist = dist;
+      best = den;
+    }
+  }
+  return `1/${best}`;
+}
+
 export function rateFromUnit(unit: number): Rate {
   if (unit >= 1) return RATES[RATES.length - 1];
   const index = Math.min(RATES.length - 1, Math.max(0, Math.floor(clamp01(unit) * RATES.length)));

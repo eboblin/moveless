@@ -229,11 +229,11 @@ export function defaultFx(): Fx {
       // 0.4 is an eighth note when the bar is four beats.
       time: 0.4,
       feed: 0.4,
-      hi: 0.65,
-      lo: 0.12,
-      width: 0.55,
-      mod: 0.12,
-      rate: 0.3,
+      tone: 0.5,
+      duck: 0,
+      ping: 0,
+      taps: 0,
+      wow: 0,
       level: 0.7,
     },
   };
