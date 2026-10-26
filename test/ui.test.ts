@@ -3053,8 +3053,12 @@ describe("deck screen", () => {
     assert.equal(namedCell(corner, "QNT"), 6);
     assert.equal(namedCell(corner, "DEP"), 7);
     const scratch = reduce(open, { kind: "note", data1: 68, data2: 127 });
-    assert.deepEqual(names(scratch), ["CRV", "LEN", "VAR", "DUT", "BND", "TIM", "QNT", "DEP"]);
-    assert.equal(namedCell(scratch, "TIM"), 5);
+    assert.deepEqual(names(scratch), ["REC", "CUE", "THR", "CUT", "DIR", "PHR", "QNT", "DEP"]);
+    assert.equal(namedCell(scratch, "PHR"), 5);
+    const scratchScreen = renderScreen(scratch.project, scratch.ui, 0);
+    assert.equal(scratchScreen.labels.some((label) => label.text === "BAB" && label.cell === 0), true);
+    assert.equal(scratchScreen.labels.some((label) => label.text === "GAL" && label.cell === 5), true);
+    assert.equal(scratchScreen.digits.some((digit) => digit.cell === 1 && digit.amount.kind === "big" && digit.amount.n === 0), true);
     assert.equal(namedCell(scratch, "QNT"), 6);
     assert.equal(namedCell(scratch, "DEP"), 7);
     assert.deepEqual(renderScreen(scratch.project, scratch.ui, 0).dim, []);
@@ -3090,7 +3094,8 @@ describe("deck screen", () => {
     const field = padLeds(scratch.project, "journal", scratch.ui);
     assert.equal(field[31]?.color, offColor(1));
     assert.equal(field[2]?.color, offColor(1));
-    assert.equal(field[6]?.color, 1);
+    assert.equal(field[3]?.color, 1);
+    assert.equal(field[6]?.color, offColor(1));
     assert.equal(field[24]?.color, offColor(3));
   });
 

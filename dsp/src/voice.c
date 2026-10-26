@@ -2662,9 +2662,177 @@ static float deck_unit(float value) {
     return value;
 }
 
+/** Centre is the written hand. The left third reverses; either side leans into that stroke. */
+static void deck_scratch_clock(float phase, float ramp, float *out_phase, float *dir, float *d_warp) {
+    float centered = deck_unit(ramp) * 2.0f - 1.0f;
+    float lean = centered * 2.0f;
+    float exp, p, q;
+    *dir = 1.0f;
+    if (centered < -0.5f) {
+        *dir = -1.0f;
+        lean = (-centered - 0.5f) / 0.5f;
+    }
+    if (lean > 1.0f) lean = 1.0f;
+    if (lean < -1.0f) lean = -1.0f;
+    exp = 1.0f + fabsf(lean) * 1.35f;
+    p = phase;
+    if (p < 0.0f) p = 0.0f;
+    if (p > 1.0f) p = 1.0f;
+    if (p <= 0.0f) {
+        *out_phase = 0.0f;
+        *d_warp = 0.0f;
+        return;
+    }
+    if (p >= 1.0f) {
+        *out_phase = 1.0f;
+        *d_warp = exp;
+        return;
+    }
+    if (lean >= 0.0f) {
+        *out_phase = powf(p, exp);
+        *d_warp = exp * powf(p, exp - 1.0f);
+        return;
+    }
+    q = 1.0f - p;
+    *out_phase = 1.0f - powf(q, exp);
+    *d_warp = exp * powf(q, exp - 1.0f);
+}
+
+static void deck_scratch_hand(int shape, float phase, float *pos, float *dpos) {
+    if (shape == 1) {
+        static const float p[5] = { 0.0f, 0.18f, 0.30f, 0.50f, 1.0f };
+        static const float v[5] = { 0.0f, 0.70f, 0.34f, 1.0f, 0.0f };
+        int i = 0;
+        float span, t;
+        while (i < 3 && phase >= p[i + 1]) i++;
+        span = p[i + 1] - p[i];
+        t = span > 0.0f ? (phase - p[i]) / span : 0.0f;
+        *pos = v[i] + (v[i + 1] - v[i]) * t;
+        *dpos = span > 0.0f ? (v[i + 1] - v[i]) / span : 0.0f;
+        return;
+    }
+    if (shape == 2) {
+        float t, s;
+        if (phase < 0.8f) {
+            t = phase / 0.8f;
+            s = sinf(3.14159265f * t);
+            *pos = -(0.5f - 0.5f * cosf(3.14159265f * t));
+            *dpos = -(0.5f * 3.14159265f * s) / 0.8f;
+            return;
+        }
+        t = (phase - 0.8f) / 0.2f;
+        s = sinf(3.14159265f * t);
+        *pos = -(1.0f - (0.5f - 0.5f * cosf(3.14159265f * t)));
+        *dpos = (0.5f * 3.14159265f * s) / 0.2f;
+        return;
+    }
+    if (shape == 3) {
+        *pos = sinf(6.2831853f * phase);
+        *dpos = 6.2831853f * cosf(6.2831853f * phase);
+        return;
+    }
+    *pos = sinf(3.14159265f * phase);
+    *dpos = 3.14159265f * cosf(3.14159265f * phase);
+}
+
+static void deck_scratch_stroke(int shape, float phase, int *note, float *local) {
+    if (shape == 3) {
+        int q = (int)floorf(phase * 4.0f);
+        if (q < 0) q = 0;
+        if (q > 3) q = 3;
+        *note = (q % 2) == 0;
+        *local = (phase - (float)q * 0.25f) / 0.25f;
+        return;
+    }
+    {
+        float split = shape == 2 ? 0.8f : 0.5f;
+        if (phase < split) {
+            *note = 1;
+            *local = split > 0.0f ? phase / split : 0.0f;
+            return;
+        }
+        *note = 0;
+        *local = (phase - split) / (1.0f - split);
+    }
+}
+
+static float deck_scratch_gain(int note, float local, float cut) {
+    float shut = deck_unit(cut) * 1.4f;
+    if (shut > 1.0f) shut = 1.0f;
+    if (!note || local < shut * 0.2f || local > 1.0f - shut * 0.2f) return 1.0f - shut;
+    return 1.0f;
+}
+
+/** Notes are 1, 2 or 3 sixteenths. `which` is the column. */
+static void deck_scratch_place(int which, int held, int sixteenth, int *note_off, int *span) {
+    static const int phr[] = { 2, 2, 2, 1, 1, 1, 1, 2, 3, 1, 1, 2, 1, 2, 2, 3, 1 };
+    static const int off[] = { 0, 2, 5, 8, 10, 13 };
+    static const int cnt[] = { 2, 3, 3, 2, 3, 4 };
+    int i, acc = 0, total = 0, pos, n, dur;
+    if (which < 0) which = 0;
+    if (which > 5) which = 5;
+    if (sixteenth < 1) sixteenth = 1;
+    for (i = 0; i < cnt[which]; i++) total += phr[off[which] + i];
+    total *= sixteenth;
+    if (total < 1) total = 1;
+    pos = deck_mod(held, total);
+    for (i = 0; i < cnt[which]; i++) {
+        n = phr[off[which] + i];
+        dur = n * sixteenth;
+        if (dur < 1) dur = 1;
+        if (pos < acc + dur) {
+            *note_off = acc;
+            *span = dur;
+            return;
+        }
+        acc += dur;
+    }
+    *note_off = acc;
+    *span = sixteenth;
+}
+
+/** A sentence of short scratches. The brake slot is the phrase, len is the cue. */
+static DeckRead deck_scratch(const Engine *engine, int origin, int now, int len, int shape) {
+    float beat = (SR * 60.0f) / (engine->tempo > 1.0f ? engine->tempo : 1.0f);
+    int sixteenth = (int)lroundf(beat / 4.0f);
+    int which = shape;
+    int phrase = deck_pick(engine->deck_k[3], 6);
+    int held, note_off = 0, span = 1, cycles, cycle, note_at, cue;
+    float unit, raw, phase = 0.0f, dir = 1.0f, d_warp = 1.0f, reach, hand, dpos, local;
+    int note = 1;
+    DeckRead r;
+    (void)len;
+    if (sixteenth < 1) sixteenth = 1;
+    if (which < 0) which = 0;
+    if (which > 3) which = 3;
+    held = now - origin;
+    deck_scratch_place(phrase, held, sixteenth, &note_off, &span);
+    cycle = 0;
+    {
+        static const int sums[] = { 4, 4, 4, 4, 4, 8 };
+        cycle = sums[phrase] * sixteenth;
+    }
+    if (cycle < 1) cycle = 1;
+    cycles = held > 0 ? held / cycle : 0;
+    note_at = origin + cycles * cycle + note_off;
+    unit = deck_unit(engine->deck_k[1]);
+    cue = (int)lroundf(fabsf(unit - 0.5f) * 8.0f);
+    raw = span > 1 ? (float)(now - note_at) / (float)span : 0.0f;
+    deck_scratch_clock(raw, engine->deck_k[7], &phase, &dir, &d_warp);
+    reach = (0.08f + deck_unit(engine->deck_k[4]) * 0.92f) * (float)span;
+    if (reach < 1.0f) reach = 1.0f;
+    deck_scratch_hand(which, phase, &hand, &dpos);
+    deck_scratch_stroke(which, phase, &note, &local);
+    r.pos = (float)(note_at - cue * sixteenth) + hand * reach * dir;
+    r.live = 0.0f;
+    r.gain = deck_scratch_gain(note, local, engine->deck_k[6]);
+    r.throw_amt = 0.0f;
+    r.rate = (dpos * d_warp * reach * dir) / (float)span;
+    return r;
+}
+
 /** Group gestures are 16 + group * 4 + row. The row is the field's Y. */
 static DeckRead deck_group(const Engine *engine, int gesture, int now) {
-    static const float throw_frac[6] = { 0.05f, 0.08f, 0.12f, 0.18f, 0.25f, 1.0f };
     static const float pitch_rate[6] = { 0.5f, 0.75f, 1.0f, 1.5f, 2.0f, 4.0f };
     int at = gesture - 16;
     int group = at / 4;
@@ -2740,35 +2908,7 @@ static DeckRead deck_group(const Engine *engine, int gesture, int now) {
         return r;
     }
     if (group == 2) return deck_glitch(engine, origin, now, y);
-    if (group == 3) {
-        int span = len > 1 ? len : 1;
-        float phase = (float)deck_mod(now - origin, span) / (float)span;
-        float reach = throw_frac[deck_pick(engine->deck_k[3], 6)] * (float)span;
-        float speed = 0.5f + ramp;
-        float dir = ramp < 0.5f ? -1.0f : 1.0f;
-        float flutter = sinf(6.2831853f * phase * 7.0f) * deck_unit(engine->deck_k[4]);
-        int which = y;
-        if (reach < 1.0f) reach = 1.0f;
-        if (which == 2) {
-            float width = 0.6f * deck_unit(engine->deck_k[6]);
-            float gain = fabsf(phase - 0.5f) < width * 0.5f ? 0.0f : 1.0f;
-            DeckRead r = { (float)origin + (phase + flutter * 0.25f) * reach * dir, 0.0f, gain, 0.0f, (reach / (float)span) * speed * dir };
-            return r;
-        }
-        {
-            float turns = which == 1 ? 2.0f : 1.0f;
-            float wobble = sinf(6.2831853f * turns * phase);
-            float bias = which == 3 ? (phase - 0.5f) * 0.35f : 0.0f;
-            float offset = (wobble + bias + flutter * 0.35f) * reach * dir;
-            DeckRead r;
-            r.pos = (float)origin + offset;
-            r.rate = ((6.2831853f * turns * cosf(6.2831853f * turns * phase)) / (float)span) * reach * speed * dir;
-            r.live = 0.0f;
-            r.gain = 1.0f;
-            r.throw_amt = 0.0f;
-            return r;
-        }
-    }
+    if (group == 3) return deck_scratch(engine, origin, now, len, y);
     if (group == 4) {
         float base = y == 1 ? 0.28f : y == 2 ? 0.1f : 0.5f;
         float duty = base + (deck_unit(engine->deck_k[6]) - 0.5f) * 0.3f;
@@ -2983,29 +3123,7 @@ static DeckRead deck_gesture(const Engine *engine, int gesture, int now) {
         r.throw_amt = 0.0f;
         return r;
     }
-    if (gesture == 13) {
-        int span = len > 1 ? len : 1;
-        float phase = (float)deck_mod(now - origin, span) / (float)span;
-        float depth = engine->deck_k[2] > 0.0f ? engine->deck_k[2] : 0.0f;
-        float reach = depth * (float)span * 0.25f;
-        if (reach < 1.0f) reach = 1.0f;
-        int which = deck_pick(engine->deck_k[4], 4);
-        if (which == 2) {
-            float gain = phase > 0.35f && phase < 0.65f ? 0.0f : 1.0f;
-            DeckRead r = { (float)origin + phase * reach, 0.0f, gain, 0.0f, reach / (float)span };
-            return r;
-        }
-        float turns = which == 1 ? 2.0f : 1.0f;
-        float wobble = sinf(6.2831853f * turns * phase);
-        float bias = which == 3 ? (phase - 0.5f) * 0.35f : 0.0f;
-        DeckRead r;
-        r.pos = (float)origin + (wobble + bias) * reach;
-        r.rate = ((6.2831853f * turns * cosf(6.2831853f * turns * phase)) / (float)span) * reach;
-        r.live = 0.0f;
-        r.gain = 1.0f;
-        r.throw_amt = 0.0f;
-        return r;
-    }
+    if (gesture == 13) return deck_scratch(engine, origin, now, len, 0);
     DeckRead r = { (float)now, 1.0f, 1.0f, 1.0f, 1.0f };
     return r;
 }

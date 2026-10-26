@@ -1,4 +1,4 @@
-import { DECK_GROUPS, deckSlots, defaultDeck, rowKnobName, type DeckGroup, type DeckKnobs, type DeckSlot } from "./deck.ts";
+import { DECK_GROUPS, deckSlots, defaultDeck, rowKnobName, slotKnobName, type DeckGroup, type DeckKnobs, type DeckSlot } from "./deck.ts";
 import {
   LANE_CODE,
   LANES,
@@ -97,6 +97,13 @@ const TITLE_WORD: Record<string, string> = {
   WAY: "WAY",
   PAT: "PATTERN",
   CRV: "CURVE",
+  REC: "RECORD",
+  THR: "THROW",
+  CUT: "CUT",
+  DIR: "DIRECTION",
+  FAD: "FADER",
+  CUE: "CUE",
+  PHR: "PHRASE",
   RTE: "RATE",
   OPN: "OPEN",
   SND: "SEND",
@@ -609,7 +616,7 @@ export function deckPage(group: DeckGroup, knobs: DeckKnobs): Page {
   const bindings = deckSlots(group, knobs).map((slot) => {
     if (!slot) return null;
     const face = DECK_FACE[slot];
-    const label = slot === "row" ? rowKnobName(group) : face.label;
+    const label = slotKnobName(group, slot) ?? (slot === "row" ? rowKnobName(group) : face.label);
     return plain(`deck.${slot}`, label, face.min, face.max, face.step, face.integer, "deck");
   });
   const built = page("deck", "DJ FX", [null, null], "bus", bindings);

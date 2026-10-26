@@ -1,4 +1,4 @@
-import { GROUP_PAD, DIV_LABEL, BRAKE_LABEL, QUANT_LABEL, RATE_LABEL, assembleDeck, behaviorOf, brakeShort, deckPicture, divShort, focusedGroup, isDeckGroup, lenCount, lenLabel, quantShort, readDeckSlot, rowValueLabel, rowValueWord, type DeckPicture } from "../core/deck.ts";
+import { GROUP_PAD, DIV_LABEL, BRAKE_LABEL, QUANT_LABEL, RATE_LABEL, assembleDeck, behaviorOf, brakeShort, deckPicture, divShort, focusedGroup, isDeckGroup, lenCount, lenLabel, phraseShort, phraseWord, quantShort, readDeckSlot, rowValueLabel, rowValueWord, scratchCue, type DeckPicture } from "../core/deck.ts";
 import { laneHeard } from "../core/journal.ts";
 import { clamp01, SIXTEENTH_TICKS, countFromUnit, delayDivision, rateFromUnit, tickToSample } from "../core/clock.ts";
 import { phraseStepsOf } from "../core/events.ts";
@@ -1100,6 +1100,7 @@ function knobAmount(project: Project, context: ContextId, binding: Binding, ui: 
   }
   if (binding.store === "deck") {
     if (binding.path === "deck.len") {
+      if (focusedGroup(project.deck) === "scr") return { kind: "big", n: scratchCue(project.deck.len), negative: false };
       return { kind: "big", n: lenCount(project.deck, project.global.bar), negative: false };
     }
     const fraction = deckFraction(project, binding.path);
@@ -1121,6 +1122,14 @@ function deckKnobHeader(project: Project, binding: Binding): string {
 }
 
 function deckKnobTitle(path: string, group: ReturnType<typeof focusedGroup>): string {
+  if (group === "scr") {
+    if (path === "deck.len") return "CUE";
+    if (path === "deck.brake") return "PHRASE";
+    if (path === "deck.vary") return "THROW";
+    if (path === "deck.duty") return "CUT";
+    if (path === "deck.ramp") return "DIRECTION";
+    if (path === "deck.row") return "RECORD";
+  }
   switch (path) {
     case "deck.div":
       return "DIVISION";
@@ -1144,7 +1153,6 @@ function deckKnobTitle(path: string, group: ReturnType<typeof focusedGroup>): st
       return "OPEN";
     case "deck.row":
       if (group === "glc") return "PATTERN";
-      if (group === "scr") return "CURVE";
       if (group === "gat") return "TRANSFORM";
       if (group === "pch" || group === "stp") return "SHAPE";
       if (group === "thr") return "SEND";
@@ -1166,9 +1174,10 @@ function deckKnobWord(project: Project, path: string): string | null {
     case "deck.div":
       return DIV_LABEL[deck.div] ?? null;
     case "deck.len":
+      if (group === "scr") return ["NOW", "1/16", "1/8", "3/16", "1/4"][scratchCue(deck.len)] ?? "NOW";
       return lenLabel(deck, project.global.bar);
     case "deck.brake":
-      return BRAKE_LABEL[deck.brake] ?? null;
+      return group === "scr" ? phraseWord(deck.brake) : (BRAKE_LABEL[deck.brake] ?? null);
     case "deck.quant":
       return QUANT_LABEL[deck.quant] ?? null;
     case "deck.row":
@@ -1194,6 +1203,7 @@ function deckFraction(project: Project, path: string): DisplayAmount | null {
     case "deck.div":
       return divisionCell(labelAt(deck.div, DIV_LABEL) ?? "");
     case "deck.brake":
+      if (focusedGroup(deck) === "scr") return null;
       return divisionCell(labelAt(deck.brake, BRAKE_LABEL) ?? "");
     case "deck.open":
       return divisionCell(labelAt(readDeckSlot(deck, "open"), DIV_LABEL) ?? "");
@@ -1209,7 +1219,7 @@ function deckKnobText(project: Project, path: string): string | null {
     case "deck.div":
       return divShort(deck.div);
     case "deck.brake":
-      return brakeShort(deck.brake);
+      return group === "scr" ? phraseShort(deck.brake) : brakeShort(deck.brake);
     case "deck.quant":
       return quantShort(deck.quant);
     case "deck.row":

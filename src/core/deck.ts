@@ -58,15 +58,15 @@ export interface DeckKnobs {
   len: number;
   /** 0 leaves the master alone, 1 is the whole gesture. */
   depth: number;
-  /** Index into the brake table. */
+  /** Index into the brake table. On scratch, the crossfader column. */
   brake: number;
-  /** 0 is a clean curve, 1 skips and flutters. */
+  /** Scratch throw. 0 is a tight hand, 1 crosses the whole window. */
   vary: number;
   /** When the gesture grabs the grid: now, division, beat, bar. */
   quant: number;
-  /** Gate width of a transform or a scratch hole. */
+  /** Transform width, or how hard a scratch fader cuts. */
   duty: number;
-  /** 1/2 is straight. Left of centre reverses, right pitches up. */
+  /** Pitch bend. On scratch, centre is the written hand: left reverses, right leans into the push. */
   ramp: number;
   /** Remembered field cell for each {@link DECK_GROUPS} entry. */
   cells: DeckCell[];
@@ -83,18 +83,30 @@ const DIV_SHORT = ["/32", "/16", "1/8", "1/4", "1/2", "1/1"] as const;
 export const BRAKE_BEATS = [0.0625, 0.125, 0.25, 0.5, 1, 2] as const;
 export const BRAKE_LABEL = ["1/16", "1/8", "1/4", "1/2", "1/1", "2/1"] as const;
 const BRAKE_SHORT = ["/16", "1/8", "1/4", "1/2", "1/1", "2/1"] as const;
-/** Share of the scratch window. Index 4 is the old quarter-window throw. */
-export const THROW_FRAC = [0.05, 0.08, 0.12, 0.18, 0.25, 1] as const;
 export const PITCH_RATE = [0.5, 0.75, 1, 1.5, 2, 4] as const;
 const LEN_STEPS = [1, 2, 4, 8, 12, 16] as const;
 export const QUANT_LABEL = ["NOW", "DIV", "BEAT", "BAR"] as const;
 const QUANT_SHORT = ["NOW", "DIV", "BEA", "BAR"] as const;
+/**
+ * Scratch sentences, in sixteenths. A note is only 1, 2 or 3 long: those are the
+ * lengths that still sound like a hand. The rightmost sentence is the fill.
+ */
+const SCRATCH_PHRASE: readonly (readonly number[])[] = [
+  [2, 2],
+  [2, 1, 1],
+  [1, 1, 2],
+  [3, 1],
+  [1, 2, 1],
+  [2, 2, 3, 1],
+];
+export const PHRASE_LABEL = ["EVE", "GAL", "PIK", "SWG", "AND", "FIL"] as const;
+const PHRASE_WORD = ["EVEN", "GALLOP", "PICKUP", "SWING", "AND", "FILL"] as const;
 
 const FACTORY_CELLS: readonly DeckCell[] = [
   { x: 2, y: 0 },
   { x: 3, y: 0 },
   { x: 2, y: 0 },
-  { x: 4, y: 0 },
+  { x: 1, y: 0 },
   { x: 2, y: 0 },
   { x: 2, y: 0 },
   { x: 4, y: 0 },
@@ -113,7 +125,7 @@ const SLOT_IDS: readonly DeckSlot[] = ["div", "len", "depth", "brake", "vary", "
 
 /**
  * Knobs left of the fixed trio. The field column — a division, a window, a
- * throw or a tape speed — sits on one encoder, quant beside it, depth last.
+ * fader, a brake or a tape speed — sits on one encoder, quant beside it, depth last.
  * Stop ignores the grid, so its quant column stays empty.
  */
 const GROUP_SLOTS: Record<DeckGroup, readonly DeckSlot[]> = {
@@ -127,7 +139,7 @@ const GROUP_SLOTS: Record<DeckGroup, readonly DeckSlot[]> = {
   thr: ["row"],
 };
 
-/** The X column. It is a division on every group except pitch, where it is tape speed. */
+/** The X column. Division, loop length, scratch phrase, transform division, tape speed, brake time, or throw open. */
 const COLUMN_SLOT: Record<DeckGroup, DeckSlot> = {
   rpt: "div",
   lop: "len",
@@ -145,7 +157,7 @@ export function rowKnobName(group: DeckGroup): string {
     case "glc":
       return "PAT";
     case "scr":
-      return "CRV";
+      return "REC";
     case "gat":
       return "TRN";
     case "pch":
@@ -158,12 +170,33 @@ export function rowKnobName(group: DeckGroup): string {
   }
 }
 
+/** Scratch renames the shared knobs. Other groups keep the face label. */
+export function slotKnobName(group: DeckGroup, slot: DeckSlot): string | null {
+  if (group !== "scr") return null;
+  switch (slot) {
+    case "row":
+      return "REC";
+    case "len":
+      return "CUE";
+    case "vary":
+      return "THR";
+    case "duty":
+      return "CUT";
+    case "ramp":
+      return "DIR";
+    case "brake":
+      return "PHR";
+    default:
+      return null;
+  }
+}
+
 /** Three characters, the width of one encoder cell. */
 const ROW_TEXT: Record<DeckGroup, readonly string[]> = {
   rpt: ["RPT", "JMP", "REV", "PNG"],
   lop: ["FWD", "REV", "PNG", "STP"],
   glc: ["SHF", "JMP", "MNG", "CUT"],
-  scr: ["BAB", "TEA", "FLA", "ORB"],
+  scr: ["BAB", "TEA", "DRG", "ORB"],
   gat: ["HLF", "NAR", "MUT", "AND"],
   pch: ["HLD", "RIS", "FAL", "WOB"],
   stp: ["STP", "SPN", "BCK", "BNC"],
@@ -174,7 +207,7 @@ const ROW_WORD: Record<DeckGroup, readonly string[]> = {
   rpt: ["REPEAT", "JUMP", "REVERSE", "PONG"],
   lop: ["FORWARD", "REVERSE", "PONG", "STEP"],
   glc: ["SHUFFLE", "JUMP", "MANGLE", "CUT"],
-  scr: ["BABY", "TEAR", "FLARE", "ORBIT"],
+  scr: ["BABY", "TEAR", "DRAG", "ORBIT"],
   gat: ["HALF", "NARROW", "MUTE", "OFFBEAT"],
   pch: ["HOLD", "RISE", "FALL", "WOBBLE"],
   stp: ["STOP", "SPIN", "BACK", "BOUNCE"],
@@ -203,6 +236,20 @@ export function brakeShort(index: number): string {
 
 export function quantShort(index: number): string {
   return QUANT_SHORT[pick(index, QUANT_SHORT.length)] ?? "BAR";
+}
+
+export function phraseShort(index: number): string {
+  return PHRASE_LABEL[pick(index, PHRASE_LABEL.length)] ?? "EVE";
+}
+
+export function phraseWord(index: number): string {
+  return PHRASE_WORD[pick(index, PHRASE_WORD.length)] ?? "EVEN";
+}
+
+/** Sixteenths the needle sits behind the note. The middle of the knob is on the note. */
+export function scratchCue(len: number): number {
+  const unit = Math.max(0, Math.min(1, len));
+  return Math.round(Math.abs(unit - 0.5) * 8);
 }
 
 export function isDeckSlot(id: string): id is DeckSlot {
@@ -244,7 +291,7 @@ export function defaultDeck(): DeckKnobs {
     len: 0.5,
     depth: 1,
     brake: 4,
-    vary: 0,
+    vary: 0.25,
     quant: 2,
     duty: 0.5,
     ramp: 0.5,
@@ -569,21 +616,92 @@ function loopPos(start: number, now: number, origin: number, slice: number): num
   return start + mod(now - origin, slice);
 }
 
-function scratch(origin: number, now: number, len: number, depth: number, shape: number): DeckRead {
-  const span = Math.max(1, len);
-  const phase = mod(now - origin, span) / span;
-  const reach = Math.max(1, depth) * span * 0.25;
-  const which = pick(shape, 4);
-  if (which === 2) {
-    const gain = phase > 0.35 && phase < 0.65 ? 0 : 1;
-    return { pos: origin + phase * reach, live: 0, gain, throw: 0, rate: reach / span };
+/** Centre plays the hand as written. The left third reverses it; either side leans into that stroke. */
+function scratchClock(phase: number, ramp: number): { phase: number; dir: number; dWarp: number } {
+  const centered = clamp01(ramp) * 2 - 1;
+  let dir = 1;
+  let lean = centered * 2;
+  if (centered < -0.5) {
+    dir = -1;
+    lean = (-centered - 0.5) / 0.5;
   }
-  const turns = which === 1 ? 2 : 1;
-  const wobble = Math.sin(2 * Math.PI * turns * phase);
-  const bias = which === 3 ? (phase - 0.5) * 0.35 : 0;
-  const offset = (wobble + bias) * reach;
-  const rate = ((2 * Math.PI * turns * Math.cos(2 * Math.PI * turns * phase)) / span) * reach;
-  return { pos: origin + offset, live: 0, gain: 1, throw: 0, rate };
+  if (lean > 1) lean = 1;
+  if (lean < -1) lean = -1;
+  const exp = 1 + Math.abs(lean) * 1.35;
+  const p = Math.max(0, Math.min(1, phase));
+  if (p <= 0) return { phase: 0, dir, dWarp: 0 };
+  if (p >= 1) return { phase: 1, dir, dWarp: exp };
+  if (lean >= 0) return { phase: p ** exp, dir, dWarp: exp * p ** (exp - 1) };
+  const q = 1 - p;
+  return { phase: 1 - q ** exp, dir, dWarp: exp * q ** (exp - 1) };
+}
+
+const TEAR_P = [0, 0.18, 0.3, 0.5, 1];
+const TEAR_V = [0, 0.7, 0.34, 1, 0];
+
+/** Two pushes and a dip, then one return. Linear, so the corners stay the tear. */
+function tearHand(phase: number): { pos: number; dpos: number } {
+  let i = 0;
+  while (i < TEAR_P.length - 2 && phase >= TEAR_P[i + 1]) i++;
+  const p0 = TEAR_P[i] ?? 0;
+  const p1 = TEAR_P[i + 1] ?? 1;
+  const v0 = TEAR_V[i] ?? 0;
+  const v1 = TEAR_V[i + 1] ?? 0;
+  const span = p1 - p0;
+  const t = span <= 0 ? 0 : (phase - p0) / span;
+  return { pos: v0 + (v1 - v0) * t, dpos: span <= 0 ? 0 : (v1 - v0) / span };
+}
+
+/** Slow rewind, then a quick release back to the cue. */
+function dragHand(phase: number): { pos: number; dpos: number } {
+  if (phase < 0.8) {
+    const t = phase / 0.8;
+    const slope = -(0.5 * Math.PI * Math.sin(Math.PI * t)) / 0.8;
+    return { pos: -(0.5 - 0.5 * Math.cos(Math.PI * t)), dpos: slope };
+  }
+  const t = (phase - 0.8) / 0.2;
+  const slope = (0.5 * Math.PI * Math.sin(Math.PI * t)) / 0.2;
+  return { pos: -(1 - (0.5 - 0.5 * Math.cos(Math.PI * t))), dpos: slope };
+}
+
+/** Record hand, normalised. Baby is one push, tear dips, drag rewinds, orbit circles the cue. */
+function scratchHand(shape: number, phase: number): { pos: number; dpos: number } {
+  const which = pick(shape, 4);
+  if (which === 1) return tearHand(phase);
+  if (which === 2) return dragHand(phase);
+  if (which === 3) return { pos: Math.sin(2 * Math.PI * phase), dpos: 2 * Math.PI * Math.cos(2 * Math.PI * phase) };
+  return { pos: Math.sin(Math.PI * phase), dpos: Math.PI * Math.cos(Math.PI * phase) };
+}
+
+/** `local` is 0..1 inside the current stroke. Orbit alternates out and back every quarter. */
+function scratchStroke(shape: number, phase: number): { note: boolean; local: number } {
+  const which = pick(shape, 4);
+  if (which === 3) {
+    const q = Math.max(0, Math.min(3, Math.floor(phase * 4)));
+    return { note: q % 2 === 0, local: (phase - q * 0.25) / 0.25 };
+  }
+  const split = which === 2 ? 0.8 : 0.5;
+  if (phase < split) return { note: true, local: phase / split };
+  return { note: false, local: (phase - split) / (1 - split) };
+}
+
+/** Open hand at the bottom of the cut, a chirp once it closes the return. */
+function scratchGain(note: boolean, local: number, cut: number): number {
+  const shut = Math.min(1, clamp01(cut) * 1.4);
+  if (!note || local < shut * 0.2 || local > 1 - shut * 0.2) return 1 - shut;
+  return 1;
+}
+
+function scratchPlacement(held: number, sixteenth: number, phrase: readonly number[]): { start: number; span: number } {
+  const total = Math.max(1, phrase.reduce((sum, n) => sum + n, 0) * sixteenth);
+  const pos = mod(held, total);
+  let acc = 0;
+  for (const n of phrase) {
+    const span = Math.max(1, n * sixteenth);
+    if (pos < acc + span) return { start: acc, span };
+    acc += span;
+  }
+  return { start: acc, span: Math.max(1, sixteenth) };
 }
 
 function parseGroupGesture(value: string): { group: DeckGroup; y: number } | null {
@@ -650,7 +768,7 @@ function readGroup(moment: DeckMoment, group: DeckGroup, y: number): DeckRead {
 
   if (group === "glc") return readGlitch(moment, origin, y);
 
-  if (group === "scr") return readScratch(origin, now, len, knobs, y);
+  if (group === "scr") return readScratch(origin, now, knobs, y, tempo);
 
   if (group === "gat") {
     const base = [0.5, 0.28, 0.1, 0.5][y] ?? 0.5;
@@ -770,32 +888,27 @@ function readGlitch(moment: DeckMoment, origin: number, y: number): DeckRead {
   return { pos: start + src * slice + grainOffset(local % grain, rate, grain), live: 0, gain: 1, throw: 0, rate };
 }
 
-function readScratch(origin: number, now: number, len: number, knobs: DeckKnobs, shape: number): DeckRead {
-  const span = Math.max(1, len);
-  const phase = mod(now - origin, span) / span;
-  const reach = Math.max(1, THROW_FRAC[pick(knobs.brake, THROW_FRAC.length)] * span);
-  const ramp = clamp01(knobs.ramp);
-  const speed = 0.5 + ramp;
-  const dir = ramp < 0.5 ? -1 : 1;
-  const flutter = Math.sin(2 * Math.PI * phase * 7) * clamp01(knobs.vary);
-  const which = pick(shape, 4);
-  if (which === 2) {
-    const width = 0.6 * clamp01(knobs.duty);
-    const gain = Math.abs(phase - 0.5) < width / 2 ? 0 : 1;
-    return {
-      pos: origin + (phase + flutter * 0.25) * reach * dir,
-      live: 0,
-      gain,
-      throw: 0,
-      rate: (reach / span) * speed * dir,
-    };
-  }
-  const turns = which === 1 ? 2 : 1;
-  const wobble = Math.sin(2 * Math.PI * turns * phase);
-  const bias = which === 3 ? (phase - 0.5) * 0.35 : 0;
-  const offset = (wobble + bias + flutter * 0.35) * reach * dir;
-  const rate = ((2 * Math.PI * turns * Math.cos(2 * Math.PI * turns * phase)) / span) * reach * speed * dir;
-  return { pos: origin + offset, live: 0, gain: 1, throw: 0, rate };
+/** One sentence of short scratches. The column is the rhythm, the cue slips the needle back. */
+function readScratch(origin: number, now: number, knobs: DeckKnobs, shape: number, tempo: number): DeckRead {
+  const sixteenth = Math.max(1, Math.round(samplesPerBeat(tempo) / 4));
+  const phrase = SCRATCH_PHRASE[pick(knobs.brake, SCRATCH_PHRASE.length)] ?? SCRATCH_PHRASE[0];
+  const held = now - origin;
+  const place = scratchPlacement(held, sixteenth, phrase);
+  const cycles = Math.floor(held / Math.max(1, phrase.reduce((sum, n) => sum + n, 0) * sixteenth));
+  const noteAt = origin + cycles * phrase.reduce((sum, n) => sum + n, 0) * sixteenth + place.start;
+  const span = place.span;
+  const clock = scratchClock(span <= 1 ? 0 : (now - noteAt) / span, knobs.ramp);
+  const reach = Math.max(1, (0.08 + clamp01(knobs.vary) * 0.92) * span);
+  const hand = scratchHand(shape, clock.phase);
+  const stroke = scratchStroke(shape, clock.phase);
+  const anchor = noteAt - scratchCue(knobs.len) * sixteenth;
+  return {
+    pos: anchor + hand.pos * reach * clock.dir,
+    live: 0,
+    gain: scratchGain(stroke.note, stroke.local, knobs.duty),
+    throw: 0,
+    rate: (hand.dpos * clock.dWarp * reach * clock.dir) / span,
+  };
 }
 
 function readPitch(moment: DeckMoment, origin: number, y: number): DeckRead {
@@ -938,7 +1051,7 @@ function gestureRead(moment: DeckMoment, gesture: DeckGesture): DeckRead {
     return { pos, live: 0, gain: 1, throw: 0, rate: -2 * Math.sin(Math.PI * u) };
   }
 
-  if (gesture === "scr") return scratch(origin, now, len, knobs.depth, 0);
+  if (gesture === "scr") return readScratch(origin, now, knobs, 0, tempo);
 
   return { pos: now, live: 1, gain: 1, throw: 1, rate: 1 };
 }

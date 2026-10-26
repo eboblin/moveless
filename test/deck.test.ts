@@ -11,6 +11,7 @@ import {
   formatDeckCommand,
   lenSamples,
   lenUnit,
+  samplesPerBeat,
   parseDeckCommand,
   recallGroup,
   setGroupCell,
@@ -199,18 +200,47 @@ describe("deck curves", () => {
     assert.notEqual((onGrid.pos - down) % qSlice, 0);
   });
 
-  it("throws a quarter of the scratch window on the factory column", () => {
-    const knobs = assembleDeck({ ...defaultDeck(), quant: 0, ramp: 0.5, vary: 0 }, "scr", 4);
-    const len = lenSamples(knobs, TEMPO, 4);
-    const down = len * 2;
-    const at = down + Math.floor(len / 4);
-    const baby = deckRead(moment({ gesture: "scr0", down, now: at, knobs }));
-    assert.ok(Math.abs(baby.pos - (down + 0.25 * len)) < len * 0.08, `pos ${baby.pos}`);
-    const shorter = assembleDeck(setGroupCell({ ...defaultDeck(), quant: 0, ramp: 0.5, vary: 0 }, "scr", 0, 0, 4), "scr", 4);
-    const small = deckRead(moment({ gesture: "scr0", down, now: at, knobs: shorter }));
-    assert.ok(Math.abs(small.pos - down) < Math.abs(baby.pos - down));
-    const back = deckRead(moment({ gesture: "scr0", down, now: at, knobs: { ...knobs, ramp: 0 } }));
-    assert.ok(back.pos < down);
+  it("plays a scratch as a sentence of one, two and three sixteenths", () => {
+    const sixteenth = Math.max(1, Math.round(samplesPerBeat(TEMPO) / 4));
+    const rows = ["scr0", "scr1", "scr2", "scr3"] as const;
+    const down = sixteenth * 16;
+    const read = (x: number, y: number, sixteenths: number, extra: Partial<ReturnType<typeof defaultDeck>> = {}) => {
+      const knobs = assembleDeck(
+        setGroupCell({ ...defaultDeck(), quant: 0, ramp: 0.5, duty: 0.5, vary: 0.25, len: 0.5, ...extra }, "scr", x, y, 4),
+        "scr",
+        4,
+      );
+      return deckRead(moment({
+        gesture: rows[y] ?? "scr0",
+        down,
+        now: down + Math.round(sixteenth * sixteenths),
+        knobs,
+        ahead: sixteenth * 8,
+      }));
+    };
+    const push = read(0, 0, 0.5);
+    const back = read(0, 0, 1.8);
+    const peak = read(0, 0, 1);
+    assert.ok(push.pos > down);
+    assert.equal(push.gain, 1);
+    assert.ok(peak.pos > back.pos);
+    assert.ok(back.gain < 0.4 && back.gain > 0.15, `return ${back.gain}`);
+    assert.equal(read(0, 0, 1.8, { duty: 0 }).gain, 1);
+    assert.ok(read(0, 1, 0.36).pos > read(0, 1, 0.6).pos, "tear dips between the pushes");
+    assert.ok(read(0, 1, 0.9).pos > read(0, 1, 0.36).pos, "the second push clears the first");
+    const drag = read(0, 2, 0.8);
+    assert.equal(drag.gain, 1);
+    assert.ok(drag.pos < down, `drag ${drag.pos}`);
+    assert.ok(Math.abs(read(0, 2, 1.9).pos - down) < Math.abs(drag.pos - down));
+    assert.ok(read(0, 3, 0.5).pos > down);
+    assert.ok(read(0, 3, 1.5).pos < down);
+    const long = read(5, 0, 5.5, { vary: 1 });
+    const flick = read(5, 0, 7.5, { vary: 1 });
+    assert.ok(Math.abs(long.pos - (down + 4 * sixteenth)) > Math.abs(flick.pos - (down + 7 * sixteenth)) * 2);
+    assert.ok(Math.abs(read(0, 0, 0).pos - down) < 2);
+    assert.ok(Math.abs(read(0, 0, 0, { len: 0 }).pos - (down - 4 * sixteenth)) < 2);
+    assert.ok(read(0, 0, 0.5, { ramp: 0 }).pos < down);
+    assert.ok(read(0, 0, 1.7, { ramp: 1 }).pos > read(0, 0, 1.7).pos);
   });
 
   it("returns the same knobs when the slot is already there", () => {
