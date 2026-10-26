@@ -174,7 +174,7 @@ interface NoteVoice {
   /** Hard-sync reader, one per unison copy. */
   slave: number[];
   env: number;
-  /** Release ring under a pluck. The body stays in `env`. */
+  /** Quiet ring under a pluck, about −18 dB. Held for the gate, then released. */
   tail: number;
   age: number;
   left: number;
@@ -891,8 +891,18 @@ export function pluckSeconds(unit: number): number {
   return 0.6 * (0.03 / 0.6) ** t;
 }
 
-/** Release ring under a pluck, quieter than the hit so the pluck stays the attack. */
-const PLUCK_TAIL = 0.4;
+/**
+ * Body under a pluck, about −18 dB. A strike stays a pluck when it sits
+ * 12–18 dB above what remains; −8 dB reads as a held tone.
+ * The floor lasts the gate, then falls with release.
+ */
+const PLUCK_TAIL = 0.12;
+
+function noteAmp(note: NoteVoice): number {
+  if (note.pluck <= 1e-4) return note.env;
+  const floor = note.tail * PLUCK_TAIL;
+  return note.env > floor ? note.env : floor;
+}
 
 /** Glide time. 0 jumps. The first knob step is about 60 ms, the top about 0.5 s. */
 export function glideSeconds(unit: number): number {
@@ -948,28 +958,32 @@ function noteSample(engine: Engine, note: NoteVoice): [number, number] {
   const resonated = filterSample(note, mid, melodyCutoff(note.cutoff, note.envAmt, note.filterEnv), note.resonance);
   const attackSamples = 1 + note.attack * 0.2 * SAMPLE_RATE;
   // Pluck 0 holds full level for the gate, then release.
-  // Above zero the body falls on the pluck. Release keeps a quieter tail from the same attack.
+  // Above zero the body falls on the pluck toward a quiet floor. The floor
+  // stays for the gate and then follows release. After the gate, release can
+  // damp the loud body but cannot stretch it.
   if (note.pluck > 1e-4) {
-    if (note.age < attackSamples) {
+    if (note.left > 0 && note.age < attackSamples) {
       note.env = (note.age + 1) / attackSamples;
       note.tail = note.env;
-    } else {
+    } else if (note.left > 0) {
       if (note.tail < note.env) note.tail = note.env;
       note.env *= note.pluckK;
+    } else {
+      if (note.tail < note.env) note.tail = note.env;
+      const damp = note.releaseK < note.pluckK ? note.releaseK : note.pluckK;
+      note.env *= damp;
       note.tail *= note.releaseK;
     }
   } else if (note.left > 0 && note.age < attackSamples) note.env = (note.age + 1) / attackSamples;
   else if (note.left > 0) note.env = 1;
   else note.env *= note.releaseK;
-  const level = note.pluck > 1e-4 ? Math.max(note.env, note.tail * PLUCK_TAIL) : note.env;
+  const level = noteAmp(note);
   const contour = note.pluck > 1e-4 ? pluckSeconds(note.pluck) : 0.15;
   note.filterEnv *= Math.exp(-1 / (contour * SAMPLE_RATE));
   note.age += 1;
   if (note.left > 0) note.left -= 1;
   const quiet = note.age >= attackSamples && level < 0.0008;
-  if (note.pluck > 1e-4) {
-    if (quiet) note.on = false;
-  } else if (note.left <= 0 && quiet) note.on = false;
+  if (note.left <= 0 && quiet) note.on = false;
   if (note.freq > 1) engine.laneFreq[note.lane] = note.freq;
   const gain = resonated * level * note.gain * NOTE_LEVEL;
   const sided = side * level * note.gain * NOTE_LEVEL;
@@ -1450,7 +1464,7 @@ function steal(engine: Engine): NoteVoice {
     if (!note.on) return note;
     if (note.age === 0) continue;
     if (note.left <= 0) {
-      if (!quietRelease || note.env < quietRelease.env) quietRelease = note;
+      if (!quietRelease || noteAmp(note) < noteAmp(quietRelease)) quietRelease = note;
     } else if (!oldestHeld || note.age > oldestHeld.age) {
       oldestHeld = note;
     }

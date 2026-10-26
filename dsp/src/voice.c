@@ -644,8 +644,8 @@ static float pluck_seconds(float unit) {
     return 0.6f * powf(0.03f / 0.6f, t);
 }
 
-/* Release ring under a pluck, quieter than the hit so the pluck stays the attack. */
-#define PLUCK_TAIL 0.4f
+/* Body under a pluck, about -18 dB. A strike stays a pluck when it sits 12-18 dB above what remains. */
+#define PLUCK_TAIL 0.12f
 
 /* Glide time. 0 jumps. The first knob step is about 60 ms, the top about 0.5 s. */
 static float glide_seconds(float unit) {
@@ -1132,6 +1132,13 @@ static void arm_drum(Engine *engine, int lane, int note, int velocity, const cha
 /* A block arms every tone before any of them renders, so each new one still
  * has age 0 and a silent envelope. Stealing the quietest voice would take the
  * tone just armed and leave a single voice once releases fill the pool. */
+static float note_amp(const Note *note) {
+    float floor;
+    if (note->pluck <= 1e-4f) return note->env;
+    floor = note->tail * PLUCK_TAIL;
+    return note->env > floor ? note->env : floor;
+}
+
 static Note *steal(Engine *engine) {
     Note *quiet_release = NULL;
     Note *oldest_held = NULL;
@@ -1140,7 +1147,7 @@ static Note *steal(Engine *engine) {
         if (!note->on) return note;
         if (note->age == 0) continue;
         if (note->left <= 0) {
-            if (!quiet_release || note->env < quiet_release->env) quiet_release = note;
+            if (!quiet_release || note_amp(note) < note_amp(quiet_release)) quiet_release = note;
         } else if (!oldest_held || note->age > oldest_held->age) {
             oldest_held = note;
         }
@@ -1601,17 +1608,23 @@ static void note_sample(Engine *engine, Note *note, float *left, float *right) {
     side *= norm;
     resonated = filter_sample(&note->low, &note->band, mid, melody_cutoff(note->cutoff, note->env_amt, note->filter_env), note->resonance);
     attack_samples = 1.0f + note->attack * 0.2f * SR;
-    /* Pluck 0 holds for the gate, then release. Above zero the body falls on the pluck and release keeps a quieter tail. */
+    /* Pluck 0 holds for the gate, then release. Above zero the body falls on the pluck
+       toward a quiet floor. After the gate, release damps the body and fades the floor. */
     if (note->pluck > 1e-4f) {
-        if ((float)note->age < attack_samples) {
+        if (note->left > 0 && (float)note->age < attack_samples) {
             note->env = ((float)note->age + 1.0f) / attack_samples;
             note->tail = note->env;
-        } else {
+        } else if (note->left > 0) {
             if (note->tail < note->env) note->tail = note->env;
             note->env *= note->pluck_k;
+        } else {
+            float damp;
+            if (note->tail < note->env) note->tail = note->env;
+            damp = note->release_k < note->pluck_k ? note->release_k : note->pluck_k;
+            note->env *= damp;
             note->tail *= note->release_k;
         }
-        level = note->env > note->tail * PLUCK_TAIL ? note->env : note->tail * PLUCK_TAIL;
+        level = note_amp(note);
     } else if (note->left > 0 && (float)note->age < attack_samples) {
         note->env = ((float)note->age + 1.0f) / attack_samples;
         level = note->env;
@@ -1627,9 +1640,7 @@ static void note_sample(Engine *engine, Note *note, float *left, float *right) {
     note->age += 1;
     if (note->left > 0) note->left -= 1;
     quiet = (float)note->age >= attack_samples && level < 0.0008f;
-    if (note->pluck > 1e-4f) {
-        if (quiet) note->on = 0;
-    } else if (note->left <= 0 && quiet) note->on = 0;
+    if (note->left <= 0 && quiet) note->on = 0;
     if (note->freq > 1.0f && note->lane >= 0 && note->lane < LANE_COUNT) engine->lane_freq[note->lane] = note->freq;
     gain = resonated * level * note->gain * NOTE_LEVEL;
     sided = side * level * note->gain * NOTE_LEVEL;
@@ -2243,7 +2254,8 @@ static void echo_sample(Engine *engine, float inL, float inR, float *outL, float
     float timeL, timeR, delL, delR, bounce, mono, srcL, srcR, fbL, fbR, feed;
     float wetL, wetR, env, open;
     int i;
-    if (energy < 1e-7f && e->quiet > (int)(SR / 2.0f)) {
+    /* Half a second of silence is not enough when the repeat is still on its way. */
+    if (energy < 1e-7f && e->quiet > (int)(SR / 2.0f) && (float)e->quiet > e->follow) {
         e->hold = 0.0f;
         *outL = 0;
         *outR = 0;

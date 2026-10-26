@@ -359,7 +359,8 @@ function followDelay(current: number, target: number): number {
 /** Stereo delay. TIME runs from a 32nd note to one bar, never longer than two seconds. */
 export function echoSample(echo: Echo, knobs: Fx["delay"], beats: number, tempo: number, inL: number, inR: number): [number, number] {
   const energyIn = Math.abs(inL) + Math.abs(inR);
-  if (energyIn < 1e-7 && echo.quiet > SR / 2) {
+  // Half a second of silence is not enough when the repeat is still on its way.
+  if (energyIn < 1e-7 && echo.quiet > SR / 2 && echo.quiet > echo.follow) {
     echo.hold = 0;
     return [0, 0];
   }
