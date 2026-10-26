@@ -87,20 +87,17 @@ export const PITCH_RATE = [0.5, 0.75, 1, 1.5, 2, 4] as const;
 const LEN_STEPS = [1, 2, 4, 8, 12, 16] as const;
 export const QUANT_LABEL = ["NOW", "DIV", "BEAT", "BAR"] as const;
 const QUANT_SHORT = ["NOW", "DIV", "BEA", "BAR"] as const;
-/**
- * Scratch sentences, in sixteenths. A note is only 1, 2 or 3 long: those are the
- * lengths that still sound like a hand. The rightmost sentence is the fill.
- */
-const SCRATCH_PHRASE: readonly (readonly number[])[] = [
-  [2, 2],
-  [2, 1, 1],
-  [1, 1, 2],
-  [3, 1],
-  [1, 2, 1],
-  [2, 2, 3, 1],
+/** Phrase length in sixteenths. The column picks one. Each is a sum of 1, 2 and 3. */
+const SCRATCH_DUR = [2, 4, 6, 8, 12, 16] as const;
+/** Speed bag per complexity. Duplicates are the odds: simple stays near 2, wild leans on 1. */
+const SCRATCH_SPEED: readonly (readonly number[])[] = [
+  [2, 2, 2, 1],
+  [2, 2, 1, 1],
+  [2, 1, 3, 1],
+  [1, 1, 2, 3],
 ];
-export const PHRASE_LABEL = ["EVE", "GAL", "PIK", "SWG", "AND", "FIL"] as const;
-const PHRASE_WORD = ["EVEN", "GALLOP", "PICKUP", "SWING", "AND", "FILL"] as const;
+export const PHRASE_LABEL = ["1/8", "1/4", "3/8", "1/2", "3/4", "1/1"] as const;
+const PHRASE_WORD = ["EIGHTH", "BEAT", "DOT", "HALF", "3/4", "BAR"] as const;
 
 const FACTORY_CELLS: readonly DeckCell[] = [
   { x: 2, y: 0 },
@@ -157,7 +154,7 @@ export function rowKnobName(group: DeckGroup): string {
     case "glc":
       return "PAT";
     case "scr":
-      return "REC";
+      return "CMP";
     case "gat":
       return "TRN";
     case "pch":
@@ -175,7 +172,7 @@ export function slotKnobName(group: DeckGroup, slot: DeckSlot): string | null {
   if (group !== "scr") return null;
   switch (slot) {
     case "row":
-      return "REC";
+      return "CMP";
     case "len":
       return "CUE";
     case "vary":
@@ -185,7 +182,7 @@ export function slotKnobName(group: DeckGroup, slot: DeckSlot): string | null {
     case "ramp":
       return "DIR";
     case "brake":
-      return "PHR";
+      return "DUR";
     default:
       return null;
   }
@@ -196,7 +193,7 @@ const ROW_TEXT: Record<DeckGroup, readonly string[]> = {
   rpt: ["RPT", "JMP", "REV", "PNG"],
   lop: ["FWD", "REV", "PNG", "STP"],
   glc: ["SHF", "JMP", "MNG", "CUT"],
-  scr: ["BAB", "TEA", "DRG", "ORB"],
+  scr: ["SGL", "DUO", "MIX", "WLD"],
   gat: ["HLF", "NAR", "MUT", "AND"],
   pch: ["HLD", "RIS", "FAL", "WOB"],
   stp: ["STP", "SPN", "BCK", "BNC"],
@@ -207,7 +204,7 @@ const ROW_WORD: Record<DeckGroup, readonly string[]> = {
   rpt: ["REPEAT", "JUMP", "REVERSE", "PONG"],
   lop: ["FORWARD", "REVERSE", "PONG", "STEP"],
   glc: ["SHUFFLE", "JUMP", "MANGLE", "CUT"],
-  scr: ["BABY", "TEAR", "DRAG", "ORBIT"],
+  scr: ["SINGLE", "DUO", "MIXED", "WILD"],
   gat: ["HALF", "NARROW", "MUTE", "OFFBEAT"],
   pch: ["HOLD", "RISE", "FALL", "WOBBLE"],
   stp: ["STOP", "SPIN", "BACK", "BOUNCE"],
@@ -239,11 +236,11 @@ export function quantShort(index: number): string {
 }
 
 export function phraseShort(index: number): string {
-  return PHRASE_LABEL[pick(index, PHRASE_LABEL.length)] ?? "EVE";
+  return PHRASE_LABEL[pick(index, PHRASE_LABEL.length)] ?? "1/8";
 }
 
 export function phraseWord(index: number): string {
-  return PHRASE_WORD[pick(index, PHRASE_WORD.length)] ?? "EVEN";
+  return PHRASE_WORD[pick(index, PHRASE_WORD.length)] ?? "EIGHTH";
 }
 
 /** Sixteenths the needle sits behind the note. The middle of the knob is on the note. */
@@ -552,6 +549,8 @@ export interface DeckMoment {
   /** Samples already rendered past `now`. 0 means the ring only holds the past. */
   ahead: number;
   seed: number;
+  /** Pad press that started the gesture. Scratch rolls a new phrase from it. */
+  press?: number;
 }
 
 function identity(now: number): DeckRead {
@@ -692,16 +691,47 @@ function scratchGain(note: boolean, local: number, cut: number): number {
   return 1;
 }
 
-function scratchPlacement(held: number, sixteenth: number, phrase: readonly number[]): { start: number; span: number } {
-  const total = Math.max(1, phrase.reduce((sum, n) => sum + n, 0) * sixteenth);
-  const pos = mod(held, total);
-  let acc = 0;
-  for (const n of phrase) {
-    const span = Math.max(1, n * sixteenth);
-    if (pos < acc + span) return { start: acc, span };
-    acc += span;
+export interface ScratchNote {
+  /** 1, 2 or 3 sixteenths. */
+  len: number;
+  /** 0 baby, 1 tear, 2 drag, 3 orbit. */
+  type: number;
+  /** -1 plays that scratch backwards. */
+  sign: number;
+}
+
+function scratchNext(state: number): number {
+  return (Math.imul(state, 1664525) + 1013904223) >>> 0;
+}
+
+/**
+ * One phrase for this press. Complexity is how many types and speeds may mix.
+ * The voice in C rolls the same steps, so the two stay on the same sentence.
+ */
+export function scratchRoll(durationIndex: number, complexity: number, seed: number, press: number): ScratchNote[] {
+  const dur = SCRATCH_DUR[pick(durationIndex, SCRATCH_DUR.length)] ?? 4;
+  const level = pick(complexity, 4);
+  const bag = SCRATCH_SPEED[level] ?? SCRATCH_SPEED[0];
+  let state = (Math.imul(Math.round(seed) + 1, 997) ^ Math.imul(Math.round(press) + 1, 131) ^ Math.imul(level + 3, 17) ^ Math.imul(dur + 5, 53)) >>> 0;
+  state = scratchNext(state);
+  const root = state % 4;
+  const span = level === 0 ? 1 : level === 1 ? 2 : level === 2 ? 3 : 4;
+  const notes: ScratchNote[] = [];
+  let left = dur;
+  while (left > 0) {
+    const fit: number[] = [];
+    for (const n of bag) if (n <= left) fit.push(n);
+    if (fit.length === 0) fit.push(left > 3 ? 3 : left);
+    state = scratchNext(state);
+    const len = fit[state % fit.length] ?? 1;
+    state = scratchNext(state);
+    const type = (root + (state % span)) % 4;
+    state = scratchNext(state);
+    const sign = level >= 2 && state % 4 === 0 ? -1 : 1;
+    notes.push({ len, type, sign });
+    left -= len;
   }
-  return { start: acc, span: Math.max(1, sixteenth) };
+  return notes;
 }
 
 function parseGroupGesture(value: string): { group: DeckGroup; y: number } | null {
@@ -768,7 +798,7 @@ function readGroup(moment: DeckMoment, group: DeckGroup, y: number): DeckRead {
 
   if (group === "glc") return readGlitch(moment, origin, y);
 
-  if (group === "scr") return readScratch(origin, now, knobs, y, tempo);
+  if (group === "scr") return readScratch(moment, origin, y);
 
   if (group === "gat") {
     const base = [0.5, 0.28, 0.1, 0.5][y] ?? 0.5;
@@ -888,26 +918,44 @@ function readGlitch(moment: DeckMoment, origin: number, y: number): DeckRead {
   return { pos: start + src * slice + grainOffset(local % grain, rate, grain), live: 0, gain: 1, throw: 0, rate };
 }
 
-/** One sentence of short scratches. The column is the rhythm, the cue slips the needle back. */
-function readScratch(origin: number, now: number, knobs: DeckKnobs, shape: number, tempo: number): DeckRead {
+/** A fresh sentence of short scratches. The row is the mix, the column is how long it runs. */
+function readScratch(moment: DeckMoment, origin: number, complexity: number): DeckRead {
+  const { knobs, tempo, now, seed, press } = moment;
   const sixteenth = Math.max(1, Math.round(samplesPerBeat(tempo) / 4));
-  const phrase = SCRATCH_PHRASE[pick(knobs.brake, SCRATCH_PHRASE.length)] ?? SCRATCH_PHRASE[0];
+  const notes = scratchRoll(knobs.brake, complexity, seed, press ?? 0);
+  let sum = 0;
+  for (const note of notes) sum += note.len;
+  const cycle = Math.max(1, sum * sixteenth);
   const held = now - origin;
-  const place = scratchPlacement(held, sixteenth, phrase);
-  const cycles = Math.floor(held / Math.max(1, phrase.reduce((sum, n) => sum + n, 0) * sixteenth));
-  const noteAt = origin + cycles * phrase.reduce((sum, n) => sum + n, 0) * sixteenth + place.start;
-  const span = place.span;
+  const pos = mod(held, cycle);
+  let acc = 0;
+  let start = 0;
+  let span = sixteenth;
+  let note = notes[0] ?? { len: 2, type: 0, sign: 1 };
+  for (const item of notes) {
+    const next = Math.max(1, item.len * sixteenth);
+    if (pos < acc + next) {
+      start = acc;
+      span = next;
+      note = item;
+      break;
+    }
+    acc += next;
+  }
+  const cycles = Math.floor(held / cycle);
+  const noteAt = origin + cycles * cycle + start;
   const clock = scratchClock(span <= 1 ? 0 : (now - noteAt) / span, knobs.ramp);
   const reach = Math.max(1, (0.08 + clamp01(knobs.vary) * 0.92) * span);
-  const hand = scratchHand(shape, clock.phase);
-  const stroke = scratchStroke(shape, clock.phase);
+  const dir = clock.dir * note.sign;
+  const hand = scratchHand(note.type, clock.phase);
+  const stroke = scratchStroke(note.type, clock.phase);
   const anchor = noteAt - scratchCue(knobs.len) * sixteenth;
   return {
-    pos: anchor + hand.pos * reach * clock.dir,
+    pos: anchor + hand.pos * reach * dir,
     live: 0,
     gain: scratchGain(stroke.note, stroke.local, knobs.duty),
     throw: 0,
-    rate: (hand.dpos * clock.dWarp * reach * clock.dir) / span,
+    rate: (hand.dpos * clock.dWarp * reach * dir) / span,
   };
 }
 
@@ -1051,7 +1099,7 @@ function gestureRead(moment: DeckMoment, gesture: DeckGesture): DeckRead {
     return { pos, live: 0, gain: 1, throw: 0, rate: -2 * Math.sin(Math.PI * u) };
   }
 
-  if (gesture === "scr") return readScratch(origin, now, knobs, 0, tempo);
+  if (gesture === "scr") return readScratch(moment, origin, 0);
 
   return { pos: now, live: 1, gain: 1, throw: 1, rate: 1 };
 }

@@ -3053,11 +3053,11 @@ describe("deck screen", () => {
     assert.equal(namedCell(corner, "QNT"), 6);
     assert.equal(namedCell(corner, "DEP"), 7);
     const scratch = reduce(open, { kind: "note", data1: 68, data2: 127 });
-    assert.deepEqual(names(scratch), ["REC", "CUE", "THR", "CUT", "DIR", "PHR", "QNT", "DEP"]);
-    assert.equal(namedCell(scratch, "PHR"), 5);
+    assert.deepEqual(names(scratch), ["CMP", "CUE", "THR", "CUT", "DIR", "DUR", "QNT", "DEP"]);
+    assert.equal(namedCell(scratch, "DUR"), 5);
     const scratchScreen = renderScreen(scratch.project, scratch.ui, 0);
-    assert.equal(scratchScreen.labels.some((label) => label.text === "BAB" && label.cell === 0), true);
-    assert.equal(scratchScreen.labels.some((label) => label.text === "GAL" && label.cell === 5), true);
+    assert.equal(scratchScreen.labels.some((label) => label.text === "SGL" && label.cell === 0), true);
+    assert.equal(scratchScreen.labels.some((label) => label.text === "1/4" && label.cell === 5), true);
     assert.equal(scratchScreen.digits.some((digit) => digit.cell === 1 && digit.amount.kind === "big" && digit.amount.n === 0), true);
     assert.equal(namedCell(scratch, "QNT"), 6);
     assert.equal(namedCell(scratch, "DEP"), 7);

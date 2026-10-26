@@ -122,6 +122,7 @@ function momentAt(deck: DeckRuntime, now: number, tempo: number): DeckMoment {
     knobs: deck.knobs,
     ahead: deck.lead,
     seed: deck.seed,
+    press: deck.press,
   };
 }
 

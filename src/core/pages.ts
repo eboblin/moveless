@@ -103,6 +103,8 @@ const TITLE_WORD: Record<string, string> = {
   DIR: "DIRECTION",
   FAD: "FADER",
   CUE: "CUE",
+  CMP: "COMPLEXITY",
+  DUR: "DURATION",
   PHR: "PHRASE",
   RTE: "RATE",
   OPN: "OPEN",

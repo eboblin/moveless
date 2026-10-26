@@ -12,6 +12,7 @@ import {
   lenSamples,
   lenUnit,
   samplesPerBeat,
+  scratchRoll,
   parseDeckCommand,
   recallGroup,
   setGroupCell,
@@ -200,11 +201,37 @@ describe("deck curves", () => {
     assert.notEqual((onGrid.pos - down) % qSlice, 0);
   });
 
-  it("plays a scratch as a sentence of one, two and three sixteenths", () => {
+  it("rolls a new scratch from complexity, length and the press", () => {
     const sixteenth = Math.max(1, Math.round(samplesPerBeat(TEMPO) / 4));
+    const lengths = [2, 4, 6, 8, 12, 16];
     const rows = ["scr0", "scr1", "scr2", "scr3"] as const;
+    for (let x = 0; x < 6; x++) {
+      for (let y = 0; y < 4; y++) {
+        for (let press = 1; press <= 6; press++) {
+          const notes = scratchRoll(x, y, 1, press);
+          assert.equal(notes.reduce((sum, note) => sum + note.len, 0), lengths[x]);
+          assert.ok(notes.every((note) => note.len >= 1 && note.len <= 3));
+          assert.ok(new Set(notes.map((note) => note.type)).size <= y + 1);
+          if (y < 2) assert.ok(notes.every((note) => note.sign === 1 && note.len <= 2));
+        }
+      }
+    }
+    const simple = new Set(Array.from({ length: 24 }, (_, i) => scratchRoll(1, 0, 1, i + 1)[0]?.type));
+    assert.ok(simple.size >= 2);
+    let mixed = false;
+    let changed = false;
+    let previous = "";
+    for (let press = 1; press <= 24; press++) {
+      const notes = scratchRoll(5, 3, 1, press);
+      if (new Set(notes.map((note) => note.len)).size >= 2 && new Set(notes.map((note) => note.type)).size >= 2) mixed = true;
+      const key = notes.map((note) => `${note.len}${note.type}${note.sign}`).join(",");
+      if (previous && key !== previous) changed = true;
+      previous = key;
+    }
+    assert.ok(mixed);
+    assert.ok(changed);
     const down = sixteenth * 16;
-    const read = (x: number, y: number, sixteenths: number, extra: Partial<ReturnType<typeof defaultDeck>> = {}) => {
+    const read = (x: number, y: number, sixteenths: number, press: number, extra: Partial<ReturnType<typeof defaultDeck>> = {}) => {
       const knobs = assembleDeck(
         setGroupCell({ ...defaultDeck(), quant: 0, ramp: 0.5, duty: 0.5, vary: 0.25, len: 0.5, ...extra }, "scr", x, y, 4),
         "scr",
@@ -216,31 +243,40 @@ describe("deck curves", () => {
         now: down + Math.round(sixteenth * sixteenths),
         knobs,
         ahead: sixteenth * 8,
+        press,
       }));
     };
-    const push = read(0, 0, 0.5);
-    const back = read(0, 0, 1.8);
-    const peak = read(0, 0, 1);
+    let baby = 1;
+    for (let press = 1; press <= 40; press++) {
+      const first = scratchRoll(1, 0, 1, press)[0];
+      if (first?.type === 0 && first.len === 2 && first.sign === 1) {
+        baby = press;
+        break;
+      }
+    }
+    const push = read(1, 0, 0.5, baby);
+    const back = read(1, 0, 1.8, baby);
+    const peak = read(1, 0, 1, baby);
     assert.ok(push.pos > down);
     assert.equal(push.gain, 1);
     assert.ok(peak.pos > back.pos);
     assert.ok(back.gain < 0.4 && back.gain > 0.15, `return ${back.gain}`);
-    assert.equal(read(0, 0, 1.8, { duty: 0 }).gain, 1);
-    assert.ok(read(0, 1, 0.36).pos > read(0, 1, 0.6).pos, "tear dips between the pushes");
-    assert.ok(read(0, 1, 0.9).pos > read(0, 1, 0.36).pos, "the second push clears the first");
-    const drag = read(0, 2, 0.8);
-    assert.equal(drag.gain, 1);
-    assert.ok(drag.pos < down, `drag ${drag.pos}`);
-    assert.ok(Math.abs(read(0, 2, 1.9).pos - down) < Math.abs(drag.pos - down));
-    assert.ok(read(0, 3, 0.5).pos > down);
-    assert.ok(read(0, 3, 1.5).pos < down);
-    const long = read(5, 0, 5.5, { vary: 1 });
-    const flick = read(5, 0, 7.5, { vary: 1 });
-    assert.ok(Math.abs(long.pos - (down + 4 * sixteenth)) > Math.abs(flick.pos - (down + 7 * sixteenth)) * 2);
-    assert.ok(Math.abs(read(0, 0, 0).pos - down) < 2);
-    assert.ok(Math.abs(read(0, 0, 0, { len: 0 }).pos - (down - 4 * sixteenth)) < 2);
-    assert.ok(read(0, 0, 0.5, { ramp: 0 }).pos < down);
-    assert.ok(read(0, 0, 1.7, { ramp: 1 }).pos > read(0, 0, 1.7).pos);
+    assert.equal(read(1, 0, 1.8, baby, { duty: 0 }).gain, 1);
+    assert.ok(Math.abs(read(1, 0, 0, baby).pos - down) < 2);
+    assert.ok(Math.abs(read(1, 0, 0, baby, { len: 0 }).pos - (down - 4 * sixteenth)) < 2);
+    assert.ok(read(1, 0, 0.5, baby, { ramp: 0 }).pos < down);
+    assert.ok(read(1, 0, 1.7, baby, { ramp: 1 }).pos > read(1, 0, 1.7, baby).pos);
+    const beat = read(1, 0, 4, 1).pos - read(1, 0, 0, 1).pos;
+    const eighth = read(0, 0, 2, 1).pos - read(0, 0, 0, 1).pos;
+    const bar = read(5, 3, 16, 3).pos - read(5, 3, 0, 3).pos;
+    assert.ok(Math.abs(beat - 4 * sixteenth) < 3);
+    assert.ok(Math.abs(eighth - 2 * sixteenth) < 3);
+    assert.ok(Math.abs(bar - 16 * sixteenth) < 3);
+    let heard = false;
+    for (let press = 1; press < 12; press++) {
+      if (Math.abs(read(5, 3, 1, press).pos - read(5, 3, 1, press + 1).pos) > sixteenth * 0.05) heard = true;
+    }
+    assert.ok(heard);
   });
 
   it("returns the same knobs when the slot is already there", () => {

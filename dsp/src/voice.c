@@ -2763,62 +2763,101 @@ static float deck_scratch_gain(int note, float local, float cut) {
     return 1.0f;
 }
 
-/** Notes are 1, 2 or 3 sixteenths. `which` is the column. */
-static void deck_scratch_place(int which, int held, int sixteenth, int *note_off, int *span) {
-    static const int phr[] = { 2, 2, 2, 1, 1, 1, 1, 2, 3, 1, 1, 2, 1, 2, 2, 3, 1 };
-    static const int off[] = { 0, 2, 5, 8, 10, 13 };
-    static const int cnt[] = { 2, 3, 3, 2, 3, 4 };
-    int i, acc = 0, total = 0, pos, n, dur;
-    if (which < 0) which = 0;
-    if (which > 5) which = 5;
-    if (sixteenth < 1) sixteenth = 1;
-    for (i = 0; i < cnt[which]; i++) total += phr[off[which] + i];
-    total *= sixteenth;
-    if (total < 1) total = 1;
-    pos = deck_mod(held, total);
-    for (i = 0; i < cnt[which]; i++) {
-        n = phr[off[which] + i];
-        dur = n * sixteenth;
-        if (dur < 1) dur = 1;
-        if (pos < acc + dur) {
-            *note_off = acc;
-            *span = dur;
-            return;
-        }
-        acc += dur;
-    }
-    *note_off = acc;
-    *span = sixteenth;
+/* Same roll as scratchRoll in src/core/deck.ts. A press, a complexity and a length. */
+static unsigned scratch_next(unsigned state) {
+    return state * 1664525u + 1013904223u;
 }
 
-/** A sentence of short scratches. The brake slot is the phrase, len is the cue. */
+static void deck_scratch_roll(int duration_index, int complexity, int seed, int press,
+    int *lens, int *types, int *signs, int *count, int *sum) {
+    static const int durs[] = { 2, 4, 6, 8, 12, 16 };
+    static const int bags[4][4] = {
+        { 2, 2, 2, 1 },
+        { 2, 2, 1, 1 },
+        { 2, 1, 3, 1 },
+        { 1, 1, 2, 3 }
+    };
+    int level = complexity;
+    int dur, span, left, root, nfit, i, len, type, sign;
+    int fit[4];
+    unsigned state;
+    if (duration_index < 0) duration_index = 0;
+    if (duration_index > 5) duration_index = 5;
+    if (level < 0) level = 0;
+    if (level > 3) level = 3;
+    dur = durs[duration_index];
+    span = level == 0 ? 1 : level == 1 ? 2 : level == 2 ? 3 : 4;
+    state = ((unsigned)(seed + 1) * 997u) ^ ((unsigned)(press + 1) * 131u)
+        ^ ((unsigned)(level + 3) * 17u) ^ ((unsigned)(dur + 5) * 53u);
+    state = scratch_next(state);
+    root = (int)(state % 4u);
+    left = dur;
+    *count = 0;
+    *sum = 0;
+    while (left > 0 && *count < 16) {
+        nfit = 0;
+        for (i = 0; i < 4; i++) {
+            if (bags[level][i] <= left) fit[nfit++] = bags[level][i];
+        }
+        if (nfit == 0) fit[nfit++] = left > 3 ? 3 : left;
+        state = scratch_next(state);
+        len = fit[state % (unsigned)nfit];
+        state = scratch_next(state);
+        type = (root + (int)(state % (unsigned)span)) % 4;
+        state = scratch_next(state);
+        sign = level >= 2 && (state % 4u) == 0u ? -1 : 1;
+        lens[*count] = len;
+        types[*count] = type;
+        signs[*count] = sign;
+        *count += 1;
+        *sum += len;
+        left -= len;
+    }
+}
+
+/** A fresh sentence of short scratches. The row is the mix, the column is the length. */
 static DeckRead deck_scratch(const Engine *engine, int origin, int now, int len, int shape) {
     float beat = (SR * 60.0f) / (engine->tempo > 1.0f ? engine->tempo : 1.0f);
     int sixteenth = (int)lroundf(beat / 4.0f);
-    int which = shape;
-    int phrase = deck_pick(engine->deck_k[3], 6);
-    int held, note_off = 0, span = 1, cycles, cycle, note_at, cue;
+    int lens[16], types[16], signs[16];
+    int count = 0, sum = 0, held, pos, acc, i, span, start, cycles, cycle, note_at, cue;
+    int which = 0, sign = 1, note = 1;
     float unit, raw, phase = 0.0f, dir = 1.0f, d_warp = 1.0f, reach, hand, dpos, local;
-    int note = 1;
     DeckRead r;
     (void)len;
     if (sixteenth < 1) sixteenth = 1;
-    if (which < 0) which = 0;
-    if (which > 3) which = 3;
-    held = now - origin;
-    deck_scratch_place(phrase, held, sixteenth, &note_off, &span);
-    cycle = 0;
-    {
-        static const int sums[] = { 4, 4, 4, 4, 4, 8 };
-        cycle = sums[phrase] * sixteenth;
-    }
+    deck_scratch_roll(deck_pick(engine->deck_k[3], 6), shape, engine->deck_seed, engine->deck_serial,
+        lens, types, signs, &count, &sum);
+    cycle = sum * sixteenth;
     if (cycle < 1) cycle = 1;
+    held = now - origin;
+    pos = deck_mod(held, cycle);
+    acc = 0;
+    start = 0;
+    span = sixteenth;
+    if (count > 0) {
+        which = types[0];
+        sign = signs[0];
+    }
+    for (i = 0; i < count; i++) {
+        int next = lens[i] * sixteenth;
+        if (next < 1) next = 1;
+        if (pos < acc + next) {
+            start = acc;
+            span = next;
+            which = types[i];
+            sign = signs[i];
+            break;
+        }
+        acc += next;
+    }
     cycles = held > 0 ? held / cycle : 0;
-    note_at = origin + cycles * cycle + note_off;
+    note_at = origin + cycles * cycle + start;
     unit = deck_unit(engine->deck_k[1]);
     cue = (int)lroundf(fabsf(unit - 0.5f) * 8.0f);
     raw = span > 1 ? (float)(now - note_at) / (float)span : 0.0f;
     deck_scratch_clock(raw, engine->deck_k[7], &phase, &dir, &d_warp);
+    dir *= (float)sign;
     reach = (0.08f + deck_unit(engine->deck_k[4]) * 0.92f) * (float)span;
     if (reach < 1.0f) reach = 1.0f;
     deck_scratch_hand(which, phase, &hand, &dpos);

@@ -327,6 +327,7 @@ export function deckFrame(project: Project, ui: UiState, tick: number): DeckPict
     knobs: group ? assembleDeck(project.deck, group, project.global.bar) : project.deck,
     ahead: 0,
     seed: project.global.seed,
+    press: ui.deckPress,
   });
 }
 
@@ -1124,11 +1125,11 @@ function deckKnobHeader(project: Project, binding: Binding): string {
 function deckKnobTitle(path: string, group: ReturnType<typeof focusedGroup>): string {
   if (group === "scr") {
     if (path === "deck.len") return "CUE";
-    if (path === "deck.brake") return "PHRASE";
+    if (path === "deck.brake") return "DURATION";
     if (path === "deck.vary") return "THROW";
     if (path === "deck.duty") return "CUT";
     if (path === "deck.ramp") return "DIRECTION";
-    if (path === "deck.row") return "RECORD";
+    if (path === "deck.row") return "COMPLEXITY";
   }
   switch (path) {
     case "deck.div":
