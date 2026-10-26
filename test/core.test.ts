@@ -2097,7 +2097,7 @@ describe("randomize, wander, sets", () => {
     }
   });
 
-  it("takes a silent destination lane on a quarter coin", () => {
+  it("takes a silent destination lane on a fifteen percent coin", () => {
     const project = defaultProject();
     const quiet = clone(project.working);
     quiet.kick.gen1.hits = 0;
@@ -2117,7 +2117,7 @@ describe("randomize, wander, sets", () => {
     for (let origin = 0; origin < 64; origin++) {
       const lanes = wanderLanes(project, origin, quiet);
       for (const lane of silent) {
-        const take = hash01(project.global.seed, "wander-lane", origin, lane) < 0.25;
+        const take = hash01(project.global.seed, "wander-lane", origin, lane) < 0.15;
         assert.equal(lanes.includes(lane), take);
         if (take) sawSilent = true;
       }
@@ -2129,7 +2129,7 @@ describe("randomize, wander, sets", () => {
     for (const lane of PATTERN_LANES) if (lane !== "kick") onlyKick.lock[lane] = true;
     let movedKick = 0;
     for (let origin = 0; origin < 64; origin++) {
-      const take = hash01(onlyKick.global.seed, "wander-lane", origin, "kick") < 0.25;
+      const take = hash01(onlyKick.global.seed, "wander-lane", origin, "kick") < 0.15;
       assert.deepEqual(wanderLanes(onlyKick, origin, quiet), take ? ["kick"] : []);
       if (take) movedKick++;
     }
@@ -2152,8 +2152,8 @@ describe("randomize, wander, sets", () => {
     live.transition = "now";
     let origin = 0;
     for (; origin < 512; origin++) {
-      const kick = hash01(live.global.seed, "wander-lane", origin, "kick") < 0.25;
-      const snare = hash01(live.global.seed, "wander-lane", origin, "snare") < 0.25;
+      const kick = hash01(live.global.seed, "wander-lane", origin, "kick") < 0.15;
+      const snare = hash01(live.global.seed, "wander-lane", origin, "snare") < 0.15;
       if (wanderLanes(live, origin, dest).includes("hat") && kick && !snare) break;
     }
     assert.ok(origin < 512);

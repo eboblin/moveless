@@ -122,7 +122,7 @@ function destinationSpeaks(lanes: Lanes, lane: PatternId): boolean {
   return false;
 }
 
-/** Unlocked lanes this wander step will move. A speaking destination is taken at one half, a silent one at one quarter. When every coin misses, the fallback stays on a speaking lane. */
+/** Unlocked lanes this wander step will move. A speaking destination is taken at one half, a silent one at fifteen percent. When every coin misses, the fallback stays on a speaking lane. */
 export function wanderLanes(project: Project, origin: number, target: Lanes): PatternId[] {
   const picked: PatternId[] = [];
   const speaking: PatternId[] = [];
@@ -130,7 +130,7 @@ export function wanderLanes(project: Project, origin: number, target: Lanes): Pa
     if (project.lock[lane]) continue;
     const speaks = destinationSpeaks(target, lane);
     if (speaks) speaking.push(lane);
-    if (hash01(project.global.seed, "wander-lane", origin, lane) < (speaks ? 0.5 : 0.25)) picked.push(lane);
+    if (hash01(project.global.seed, "wander-lane", origin, lane) < (speaks ? 0.5 : 0.15)) picked.push(lane);
   }
   if (picked.length) return picked;
   if (!speaking.length) return [];
