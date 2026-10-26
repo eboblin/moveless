@@ -1991,7 +1991,7 @@ describe("surface", () => {
     assert.deepEqual(held.project.bookmarks[1], { context: "aux", page: mixer });
     assert.equal(held.ui.context, "kick");
     assert.equal(held.ui.heldContext, "aux");
-    const saved = parseStored(serializeStored(held.project, { context: held.ui.context, page: held.ui.page, mode: held.ui.mode, playing: false }));
+    const saved = parseStored(serializeStored(held.project, { context: held.ui.context, page: held.ui.page, mode: held.ui.mode, playing: false, sampleLatched: false }));
     assert.deepEqual(saved?.project.bookmarks[1], { context: "aux", page: mixer });
     held = reduce(held, { kind: "note", data1: 31, data2: 0 });
     assert.equal(held.ui.context, "aux");

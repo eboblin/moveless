@@ -70,7 +70,13 @@ function hostFiles(): HostFiles {
 }
 
 function uiSlice(session: Session): StoredUi {
-  return { context: session.ui.context, page: session.ui.page, mode: session.ui.mode, playing: session.playing };
+  return {
+    context: session.ui.context,
+    page: session.ui.page,
+    mode: session.ui.mode,
+    playing: session.playing,
+    sampleLatched: session.ui.sampleLatched,
+  };
 }
 
 function boot(): Session {
@@ -78,7 +84,11 @@ function boot(): Session {
   if (!stored) return { project: defaultProject(), ui: defaultUi(), tick: 0, playing: true };
   return {
     project: stored.project,
-    ui: { ...rememberPage(defaultUi(), stored.ui.context, stored.ui.page), mode: stored.ui.mode },
+    ui: {
+      ...rememberPage(defaultUi(), stored.ui.context, stored.ui.page),
+      mode: stored.ui.mode,
+      sampleLatched: stored.ui.sampleLatched,
+    },
     tick: 0,
     playing: stored.ui.playing,
   };
@@ -773,7 +783,8 @@ export function onMidiMessageInternal(data: number[]): void {
     session.ui.context !== beforeUi.context ||
     session.ui.page !== beforeUi.page ||
     session.ui.mode !== beforeUi.mode ||
-    session.playing !== beforePlaying
+    session.playing !== beforePlaying ||
+    session.ui.sampleLatched !== beforeUi.sampleLatched
   ) {
     projectDirty = true;
     dirtySinceMs = Date.now();
