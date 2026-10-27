@@ -285,9 +285,20 @@ function acceptLanes(raw: unknown): Lanes {
   const out = base as unknown as Record<string, unknown>;
   for (const lane of PATTERN_LANES) {
     if (!laneCurrent(lane, raw[lane])) continue;
+    if (lane === "bass" || lane === "lead" || lane === "chords") migratePluck(raw[lane]);
     out[lane] = mergeKnown(out[lane], raw[lane]);
   }
   return out as unknown as Lanes;
+}
+
+/** Old scenes stored pluck. High pluck was a short strike, so it becomes a low sustain. */
+function migratePluck(raw: unknown): void {
+  if (!isRecord(raw) || !isRecord(raw.sound)) return;
+  const sound = raw.sound;
+  if (isRecord(sound.sustain) || !isRecord(sound.pluck) || typeof sound.pluck.value !== "number") return;
+  const pluck = sound.pluck;
+  const value = pluck.value < 0 ? 0 : pluck.value > 1 ? 1 : pluck.value;
+  sound.sustain = { ...pluck, value: 1 - value };
 }
 
 function acceptJournal(raw: unknown): Project["journal"] {

@@ -162,7 +162,7 @@ describe("euclid generator", () => {
     assert.equal(bass.sound.wave.value, 0.28);
     assert.equal(bass.sound.bend.value, 0);
     assert.equal(bass.sound.glide.value, 0);
-    assert.equal(bass.sound.pluck.value, 0);
+    assert.equal(bass.sound.sustain.value, 1);
     assert.equal(bass.sound.env.value, 0);
     assert.equal(bass.sound.sync.value, 0);
     assert.equal(bass.sound.fold.value, 0);
@@ -181,7 +181,7 @@ describe("euclid generator", () => {
     assert.equal(lead.sound.wave.value, 0.84);
     assert.equal(lead.sound.bend.value, 0);
     assert.equal(lead.sound.glide.value, 0);
-    assert.equal(lead.sound.pluck.value, 0);
+    assert.equal(lead.sound.sustain.value, 1);
     assert.equal(lead.sound.env.value, 0);
     assert.equal(lead.sound.sync.value, 0);
     assert.equal(lead.sound.fold.value, 0);

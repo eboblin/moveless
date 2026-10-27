@@ -203,7 +203,7 @@ const FIELD = {
   glide: spec("GLIDE", 1),
   sync: spec("SYNC", 1),
   fold: spec("FOLD", 1),
-  pluck: spec("PLUCK", 1),
+  sustain: spec("SUSTAIN", 1),
   env: spec("ENV", 1),
   wide: spec("WIDE", 1),
   step: spec("STEP", 1),
@@ -228,9 +228,9 @@ export const SOUND = {
   snare: ["pitch", "body", "bodyDecay", "noise", "noiseDecay", "snap", "tone", "drive"],
   hat: ["pitch", "metal", "noise", "color", "decay", "attack", "ring", "pos"],
   perc: ["pitch", "material", "decay", "bend", "fm", "fmRatio", "attack", "damp"],
-  bass: ["wave", "glide", "sync", "fold", "drive", "wide", "attack", "release", "pluck", "env"],
-  lead: ["wave", "glide", "sync", "fold", "drive", "wide", "attack", "release", "pluck", "env"],
-  chords: ["wave", "glide", "sync", "fold", "drive", "wide", "attack", "release", "pluck", "env"],
+  bass: ["wave", "glide", "sync", "fold", "drive", "wide", "attack", "sustain", "release", "env"],
+  lead: ["wave", "glide", "sync", "fold", "drive", "wide", "attack", "sustain", "release", "env"],
+  chords: ["wave", "glide", "sync", "fold", "drive", "wide", "attack", "sustain", "release", "env"],
 } as const satisfies Record<LaneId, readonly FieldId[]>;
 
 /** Sum of the macro keys that feed one phrase field. Does not walk the page list. */
@@ -414,7 +414,8 @@ function soundPages(ids: readonly FieldId[]): Page[] {
     const a = ids[i];
     const b = ids[i + 1];
     if (!a || !b) break;
-    pages.push(pair(`sound.${a}`, FIELD[a], `sound.${b}`, FIELD[b], "sound"));
+    const item = pair(`sound.${a}`, FIELD[a], `sound.${b}`, FIELD[b], "sound");
+    pages.push(b === "env" ? { ...item, title: `${FIELD[a].label} / FLT ENV`, groups: [FIELD[a].label, "FLT ENV"] } : item);
   }
   return pages;
 }

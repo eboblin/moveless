@@ -73,7 +73,7 @@ enum {
     P_DELAY,
     P_NOTE_DRIVE,
     P_GLIDE,
-    P_PLUCK,
+    P_SUSTAIN,
     P_ENV
 };
 
@@ -94,11 +94,11 @@ typedef struct {
 
 typedef struct {
     int on;
-    float phase[3], slave[3], env, tail, freq;
+    float phase[3], slave[3], env, freq;
     float wave, bend, sync, fold, drive, wide;
     float cutoff, resonance, reverb, delay, attack, release, gain, low, band;
-    float release_k, target, glide, pluck, pluck_k, env_amt, filter_env;
-    int age, left, lane, pitch, loop, claim;
+    float target, glide, sustain, env_amt, filter_env, from_amp, from_contour;
+    int age, left, gate, lane, pitch, loop, claim, legato;
     float haas[HAAS_N];
     int haas_i;
 } Note;
@@ -606,7 +606,7 @@ static int param_of(const char *id) {
     if (strcmp(id, "release") == 0 || strcmp(id, "decay") == 0) return P_RELEASE;
     if (strcmp(id, "wide") == 0) return P_WIDE;
     if (strcmp(id, "glide") == 0) return P_GLIDE;
-    if (strcmp(id, "pluck") == 0) return P_PLUCK;
+    if (strcmp(id, "sustain") == 0) return P_SUSTAIN;
     if (strcmp(id, "env") == 0) return P_ENV;
     if (suffix_is(id, "freq")) return P_FREQ;
     if (suffix_is(id, "btime")) return P_BTIME;
@@ -654,24 +654,6 @@ static void refresh_drum_env(Drum *drum) {
     drum->click_k = expf(-1.0f / tau);
 }
 
-static void refresh_release(Note *note) {
-    note->release_k = expf(-1.0f / ((0.04f + note->release * 1.6f) * SR));
-}
-
-/* Pluck time. 0 holds. The first knob step is about 0.6 s, the top about 30 ms. */
-static float pluck_seconds(float unit) {
-    float t;
-    if (unit <= 1e-4f) return 0.0f;
-    t = (unit - 0.01f) / 0.99f;
-    if (t < 0.0f) t = 0.0f;
-    if (t > 1.0f) t = 1.0f;
-    return 0.6f * powf(0.03f / 0.6f, t);
-}
-
-/* Body under a pluck, about -18 dB. A strike stays a pluck when it sits 12-18 dB above what remains. */
-#define PLUCK_TAIL 0.12f
-
-/* Glide time. 0 jumps. The first knob step is about 60 ms, the top about 0.5 s. */
 static float glide_seconds(float unit) {
     float t;
     if (unit <= 1e-4f) return 0.0f;
@@ -689,9 +671,79 @@ static float melody_cutoff(float cutoff, float env, float contour) {
     return rest + (0.5f - rest) * env * contour;
 }
 
-static void refresh_pluck(Note *note) {
-    float sec = pluck_seconds(note->pluck);
-    note->pluck_k = sec > 0.0f ? expf(-1.0f / (sec * SR)) : 1.0f;
+#define MELODY_FALL 4.0f
+
+static float melody_release_seconds(float unit) {
+    return 0.04f + clampf01(unit) * 1.6f;
+}
+
+static float melody_attack_samples(float gate, float attack) {
+    float span = gate < 1.0f ? 1.0f : gate;
+    float rise = 0.002f * SR;
+    float scaled = clampf01(attack) * span;
+    if (scaled > rise) rise = scaled;
+    return rise > span ? span : rise;
+}
+
+/* 1 at u = 0, 0 at u = 1. The drop is steep at the start. */
+static float melody_fall(float from, float to, float u) {
+    float t = u < 0.0f ? 0.0f : (u > 1.0f ? 1.0f : u);
+    float w = expf(-MELODY_FALL * t);
+    float w1 = expf(-MELODY_FALL);
+    return to + (from - to) * ((w - w1) / (1.0f - w1));
+}
+
+/* Amplitude before velocity. Age 0 is the first sample. Release starts after the gate. */
+static float melody_level(float age, float gate, float attack, float sustain, float release_sec, int legato, float origin) {
+    float span, sus, rise, from, start, room, end, tau, env, up;
+    if (age < 0.0f) return 0.0f;
+    span = gate < 1.0f ? 1.0f : gate;
+    sus = clampf01(sustain);
+    rise = legato ? 0.0f : melody_attack_samples(span, attack);
+    if (age < span) {
+        if (!legato && age < rise) {
+            up = (age + 1.0f) / rise;
+            return up > 1.0f ? 1.0f : up;
+        }
+        from = legato ? clampf01(origin) : 1.0f;
+        start = legato ? 0.0f : rise;
+        room = span - start;
+        if (room < 1.0f) room = 1.0f;
+        return melody_fall(from, sus, (age - start + 1.0f) / room);
+    }
+    end = (!legato && rise >= span) ? 1.0f : sus;
+    tau = release_sec * SR;
+    if (tau < 1.0f) tau = 1.0f;
+    env = end * expf(-(age - span + 1.0f) / tau);
+    if (env < end * 0.02f) return 0.0f;
+    return env;
+}
+
+/* Filter opening. 1 is open, 0 is the cutoff knob. Sustain does not hold it. */
+static float melody_contour(float age, float gate, float attack, int legato, float origin) {
+    float span, rise, up, room;
+    if (age < 0.0f) return 0.0f;
+    span = gate < 1.0f ? 1.0f : gate;
+    if (age >= span) return 0.0f;
+    if (legato) return melody_fall(clampf01(origin), 0.0f, (age + 1.0f) / span);
+    rise = melody_attack_samples(span, attack);
+    if (age < rise) {
+        up = (age + 1.0f) / rise;
+        return up > 1.0f ? 1.0f : up;
+    }
+    if (rise >= span) return 1.0f;
+    room = span - rise;
+    return melody_fall(1.0f, 0.0f, (age - rise + 1.0f) / room);
+}
+
+/* Sustain knob, or the old pluck inverted. Missing both holds the note. */
+static float melody_sustain_of(const char *params) {
+    float sustain = read_param(params, "sustain", -1.0f);
+    float pluck;
+    if (sustain >= 0.0f) return clampf01(sustain);
+    pluck = read_param(params, "pluck", -1.0f);
+    if (pluck >= 0.0f) return 1.0f - clampf01(pluck);
+    return 1.0f;
 }
 
 static void apply_drum(Drum *drum, int param, float unit) {
@@ -778,16 +830,10 @@ static void apply_note(Note *note, int param, float unit) {
     case P_REVERB: note->reverb = unit; break;
     case P_DELAY: note->delay = unit; break;
     case P_ATTACK: note->attack = unit; break;
-    case P_RELEASE:
-        note->release = unit;
-        refresh_release(note);
-        break;
+    case P_RELEASE: note->release = unit; break;
     case P_WIDE: note->wide = unit; break;
     case P_GLIDE: note->glide = unit; break;
-    case P_PLUCK:
-        note->pluck = unit;
-        refresh_pluck(note);
-        break;
+    case P_SUSTAIN: note->sustain = unit; break;
     case P_ENV: note->env_amt = unit; break;
     default: break;
     }
@@ -813,24 +859,6 @@ static float decay_level(float amp, float age, float seconds) {
     env = amp * expf(-age / tau);
     if (env < amp * 0.02f) return 0.0f;
     return env;
-}
-
-static float note_level(float amp, float age, float hold, float attack, float release_sec) {
-    float tau, env, rise;
-    if (!(amp > 0.0f) || age < 0.0f) return 0.0f;
-    if (hold < 1.0f) hold = 1.0f;
-    if (attack < 1.0f) attack = 1.0f;
-    tau = release_sec * SR;
-    if (tau < 1.0f) tau = 1.0f;
-    if (age < attack) {
-        rise = (age + 1.0f) / attack;
-        if (rise > 1.0f) rise = 1.0f;
-        env = amp * rise;
-    } else if (age < hold) env = amp;
-    else env = amp * expf(-(age - hold) / tau);
-    if (env > 1.0f) env = 1.0f;
-    if (age >= hold && env < amp * 0.02f) return 0.0f;
-    return env > 0.0f ? env : 0.0f;
 }
 
 static int ticks_to_samples(int ticks, float tempo) {
@@ -868,15 +896,16 @@ static void shape_of(const PhraseEv *hit, float tempo, EnvShape *s) {
         float release = clampf01(read_param(hit->params, "release", read_param(hit->params, "decay", 0.4f)));
         int ticks = hit->ticks < 1 ? 1 : hit->ticks;
         s->kind = 2;
+        s->a = melody_sustain_of(hit->params);
         s->hold = (float)ticks_to_samples(ticks, tempo);
-        s->attack = 1.0f + clampf01(read_param(hit->params, "attack", 0.0f)) * 0.2f * SR;
-        s->release = 0.04f + release * 1.6f;
+        s->attack = clampf01(read_param(hit->params, "attack", 0.0f));
+        s->release = melody_release_seconds(release);
     }
 }
 
 static float shape_level(const EnvShape *s, float age) {
     float body, noise, click;
-    if (s->kind == 2) return note_level(s->amp, age, s->hold, s->attack, s->release);
+    if (s->kind == 2) return s->amp * melody_level(age, s->hold, s->attack, s->a, s->release, 0, 0.0f);
     if (s->kind == 1) {
         body = decay_level(s->amp, age, s->a);
         noise = decay_level(s->amp, age, s->b);
@@ -1157,10 +1186,7 @@ static void arm_drum(Engine *engine, int lane, int note, int velocity, const cha
  * has age 0 and a silent envelope. Stealing the quietest voice would take the
  * tone just armed and leave a single voice once releases fill the pool. */
 static float note_amp(const Note *note) {
-    float floor;
-    if (note->pluck <= 1e-4f) return note->env;
-    floor = note->tail * PLUCK_TAIL;
-    return note->env > floor ? note->env : floor;
+    return note->env;
 }
 
 static Note *steal(Engine *engine) {
@@ -1216,6 +1242,7 @@ static void paint_note(Note *note, int note_num, int velocity, int samples, cons
     note->pitch = note_num;
     note->loop = loop;
     note->left = samples;
+    note->gate = samples;
     note->target = midi_freq(note_num);
     note->wave = read_param(params, "wave", 0.36f);
     note->bend = read_param(params, "bend", 0.0f);
@@ -1230,11 +1257,9 @@ static void paint_note(Note *note, int note_num, int velocity, int samples, cons
     note->release = read_param(params, "release", read_param(params, "decay", 0.4f));
     note->wide = read_param(params, "wide", 0.0f);
     note->glide = read_param(params, "glide", 0.0f);
-    note->pluck = read_param(params, "pluck", 0.0f);
+    note->sustain = melody_sustain_of(params);
     note->env_amt = read_param(params, "env", 0.0f);
     note->gain = velocity / 127.0f;
-    refresh_release(note);
-    refresh_pluck(note);
 }
 
 static Note *arm_note(Engine *engine, int note_num, int velocity, int ticks, const char *params, int lane, int loop) {
@@ -1249,9 +1274,11 @@ static Note *arm_note(Engine *engine, int note_num, int velocity, int ticks, con
     note->on = 1;
     if (!legato) {
         note->env = 0;
-        note->tail = 0;
         note->age = 0;
-        note->filter_env = 1.0f;
+        note->filter_env = 0.0f;
+        note->legato = 0;
+        note->from_amp = 0.0f;
+        note->from_contour = 0.0f;
         if (!prior) {
             int copy;
             float target = midi_freq(note_num);
@@ -1268,6 +1295,12 @@ static Note *arm_note(Engine *engine, int note_num, int velocity, int ticks, con
         }
     }
     paint_note(note, note_num, velocity, samples, params, lane, loop);
+    if (legato) {
+        note->legato = 1;
+        note->from_amp = prior->env;
+        note->from_contour = prior->filter_env;
+        note->age = 0;
+    }
     if (glide <= 1e-4f) note->freq = note->target;
     note->claim = serial;
     stamp_note(engine, note);
@@ -1598,7 +1631,7 @@ static void note_sample(Engine *engine, Note *note, float *left, float *right) {
     int open;
     int indexes[3];
     int count, i;
-    float power = 0.0f, norm, mid = 0.0f, side = 0.0f, resonated, attack_samples, level, gain, sided, contour;
+    float power = 0.0f, norm, mid = 0.0f, side = 0.0f, resonated, level, gain, sided;
     int quiet;
     slew_note(note);
     inc = (TWO_PI * note->freq) / SR;
@@ -1630,42 +1663,13 @@ static void note_sample(Engine *engine, Note *note, float *left, float *right) {
     }
     mid *= norm;
     side *= norm;
+    note->filter_env = melody_contour((float)note->age, (float)note->gate, note->attack, note->legato, note->from_contour);
     resonated = filter_sample(&note->low, &note->band, mid, melody_cutoff(note->cutoff, note->env_amt, note->filter_env), note->resonance);
-    /* Attack 0 still rises over about 2 ms. The note-on phase stays the hash. */
-    attack_samples = 1.0f + note->attack * 0.2f * SR;
-    if (attack_samples < 0.002f * SR) attack_samples = 0.002f * SR;
-    /* Pluck 0 holds for the gate, then release. Above zero the body falls on the pluck
-       toward a quiet floor. After the gate, release damps the body and fades the floor. */
-    if (note->pluck > 1e-4f) {
-        if (note->left > 0 && (float)note->age < attack_samples) {
-            note->env = ((float)note->age + 1.0f) / attack_samples;
-            note->tail = note->env;
-        } else if (note->left > 0) {
-            if (note->tail < note->env) note->tail = note->env;
-            note->env *= note->pluck_k;
-        } else {
-            float damp;
-            if (note->tail < note->env) note->tail = note->env;
-            damp = note->release_k < note->pluck_k ? note->release_k : note->pluck_k;
-            note->env *= damp;
-            note->tail *= note->release_k;
-        }
-        level = note_amp(note);
-    } else if (note->left > 0 && (float)note->age < attack_samples) {
-        note->env = ((float)note->age + 1.0f) / attack_samples;
-        level = note->env;
-    } else if (note->left > 0) {
-        note->env = 1.0f;
-        level = note->env;
-    } else {
-        note->env *= note->release_k;
-        level = note->env;
-    }
-    contour = note->pluck > 1e-4f ? pluck_seconds(note->pluck) : 0.15f;
-    note->filter_env *= expf(-1.0f / (contour * SR));
+    level = melody_level((float)note->age, (float)note->gate, note->attack, note->sustain, melody_release_seconds(note->release), note->legato, note->from_amp);
+    note->env = level;
     note->age += 1;
     if (note->left > 0) note->left -= 1;
-    quiet = (float)note->age >= attack_samples && level < 0.0008f;
+    quiet = note->left <= 0 && level < 0.0008f;
     if (note->left <= 0 && quiet) note->on = 0;
     if (note->freq > 1.0f && note->lane >= 0 && note->lane < LANE_COUNT) engine->lane_freq[note->lane] = note->freq;
     gain = resonated * level * note->gain * NOTE_LEVEL;

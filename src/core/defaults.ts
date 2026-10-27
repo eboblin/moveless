@@ -94,7 +94,7 @@ const SOUND_VALUE: Record<LaneId, Record<string, number>> = {
     wide: 0,
     attack: 0.15,
     release: 0.09,
-    pluck: 0,
+    sustain: 1,
     env: 0,
   },
   lead: {
@@ -107,7 +107,7 @@ const SOUND_VALUE: Record<LaneId, Record<string, number>> = {
     wide: 0,
     attack: 0.23,
     release: 0.01,
-    pluck: 0,
+    sustain: 1,
     env: 0,
   },
   chords: {
@@ -120,7 +120,7 @@ const SOUND_VALUE: Record<LaneId, Record<string, number>> = {
     wide: 0.4,
     attack: 0,
     release: 0,
-    pluck: 0,
+    sustain: 1,
     env: 0,
   },
 };

@@ -1,4 +1,4 @@
-import { SAMPLE_RATE, tickToSample } from "../core/clock.ts";
+import { clamp01, SAMPLE_RATE, tickToSample } from "../core/clock.ts";
 import type { LaneId } from "../core/types.ts";
 
 /** What the envelope reads off a phrase hit. A loop event is a superset of this. */
@@ -53,17 +53,88 @@ function decayLevel(amp: number, age: number, seconds: number): number {
   return env;
 }
 
-/** Attack, hold for the note, then release. Age 0 is already the first sample of the attack. */
-function noteLevel(amp: number, age: number, hold: number, attack: number, releaseSec: number): number {
-  if (!(amp > 0) || age < 0) return 0;
-  const held = Math.max(1, hold);
-  const rise = Math.max(1, attack);
+/** How fast the body falls. Front-loaded, and it lands on the target at the end of the gate. */
+const MELODY_FALL = 4;
+
+/** Release after the gate, seconds. The bottom of the knob is about 40 ms, the top about 1.6 s. */
+export function melodyReleaseSeconds(unit: number): number {
+  return 0.04 + clamp01(unit) * 1.6;
+}
+
+/**
+ * Samples of the rise. Zero is about 2 ms, so a new phase does not click.
+ * One is the whole gate: the peak sits on the last sample of the note.
+ */
+export function melodyAttackSamples(gate: number, attack: number): number {
+  const span = Math.max(1, gate);
+  const rise = Math.max(0.002 * SAMPLE_RATE, clamp01(attack) * span);
+  return rise > span ? span : rise;
+}
+
+/** 1 at u = 0, 0 at u = 1. The drop is steep at the start. */
+function melodyFall(from: number, to: number, u: number): number {
+  const t = u < 0 ? 0 : u > 1 ? 1 : u;
+  const w = Math.exp(-MELODY_FALL * t);
+  const w1 = Math.exp(-MELODY_FALL);
+  return to + (from - to) * ((w - w1) / (1 - w1));
+}
+
+/**
+ * Amplitude of one melodic note, before velocity.
+ * Age 0 is the first sample. The body lasts `gate` samples: a rise, then a fall
+ * that lands on `sustain` at the last sample of the gate. Release is only after that.
+ * `origin` skips the rise and falls from that level across the new gate (a glide).
+ */
+export function melodyLevel(
+  age: number,
+  gate: number,
+  attack: number,
+  sustain: number,
+  releaseSec: number,
+  origin?: number,
+): number {
+  if (age < 0) return 0;
+  const span = Math.max(1, gate);
+  const sus = clamp01(sustain);
+  const legato = origin !== undefined;
+  const rise = legato ? 0 : melodyAttackSamples(span, attack);
+  if (age < span) {
+    if (!legato && age < rise) return Math.min(1, (age + 1) / rise);
+    const from = legato ? clamp01(origin) : 1;
+    const start = legato ? 0 : rise;
+    const room = Math.max(1, span - start);
+    return melodyFall(from, sus, (age - start + 1) / room);
+  }
+  const end = !legato && rise >= span ? 1 : sus;
   const tau = Math.max(1, releaseSec * SAMPLE_RATE);
-  let env = amp;
-  if (age < rise) env = amp * Math.min(1, (age + 1) / rise);
-  else if (age >= held) env = amp * Math.exp(-(age - held) / tau);
-  if (age >= held && env < amp * FLOOR) return 0;
+  const env = end * Math.exp(-(age - span + 1) / tau);
+  if (env < end * FLOOR) return 0;
   return env;
+}
+
+/**
+ * Filter contour. 1 is open, 0 is the cutoff knob.
+ * It opens with the attack and is back at the knob by the end of the same gate.
+ * Sustain does not hold it. `origin` falls from the current opening across a new gate.
+ */
+export function melodyContour(age: number, gate: number, attack: number, origin?: number): number {
+  if (age < 0) return 0;
+  const span = Math.max(1, gate);
+  if (age >= span) return 0;
+  if (origin !== undefined) return melodyFall(clamp01(origin), 0, (age + 1) / span);
+  const rise = melodyAttackSamples(span, attack);
+  if (age < rise) return Math.min(1, (age + 1) / rise);
+  if (rise >= span) return 1;
+  return melodyFall(1, 0, (age - rise + 1) / (span - rise));
+}
+
+/** Sustain knob, or the old pluck inverted. Missing both holds the note. */
+export function melodySustain(params: readonly { id: string; value: number }[]): number {
+  const sustain = params.find((param) => param.id === "sustain" || param.id.endsWith("_sustain"));
+  if (sustain) return clamp01(sustain.value);
+  const pluck = params.find((param) => param.id === "pluck" || param.id.endsWith("_pluck"));
+  if (pluck) return 1 - clamp01(pluck.value);
+  return 1;
 }
 
 /** Seconds pulled off the event once, so a hop walk does not re-read params. */
@@ -107,17 +178,17 @@ function shapeOf(event: EnvelopeHit, tempo: number): EnvelopeShape {
   return {
     kind: 2,
     amp,
-    a: 0,
+    a: melodySustain(event.params),
     b: 0,
     c: 0,
     hold: tickToSample(Math.max(1, event.lengthTicks), tempo),
-    attack: 1 + unitOf(event, "attack", 0) * 0.2 * SAMPLE_RATE,
-    release: 0.04 + release * 1.6,
+    attack: unitOf(event, "attack", 0),
+    release: melodyReleaseSeconds(release),
   };
 }
 
 function shapeLevel(shape: EnvelopeShape, age: number): number {
-  if (shape.kind === 2) return noteLevel(shape.amp, age, shape.hold, shape.attack, shape.release);
+  if (shape.kind === 2) return shape.amp * melodyLevel(age, shape.hold, shape.attack, shape.a, shape.release);
   if (shape.kind === 1) {
     return Math.max(
       decayLevel(shape.amp, age, shape.a),
@@ -219,7 +290,7 @@ function eventLevel(event: EnvelopeHit, sample: number, tempo: number): number {
 
 /**
  * Loudest hit of one lane at `sample`, counted from the start of the loop.
- * Drums fall from the hit. Notes hold, then release. Silence is 0.
+ * Drums fall from the hit. Notes follow the gate, then release. Silence is 0.
  */
 export function laneEnvelopeAt(events: readonly EnvelopeHit[], lane: LaneId, sample: number, tempo = 120): number {
   let best = 0;

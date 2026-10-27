@@ -9,8 +9,8 @@ import { clone } from "../src/core/clone.ts";
 import { launchScene, record } from "../src/core/performance.ts";
 import { mapFilter, mapKick, mapSend, mapSound } from "../src/dsp/map.ts";
 import { eventsInBlock, phraseLoop, soundMotions } from "../src/dsp/schedule.ts";
-import { envelopeTable, laneEnvelopeAt, readEnvelope } from "../src/dsp/envelope.ts";
-import { applyDeckCommand, createEngine, filterSample, formatBus, glideSeconds, loadPhrase, melodyCutoff, packBlock, packPhrase, packPhraseBody, pluckSeconds, renderBlock, renderClock } from "../src/dsp/voice.ts";
+import { envelopeTable, laneEnvelopeAt, melodyContour, melodyLevel, readEnvelope } from "../src/dsp/envelope.ts";
+import { applyDeckCommand, createEngine, filterSample, formatBus, glideSeconds, loadPhrase, melodyCutoff, packBlock, packPhrase, packPhraseBody, renderBlock, renderClock } from "../src/dsp/voice.ts";
 import type { BlockEvent } from "../src/dsp/schedule.ts";
 import type { FxDelay, FxReverb, LaneId } from "../src/core/types.ts";
 import { createEcho, createTank, echoSample, tankSample } from "../src/dsp/fx.ts";
@@ -581,8 +581,8 @@ describe("dsp adapter", () => {
       amount: 0.2,
       loop,
     }]);
-    renderClock(engine);
-    const env = laneEnvelopeAt([bass], "bass", 0, tempo);
+    renderClock(engine, 256);
+    const env = laneEnvelopeAt([bass], "bass", 128, tempo);
     const heard = clamp01(0.25 + env * 0.2 * 3);
     assert.ok(heard > 0.8);
     assert.ok(Math.abs(engine.notes[0].cutoff - heard) < 1e-6);
@@ -1089,73 +1089,73 @@ describe("dsp adapter", () => {
     assert.ok(glued < dry);
   });
 
-  it("keeps a zero pluck at full level and lets a high pluck fall inside the gate", () => {
-    const long = 48000;
-    const held = pitched("bass", 40, 0, long);
-    const plucked = pitched("bass", 40, 1, long);
-    const engine = createEngine();
-    loadPhrase(engine, [held], 120, true);
-    renderClock(engine, 4000);
-    const organ = engine.notes.find((note) => note.on);
+  it("holds through the gate and lets a zero sustain die by the end of it", () => {
+    const ticks = 70;
+    const gate = Math.max(1, Math.round((ticks * 44100 * 60) / (120 * 192)));
+    const held = createEngine();
+    loadPhrase(held, [pitched("bass", 40, 1, ticks)], 120, true);
+    renderClock(held, 2000);
+    const organ = held.notes.find((note) => note.on);
     assert.ok(organ);
     assert.ok(organ.env > 0.9);
     assert.ok(organ.left > 0);
-    const other = createEngine();
-    loadPhrase(other, [plucked], 120, true);
-    renderClock(other, 4000);
-    const blip = other.notes.find((note) => note.on || note.age > 0);
+    const plucked = createEngine();
+    loadPhrase(plucked, [pitched("bass", 40, 0, ticks)], 120, true);
+    renderClock(plucked, gate - 2);
+    const blip = plucked.notes.find((note) => note.age > 0);
     assert.ok(blip);
-    assert.ok(blip.env < 0.15);
+    assert.ok(blip.left > 0);
+    assert.ok(blip.env < 0.05, `env ${blip.env}`);
+    const early = melodyLevel(1200, gate, 0, 0, 0.04);
+    const shorter = Math.max(1, Math.round((12 * 44100 * 60) / (120 * 192)));
+    assert.ok(early > melodyLevel(1200, shorter, 0, 0, 0.04));
   });
 
-  it("lets release carry a tail after a short pluck", () => {
-    const dry = pluckTake(0, 18000);
-    const held = pluckTake(1, 18000);
+  it("lets release carry a tail after a short hold and stays quiet after a pluck", () => {
+    const dry = shapedTake(1, 0, 18000);
+    const ring = shapedTake(1, 1, 18000);
     const earlyDry = energy(dry, 0, 700);
-    const earlyHeld = energy(held, 0, 700);
+    const earlyRing = energy(ring, 0, 700);
     assert.ok(earlyDry > 0.01);
-    assert.ok(earlyHeld > earlyDry * 0.85 && earlyHeld < earlyDry * 1.15);
+    assert.ok(earlyRing > earlyDry * 0.85 && earlyRing < earlyDry * 1.15);
     const lateDry = energy(dry, 10000, 18000);
-    const lateHeld = energy(held, 10000, 18000);
-    assert.ok(lateHeld > lateDry * 8, `late ${lateHeld} vs ${lateDry}`);
+    const lateRing = energy(ring, 10000, 18000);
+    assert.ok(lateRing > lateDry * 8, `late ${lateRing} vs ${lateDry}`);
+    const plucked = shapedTake(0, 1, 18000);
+    const latePluck = energy(plucked, 10000, 18000);
+    assert.ok(latePluck * 8 < lateRing, `pluck ${latePluck} vs hold ${lateRing}`);
   });
 
-  it("holds a pluck tail for the gate and lets release shape it after", () => {
-    const open = createEngine();
-    loadPhrase(open, [pitched("bass", 40, 1, 48000)], 120, true);
-    renderClock(open, 8000);
-    const held = open.notes.find((note) => note.on);
-    assert.ok(held);
-    assert.ok(held.left > 0);
-    assert.ok(held.tail > 0.9, `tail ${held.tail}`);
-    assert.ok(held.env < 0.05, `env ${held.env}`);
-
-    const cut = createEngine();
-    loadPhrase(cut, [pluckedNote(8, 0, 0.01)], 120, true);
-    renderClock(cut, 12000);
-    const dead = cut.notes.find((voice) => voice.age > 0);
-    assert.ok(dead);
-    assert.equal(dead.left, 0);
-    assert.ok(Math.max(dead.env, dead.tail * 0.12) < 0.02, `level ${dead.env} tail ${dead.tail}`);
-
-    const ring = createEngine();
-    loadPhrase(ring, [pluckedNote(8, 1, 0.01)], 120, true);
-    renderClock(ring, 12000);
-    const alive = ring.notes.find((voice) => voice.age > 0);
-    assert.ok(alive);
-    assert.equal(alive.left, 0);
-    assert.ok(alive.tail > 0.5, `tail ${alive.tail}`);
-    assert.ok(alive.env < 0.75, `env ${alive.env}`);
-  });
-
-  it("keeps a pluck strike well above the tail it leaves behind", () => {
+  it("opens the filter with the attack and closes it by the end of the gate while the tone holds", () => {
+    assert.equal(melodyCutoff(0.5, 0, 1), 0.5);
+    assert.ok(Math.abs(melodyCutoff(0.5, 1, 1) - 0.5) < 1e-6);
+    assert.ok(Math.abs(melodyCutoff(0.5, 1, 0) - 0.95) < 1e-6);
+    assert.ok(melodyCutoff(0.8, 1, 1) < 0.55);
+    assert.ok(Math.abs(melodyCutoff(0.3, 0, 0) - 0.3) < 1e-6);
+    const ticks = 400;
+    const gate = Math.max(1, Math.round((ticks * 44100 * 60) / (120 * 192)));
     const engine = createEngine();
-    loadPhrase(engine, [pitched("bass", 52, 1, 48000)], 120, true);
-    const buf = renderClock(engine, 8000);
-    const strike = energy(buf, 0, 500);
-    const tail = energy(buf, 6000, 8000);
-    assert.ok(strike > 0.01);
-    assert.ok(tail * 500 < strike * 2000 * 0.08, `tail ${tail} vs strike ${strike}`);
+    loadPhrase(engine, [{
+      sample: 0, loop: 200000, lane: "bass", note: 40, velocity: 110, lengthTicks: ticks,
+      params: [
+        { id: "attack", value: 0 },
+        { id: "sustain", value: 1 },
+        { id: "env", value: 1 },
+        { id: "cutoff", value: 0.5 },
+        { id: "release", value: 0.4 },
+      ],
+    }], 120, true);
+    renderClock(engine, 200);
+    const note = engine.notes[0];
+    assert.ok(note.filterEnv > 0.9, `open ${note.filterEnv}`);
+    assert.ok(note.env > 0.9);
+    renderClock(engine, gate - 300);
+    assert.ok(note.filterEnv < 0.08, `closed ${note.filterEnv}`);
+    assert.ok(note.env > 0.9, `held ${note.env}`);
+    assert.ok(melodyContour(gate - 1, gate, 0) < 0.05);
+    assert.ok(melodyLevel(gate - 1, gate, 0, 1, 0.04) > 0.99);
+    assert.ok(melodyLevel(gate - 1, gate, 1, 0, 0.04) > 0.99);
+    assert.equal(melodyLevel(gate + 400, gate, 0, 0, 1), 0);
   });
 
   it("still reads a legacy decay key as the release tail", () => {
@@ -1166,41 +1166,13 @@ describe("dsp adapter", () => {
     }], 120, true);
     renderClock(engine);
     assert.equal(engine.notes[0].release, 0.8);
-    assert.equal(engine.notes[0].pluck, 0);
-  });
-
-  it("opens the filter on the attack and lets it fall back, even from a dry cutoff", () => {
-    assert.equal(melodyCutoff(0.5, 0, 1), 0.5);
-    assert.ok(Math.abs(melodyCutoff(0.5, 1, 1) - 0.5) < 1e-6);
-    assert.ok(Math.abs(melodyCutoff(0.5, 1, 0) - 0.95) < 1e-6);
-    assert.ok(melodyCutoff(0.8, 1, 1) < 0.55);
-    assert.ok(Math.abs(melodyCutoff(0.3, 0, 0) - 0.3) < 1e-6);
-    const engine = createEngine();
-    loadPhrase(engine, [{
-      sample: 0, loop: 200000, lane: "bass", note: 40, velocity: 110, lengthTicks: 800,
-      params: [
-        { id: "attack", value: 0 },
-        { id: "pluck", value: 0 },
-        { id: "env", value: 1 },
-        { id: "cutoff", value: 0.5 },
-        { id: "release", value: 0.4 },
-      ],
-    }], 120, true);
-    renderClock(engine, 64);
-    const note = engine.notes[0];
-    assert.ok(note.filterEnv > 0.9);
-    renderClock(engine, 20000);
-    assert.ok(note.filterEnv < 0.1);
-    assert.ok(note.filterEnv > 0);
+    assert.equal(engine.notes[0].sustain, 1);
   });
 
   it("jumps pitch when glide is zero and slews it across an overlapping gate", () => {
     assert.equal(glideSeconds(0), 0);
     assert.ok(Math.abs(glideSeconds(0.01) - 0.06) < 1e-6);
     assert.ok(Math.abs(glideSeconds(1) - 0.5) < 1e-6);
-    assert.equal(pluckSeconds(0), 0);
-    assert.ok(Math.abs(pluckSeconds(0.01) - 0.6) < 1e-6);
-    assert.ok(Math.abs(pluckSeconds(1) - 0.03) < 1e-6);
     const jumped = createEngine();
     loadPhrase(jumped, [
       pitchedAt(0, 48, 0, 400),
@@ -1237,7 +1209,7 @@ describe("dsp adapter", () => {
   it("retriggers the envelope across a gap and still slews pitch on the same oscillator", () => {
     const engine = createEngine();
     loadPhrase(engine, [
-      pitchedAt(0, 48, 0.01, 8, 1),
+      pitchedAt(0, 48, 0.01, 8, 1, "bass", 0),
       pitchedAt(2500, 60, 0.01, 400),
     ], 120, true);
     renderClock(engine, 2500);
@@ -1245,7 +1217,6 @@ describe("dsp adapter", () => {
     assert.ok(ringing);
     assert.equal(ringing.left, 0);
     assert.ok(ringing.env < 0.7);
-    assert.ok(ringing.tail < 1);
     renderClock(engine, 200);
     const again = engine.notes.filter((note) => note.on);
     assert.equal(again.length, 1);
@@ -1289,26 +1260,14 @@ function midi(note: number): number {
   return 440 * 2 ** ((note - 69) / 12);
 }
 
-function pluckedNote(lengthTicks: number, release: number, pluck: number) {
-  return {
-    sample: 0, loop: 200000, lane: "bass" as const, note: 40, velocity: 100, lengthTicks,
-    params: [
-      { id: "attack", value: 0 },
-      { id: "release", value: release },
-      { id: "pluck", value: pluck },
-      { id: "cutoff", value: 0.5 },
-    ],
-  };
-}
-
-function pluckTake(release: number, frames: number): Float32Array {
+function shapedTake(sustain: number, release: number, frames: number): Float32Array {
   const engine = createEngine();
   loadPhrase(engine, [{
     sample: 0, loop: 400000, lane: "bass", note: 52, velocity: 100, lengthTicks: 48,
     params: [
       { id: "attack", value: 0 },
       { id: "release", value: release },
-      { id: "pluck", value: 1 },
+      { id: "sustain", value: sustain },
       { id: "cutoff", value: 0.5 },
       { id: "wave", value: 0.42 },
     ],
@@ -1316,11 +1275,11 @@ function pluckTake(release: number, frames: number): Float32Array {
   return renderClock(engine, frames);
 }
 
-function pitched(lane: "bass" | "lead", note: number, pluck: number, lengthTicks: number) {
-  return pitchedAt(0, note, 0, lengthTicks, pluck, lane);
+function pitched(lane: "bass" | "lead", note: number, sustain: number, lengthTicks: number) {
+  return pitchedAt(0, note, 0, lengthTicks, sustain, lane);
 }
 
-function pitchedAt(sample: number, note: number, glide: number, lengthTicks: number, pluck = 0, lane: "bass" | "lead" | "chords" = "bass") {
+function pitchedAt(sample: number, note: number, glide: number, lengthTicks: number, sustain = 1, lane: "bass" | "lead" | "chords" = "bass", release = 0.4) {
   return {
     sample,
     loop: 400000,
@@ -1330,9 +1289,9 @@ function pitchedAt(sample: number, note: number, glide: number, lengthTicks: num
     lengthTicks,
     params: [
       { id: "attack", value: 0 },
-      { id: "release", value: 0.4 },
+      { id: "release", value: release },
       { id: "glide", value: glide },
-      { id: "pluck", value: pluck },
+      { id: "sustain", value: sustain },
       { id: "cutoff", value: 0.5 },
     ],
   };

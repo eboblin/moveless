@@ -143,7 +143,10 @@ describe("pages and leds", () => {
     assert.equal(pageGroup("kick", 7), "fx");
     assert.equal(pageGroup("kick", 8), "fx");
     assert.equal(pageGroup("bass", 9), "sound");
-    assert.equal(lanePages("bass")[9]?.title, "PLUCK / ENV");
+    assert.equal(lanePages("bass")[8]?.title, "ATTACK / SUSTAIN");
+    assert.equal(lanePages("bass")[9]?.title, "RELEASE / FLT ENV");
+    assert.deepEqual(lanePages("bass")[9]?.groups, ["RELEASE", "FLT ENV"]);
+    assert.equal(lanePages("bass")[9]?.bindings[4]?.label, "ENV V");
     assert.equal(pageGroup("bass", 10), "fx");
     assert.equal(pageGroup("bass", 11), "fx");
     assert.equal(pageGroup("chords", 2), "pattern");

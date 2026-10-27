@@ -6,10 +6,13 @@ import { phraseLoop, soundMotions, type LoopEvent } from "../dsp/schedule.ts";
 import {
   hatDecaySeconds,
   kickDecaySeconds,
+  melodyLevel,
+  melodyReleaseSeconds,
+  melodySustain,
   percDecaySeconds,
   snareBodyDecaySeconds,
   snareNoiseDecaySeconds,
-} from "../dsp/voice.ts";
+} from "../dsp/envelope.ts";
 import { WAVE_HOP, emptyWave, type WaveTape } from "./wave.ts";
 
 let bound: Project | null = null;
@@ -111,29 +114,25 @@ function paintDecay(tape: WaveTape, period: number, at: number, amp: number, sec
   }
 }
 
-/** Plateau for the note, then the release tail. The attack is a short ramp at the start. */
+/** The same gate shape the voice plays. Attack is a fraction of the note, sustain is the level at the end. */
 function paintNote(
   tape: WaveTape,
   period: number,
   at: number,
   amp: number,
-  holdSamples: number,
-  attackSamples: number,
+  gate: number,
+  attack: number,
+  sustain: number,
   releaseSec: number,
   leftGain: number,
   rightGain: number,
 ): void {
   if (!(amp > 0) || !(period > 0)) return;
-  const hold = Math.max(WAVE_HOP, holdSamples);
-  const attack = Math.max(1, attackSamples);
-  const tau = Math.max(1, releaseSec * SAMPLE_RATE);
-  const hops = Math.max(1, Math.ceil((hold + releaseSec * 4 * SAMPLE_RATE) / WAVE_HOP));
+  const hops = Math.max(1, Math.ceil((Math.max(1, gate) + releaseSec * 4 * SAMPLE_RATE) / WAVE_HOP));
   for (let i = 0; i < hops; i++) {
     const t = i * WAVE_HOP;
-    let env = amp;
-    if (t < attack) env = amp * Math.min(1, (t + WAVE_HOP) / attack);
-    else if (t >= hold) env = amp * Math.exp(-(t - hold) / tau);
-    if (t >= hold && env < amp * 0.02) break;
+    const env = amp * melodyLevel(t, gate, attack, sustain, releaseSec);
+    if (t >= gate && env < amp * 0.02) break;
     const key = Math.floor(fold(at + t, period) / WAVE_HOP) * WAVE_HOP;
     bump(tape.left, key, env * leftGain);
     bump(tape.right, key, env * rightGain);
@@ -164,14 +163,13 @@ function paintHit(tape: WaveTape, period: number, event: LoopEvent, at: number, 
     return;
   }
   const release = unit(event, "release", unit(event, "decay", 0.4));
-  const attack = 1 + unit(event, "attack", 0) * 0.2 * SAMPLE_RATE;
   const hold = tickToSample(Math.max(1, event.lengthTicks), tempo);
-  paintNote(tape, period, at, amp, hold, attack, 0.04 + release * 1.6, leftGain, rightGain);
+  paintNote(tape, period, at, amp, hold, unit(event, "attack", 0), melodySustain(event.params), melodyReleaseSeconds(release), leftGain, rightGain);
 }
 
 /**
  * The whole loop as envelopes. One pass over the phrase, no voice.
- * Drum tails use the same seconds as the sounding voice. Notes hold, then release.
+ * Drum tails use the same seconds as the sounding voice. Notes use the same gate shape.
  */
 function buildSketch(project: Project, phrase: Phrase, period: number): WaveTape {
   const sketch = emptyWave(WAVE_HOP, period);

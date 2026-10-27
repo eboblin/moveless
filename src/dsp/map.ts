@@ -76,7 +76,7 @@ const MELODY: Record<string, string> = {
   wide: "wide",
   attack: "attack",
   release: "release",
-  pluck: "pluck",
+  sustain: "sustain",
   env: "env",
 };
 

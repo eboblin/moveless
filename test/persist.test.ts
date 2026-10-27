@@ -312,6 +312,31 @@ describe("project persist", () => {
     assert.deepEqual(legacy?.project.clipboardSceneIds, ["001"]);
   });
 
+  it("reads an old pluck as the sustain it was holding", () => {
+    const project = record(defaultProject());
+    const raw = JSON.parse(serializeStored(project, { context: "bass", page: 0, mode: "journal", playing: true, sampleLatched: false })) as {
+      project: {
+        working: { bass: { sound: Record<string, { value: number; pattern: number; cycle: number; amount: number }> } };
+        journal: { lanes: { bass: { sound: Record<string, { value: number }> } } }[];
+      };
+    };
+    const pluck = { value: 0.25, pattern: 3, cycle: 2, amount: 0.1 };
+    raw.project.working.bass.sound.pluck = pluck;
+    delete raw.project.working.bass.sound.sustain;
+    raw.project.journal[0].lanes.bass.sound.pluck = { value: 0, pattern: 0, cycle: 1, amount: 0 };
+    delete raw.project.journal[0].lanes.bass.sound.sustain;
+    const parsed = parseStored(JSON.stringify(raw));
+    assert.ok(parsed);
+    const sound = parsed.project.working.bass.sound;
+    assert.equal(sound.sustain.value, 0.75);
+    assert.equal(sound.sustain.pattern, 3);
+    assert.equal(sound.sustain.cycle, 2);
+    assert.equal(sound.sustain.amount, 0.1);
+    assert.equal("pluck" in sound, false);
+    assert.equal(parsed.project.journal[0].lanes.bass.sound.sustain.value, 1);
+    assert.equal("pluck" in parsed.project.journal[0].lanes.bass.sound, false);
+  });
+
   it("loads and saves through host file bindings", () => {
     const files = memoryFiles();
     const project = setRandomizeIntensity(defaultProject(), "clear");
