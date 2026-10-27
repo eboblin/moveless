@@ -264,7 +264,7 @@ function onCaptureStrip(session: Session, col: number): Session {
   return session;
 }
 
-/** Randomize overlay. Top two rows pick a page. The next row is depth, then scope. The bottom row is intensity. */
+/** Randomize overlay. Top two rows pick a page. The next row is depth, then scope. The bottom row is intensity, and a factory restore at the right. */
 function onRandomizePad(session: Session, row: number, col: number): Session {
   if (row === 3 || row === 2) {
     const page = row === 3 ? col : 8 + col;
@@ -276,12 +276,19 @@ function onRandomizePad(session: Session, row: number, col: number): Session {
   if (row === 1 && col >= 4 && col < 4 + RANDOMIZE_SCOPES.length) {
     return showRandomizeLine(session, setRandomizeScope(session.project, RANDOMIZE_SCOPES[col - 4]), "scope");
   }
-  if (row === 0 && col === 0) return showRandomizeLine(session, setRandomizeIntensity(session.project, "clear"), "intensity");
-  if (row === 0 && col >= 1 && col <= 3) {
-    const level = (["soft", "medium", "hard"] as const)[col - 1];
+  if (row === 0 && col < 3) {
+    const level = (["soft", "medium", "hard"] as const)[col];
     return showRandomizeLine(session, setRandomizeIntensity(session.project, level), "intensity");
   }
+  if (row === 0 && col === 7) return restoreFactorySelection(session);
   return session;
+}
+
+/** Right pad. Writes factory numbers for the current scope and depth, and leaves intensity where it is. */
+function restoreFactorySelection(session: Session): Session {
+  const intensity = session.project.randomizeIntensity;
+  const restored = applyRandomize({ ...session, project: { ...session.project, randomizeIntensity: "clear" } });
+  return { ...restored, project: { ...restored.project, randomizeIntensity: intensity } };
 }
 
 function showRandomizeLine(session: Session, project: Project, line: RandomizeLine): Session {

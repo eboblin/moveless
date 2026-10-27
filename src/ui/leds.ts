@@ -262,19 +262,18 @@ function choiceLed(family: LedFamily, color: number, selected: boolean): Led {
 
 /**
  * Top two rows. Outside the current scope or depth a page is dim.
- * A page Loop will rewrite is bright, or red when Delete is selected.
+ * A page Loop will rewrite is bright.
  * The current page always blinks, to the dark partner of the colour it is showing.
  */
 function paintRandomizePages(out: Led[], project: Project, context: ContextId, page: number): void {
   const count = pageCount(context);
-  const clear = project.randomizeIntensity === "clear";
   for (let index = 0; index < count && index < 16; index++) {
     const slot = index < 8 ? 24 + index : 16 + (index - 8);
     const color = pageGroupColor(context, index);
     const current = index === page;
     const zone = randomizeTouchesPage(project, context, index, page);
-    const shown = zone ? (clear ? LED.red : color) : offColor(color);
-    const second = clear ? DIM_RED : offColor(color);
+    const shown = zone ? color : offColor(color);
+    const second = offColor(color);
     out[slot] = {
       family: "yellow",
       color: shown,
@@ -351,7 +350,7 @@ function scenePadLeds(project: Project, mode: "journal" | "set", tick: number, j
   });
 }
 
-/** Top two rows are pages. The next row is depth then scope. The bottom row is intensity. */
+/** Top two rows are pages. The next row is depth then scope. The bottom row is intensity, and a factory restore at the right. */
 function randomizePadLeds(project: Project, context: ContextId, page: number): Led[] {
   const out = Array.from({ length: 32 }, () => led("off", false));
   paintRandomizePages(out, project, context, page);
@@ -361,10 +360,10 @@ function randomizePadLeds(project: Project, context: ContextId, page: number): L
   RANDOMIZE_SCOPES.forEach((id, col) => {
     out[12 + col] = choiceLed("yellow", 3, project.randomizeScope === id);
   });
-  out[0] = choiceLed("red", LED.red, project.randomizeIntensity === "clear");
   (["soft", "medium", "hard"] as const).forEach((id, index) => {
-    out[1 + index] = choiceLed("yellow", LED.yellow, project.randomizeIntensity === id);
+    out[index] = choiceLed("yellow", LED.yellow, project.randomizeIntensity === id);
   });
+  out[7] = led("red", false);
   return out;
 }
 
