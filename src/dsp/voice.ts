@@ -956,7 +956,8 @@ function noteSample(engine: Engine, note: NoteVoice): [number, number] {
   mid *= norm;
   side *= norm;
   const resonated = filterSample(note, mid, melodyCutoff(note.cutoff, note.envAmt, note.filterEnv), note.resonance);
-  const attackSamples = 1 + note.attack * 0.2 * SAMPLE_RATE;
+  // Attack 0 still rises over about 2 ms. The note-on phase stays the hash.
+  const attackSamples = Math.max(0.002 * SAMPLE_RATE, 1 + note.attack * 0.2 * SAMPLE_RATE);
   // Pluck 0 holds full level for the gate, then release.
   // Above zero the body falls on the pluck toward a quiet floor. The floor
   // stays for the gate and then follows release. After the gate, release can
@@ -1018,6 +1019,15 @@ function ampAt(p: number, k: number): number {
   return anchorAmp(i, k) * (1 - t) + anchorAmp(i + 1, k) * t;
 }
 
+/** Cosine taper on the top third of a mip. The first partial stays; the last one is zero. */
+function harmWindow(k: number, maxH: number): number {
+  if (maxH <= 1) return 1;
+  const knee = maxH * (2 / 3);
+  if (k <= knee) return 1;
+  const span = maxH - knee;
+  return 0.5 * (1 + Math.cos((Math.PI * (k - knee)) / span));
+}
+
 function buildWaveTable(): Float32Array {
   const table = new Float32Array(WT_MIPS * WT_FRAMES * WT_CYCLE);
   const amp = new Float64Array(WT_HARM + 1);
@@ -1025,7 +1035,7 @@ function buildWaveTable(): Float32Array {
     const maxH = WT_HARM >> mip;
     for (let frame = 0; frame < WT_FRAMES; frame++) {
       const p = frame / (WT_FRAMES - 1);
-      for (let k = 1; k <= maxH; k++) amp[k] = ampAt(p, k);
+      for (let k = 1; k <= maxH; k++) amp[k] = ampAt(p, k) * harmWindow(k, maxH);
       let energy = 0;
       const base = (mip * WT_FRAMES + frame) * WT_CYCLE;
       for (let n = 0; n < WT_CYCLE; n++) {
@@ -1072,9 +1082,19 @@ function readWave(freq: number, wave: number, u: number): number {
   if (f0 >= WT_FRAMES - 1) f0 = WT_FRAMES - 2;
   const ff = pos - f0;
   const s0 = readCycle(m0, f0, u) * (1 - ff) + readCycle(m0, f0 + 1, u) * ff;
-  if (mf < 1e-4) return s0;
-  const s1 = readCycle(m1, f0, u) * (1 - ff) + readCycle(m1, f0 + 1, u) * ff;
-  return s0 + (s1 - s0) * mf;
+  const raw = mf < 1e-4 ? s0 : s0 + (readCycle(m1, f0, u) * (1 - ff) + readCycle(m1, f0 + 1, u) * ff - s0) * mf;
+  return bodyMix(raw, freq, u);
+}
+
+/**
+ * Same-phase sine under a low note. The mix is half sine at 50 Hz and gone
+ * by 200 Hz, along log2. Weights already keep the RMS near the dry wave.
+ */
+function bodyMix(raw: number, freq: number, u: number): number {
+  const body = (Math.log2(200) - Math.log2(Math.max(freq, 1))) / 2;
+  if (body <= 1e-4) return raw;
+  const w = 0.5 * Math.min(1, body);
+  return raw * (1 - w) + Math.sin(TWO_PI * u) * w;
 }
 
 function bendUnit(u: number, bend: number): number {

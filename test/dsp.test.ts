@@ -905,6 +905,98 @@ describe("dsp adapter", () => {
     }
   });
 
+  it("fades a zero attack and keeps the unison phases apart", () => {
+    const saw = (wide: number) => [
+      ...mapSound("lead", { wave: 0.42, bend: 0, sync: 0, fold: 0, drive: 0, wide, attack: 0, release: 1 }),
+      ...mapFilter({ cutoff: 0.5, resonance: 0 }),
+    ];
+    const engine = createEngine();
+    const audio = renderBlock(engine, [{
+      sampleOffset: 0, lane: "lead", note: 60, velocity: 110, lengthTicks: 400, params: saw(0),
+    }], 120, 2048);
+    const mono = (i: number) => audio[i * 2];
+    const rms = (from: number, to: number) => {
+      let energy = 0;
+      for (let i = from; i < to; i++) energy += mono(i) * mono(i);
+      return Math.sqrt(energy / (to - from));
+    };
+    const early = rms(0, 16);
+    const risen = rms(220, 400);
+    const late = rms(400, 1200);
+    assert.ok(early < late * 0.2, `click ${early} against ${late}`);
+    assert.ok(risen > late * 0.5, `rise ${risen} against ${late}`);
+    const wide = createEngine();
+    renderBlock(wide, [{
+      sampleOffset: 0, lane: "lead", note: 64, velocity: 110, lengthTicks: 400, params: saw(1),
+    }], 120, 64);
+    const phase = wide.notes.find((note) => note.on)?.phase ?? [];
+    const apart = (a: number, b: number) => {
+      const turn = Math.PI * 2;
+      const d = Math.abs(a - b) % turn;
+      return Math.min(d, turn - d);
+    };
+    assert.equal(phase.length, 3);
+    assert.ok(apart(phase[0], phase[1]) > 0.05, `copies 0 and 1 ${phase[0]} ${phase[1]}`);
+    assert.ok(apart(phase[1], phase[2]) > 0.05, `copies 1 and 2 ${phase[1]} ${phase[2]}`);
+    assert.ok(apart(phase[0], phase[2]) > 0.05, `copies 0 and 2 ${phase[0]} ${phase[2]}`);
+  });
+
+  it("puts less buzz above 2 kHz on a low saw than on the same wave up high", () => {
+    const hp = (() => {
+      const w0 = (2 * Math.PI * 2000) / SAMPLE_RATE;
+      const cos = Math.cos(w0);
+      const alpha = Math.sin(w0) / (2 * 0.70710678118);
+      const a0 = 1 + alpha;
+      return {
+        b0: (1 + cos) / 2 / a0,
+        b1: -(1 + cos) / a0,
+        b2: (1 + cos) / 2 / a0,
+        a1: (-2 * cos) / a0,
+        a2: (1 - alpha) / a0,
+      };
+    })();
+    const heard = (note: number) => {
+      const freq = 440 * 2 ** ((note - 69) / 12);
+      const audio = renderBlock(createEngine(), [{
+        sampleOffset: 0, lane: "bass", note, velocity: 110, lengthTicks: 800,
+        params: [
+          ...mapSound("bass", { wave: 0.42, bend: 0, sync: 0, fold: 0, drive: 0, wide: 0, attack: 0, release: 1 }),
+          ...mapFilter({ cutoff: 0.5, resonance: 0 }),
+        ],
+      }], 120, 9000);
+      const start = 500;
+      const n = 8192;
+      let re = 0;
+      let im = 0;
+      let total = 0;
+      let high = 0;
+      let x1 = 0;
+      let x2 = 0;
+      let y1 = 0;
+      let y2 = 0;
+      for (let i = 0; i < start + n; i++) {
+        const x = audio[i * 2];
+        const y = hp.b0 * x + hp.b1 * x1 + hp.b2 * x2 - hp.a1 * y1 - hp.a2 * y2;
+        x2 = x1;
+        x1 = x;
+        y2 = y1;
+        y1 = y;
+        if (i < start) continue;
+        const th = (2 * Math.PI * freq * i) / SAMPLE_RATE;
+        re += x * Math.cos(th);
+        im += x * Math.sin(th);
+        total += x * x;
+        high += y * y;
+      }
+      const fund = (2 * (re * re + im * im)) / (n * n);
+      return { buzz: (high / n) / fund, share: fund / (total / n) };
+    };
+    const low = heard(36);
+    const high = heard(69);
+    assert.ok(low.buzz < high.buzz, `low buzz ${low.buzz} against high ${high.buzz}`);
+    assert.ok(low.share > high.share * 1.15, `fundamental share ${low.share} against ${high.share}`);
+  });
+
   it("keeps a block from pumping louder than one note of the same wave", () => {
     const frames = 44100;
     const window = 4410;

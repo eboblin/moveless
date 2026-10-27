@@ -281,6 +281,17 @@ static float amp_at(float p, int k) {
     return anchor_amp(i, k) * (1.0f - t) + anchor_amp(i + 1, k) * t;
 }
 
+/* Cosine taper on the top third of a mip. The first partial stays; the last one is zero. */
+static float harm_window(int k, int max_h) {
+    float knee, span, t;
+    if (max_h <= 1) return 1.0f;
+    knee = (float)max_h * (2.0f / 3.0f);
+    if ((float)k <= knee) return 1.0f;
+    span = (float)max_h - knee;
+    t = ((float)k - knee) / span;
+    return 0.5f * (1.0f + cosf(3.14159265f * t));
+}
+
 static void ensure_wave_table(void) {
     int mip, frame, k, n;
     if (wave_ready) return;
@@ -291,7 +302,7 @@ static void ensure_wave_table(void) {
             float amp[WT_HARM + 1];
             double energy = 0.0;
             int base = (mip * WT_FRAMES + frame) * WT_CYCLE;
-            for (k = 1; k <= max_h; k++) amp[k] = amp_at(p, k);
+            for (k = 1; k <= max_h; k++) amp[k] = amp_at(p, k) * harm_window(k, max_h);
             for (n = 0; n < WT_CYCLE; n++) {
                 float theta = (TWO_PI * (float)n) / (float)WT_CYCLE;
                 float sum = 0.0f;
@@ -309,6 +320,17 @@ static void ensure_wave_table(void) {
         }
     }
     wave_ready = 1;
+}
+
+/* Same-phase sine under a low note. Half sine at 50 Hz, gone by 200 Hz, along log2. */
+static float body_mix(float raw, float freq, float u) {
+    float hz = freq > 1.0f ? freq : 1.0f;
+    float body = (log2f(200.0f) - log2f(hz)) / 2.0f;
+    float w;
+    if (body <= 1e-4f) return raw;
+    if (body > 1.0f) body = 1.0f;
+    w = 0.5f * body;
+    return raw * (1.0f - w) + sinf(TWO_PI * u) * w;
 }
 
 static float read_cycle(int mip, int frame, float u) {
@@ -340,9 +362,11 @@ static float read_wave(float freq, float wave, float u) {
     if (f0 >= WT_FRAMES - 1) f0 = WT_FRAMES - 2;
     ff = pos - (float)f0;
     s0 = read_cycle(m0, f0, u) * (1.0f - ff) + read_cycle(m0, f0 + 1, u) * ff;
-    if (top || mip_f - (float)m0 < 1e-4f) return s0;
-    s1 = read_cycle(m1, f0, u) * (1.0f - ff) + read_cycle(m1, f0 + 1, u) * ff;
-    return s0 + (s1 - s0) * (mip_f - (float)m0);
+    if (!(top || mip_f - (float)m0 < 1e-4f)) {
+        s1 = read_cycle(m1, f0, u) * (1.0f - ff) + read_cycle(m1, f0 + 1, u) * ff;
+        s0 = s0 + (s1 - s0) * (mip_f - (float)m0);
+    }
+    return body_mix(s0, freq, u);
 }
 
 static float bend_unit(float u, float bend) {
@@ -1607,7 +1631,9 @@ static void note_sample(Engine *engine, Note *note, float *left, float *right) {
     mid *= norm;
     side *= norm;
     resonated = filter_sample(&note->low, &note->band, mid, melody_cutoff(note->cutoff, note->env_amt, note->filter_env), note->resonance);
+    /* Attack 0 still rises over about 2 ms. The note-on phase stays the hash. */
     attack_samples = 1.0f + note->attack * 0.2f * SR;
+    if (attack_samples < 0.002f * SR) attack_samples = 0.002f * SR;
     /* Pluck 0 holds for the gate, then release. Above zero the body falls on the pluck
        toward a quiet floor. After the gate, release damps the body and fades the floor. */
     if (note->pluck > 1e-4f) {
