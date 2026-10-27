@@ -10,7 +10,7 @@ import { assembleDeck, behaviorOf, formatDeckCommand, isDeckGroup } from "../cor
 import { formatBus, packPhraseBody } from "../dsp/voice.ts";
 import { midiMessage, reduce, settleTrackPeek, type Session } from "../ui/input.ts";
 import { CAPTURE_CC, DOWN_CC, MENU_CC, MUTE_CC, PLAY_CC, SAMPLE_CC, UP_CC } from "../core/types.ts";
-import { advancePulseClock, blinkHalfMs, directionLit, dropLed, faceButtonLed, ledColorAt, menuLed, modeButtonLed, offerLed, padBlinkSteps, padLeds, padPackets, playLed, PULSE_CLOCK_IDLE, sceneShadeStep, stepLeds, takeLeds, trackLeds, type PulseClock } from "../ui/leds.ts";
+import { advancePulseClock, blinkHalfMs, directionLit, dropLed, faceButtonLed, ledColorAt, menuLed, modeButtonLed, offerLed, padLeds, padPackets, playLed, PULSE_CLOCK_IDLE, sceneShadeStep, stepLeds, takeLeds, trackLeds, type PulseClock } from "../ui/leds.ts";
 import { plotAmount, plotMinus } from "../ui/digits.ts";
 import {
   CHAR_W,
@@ -255,10 +255,6 @@ let sentPads: string[] = [];
 const ledOut = new Map<number, number[]>();
 /** Pad packets still owed, one per drain, so a pulse arms after its colour has latched. */
 const padQueue = new Map<number, number[][]>();
-/** Last channel-0 colour handed to the device, per pad index. */
-const latchedPad: Array<number | null> = [];
-/** Last channel-0 colour handed to a step button. */
-const latchedStep: Array<number | null> = [];
 const pendingClocks: number[][] = [];
 const LED_BUDGET = 16;
 let sentTracks: number[] = [];
@@ -541,10 +537,11 @@ function paintLeds(): void {
   const tick = session.tick;
   stepLeds(session.project, session.ui.context).forEach((led, index) => {
     const note = 16 + index;
-    const key = padPackets(note, led).map((packet) => packet.join(",")).join(";");
+    const packets = padPackets(note, led);
+    const key = packets.map((packet) => packet.join(",")).join(";");
     if (sentSteps[index] !== key) {
       sentSteps[index] = key;
-      padQueue.set(note, padBlinkSteps(note, led, latchedStep[index] ?? null));
+      padQueue.set(note, packets);
     }
     const queued = padQueue.get(note);
     if (!queued?.length) return;
@@ -573,10 +570,11 @@ function paintLeds(): void {
   });
   padLeds(session.project, session.ui.mode, session.ui, tick).forEach((led, index) => {
     const note = 68 + index;
-    const key = padPackets(note, led).map((packet) => packet.join(",")).join(";");
+    const packets = padPackets(note, led);
+    const key = packets.map((packet) => packet.join(",")).join(";");
     if (sentPads[index] !== key) {
       sentPads[index] = key;
-      padQueue.set(note, padBlinkSteps(note, led, latchedPad[index] ?? null));
+      padQueue.set(note, packets);
     }
     const queued = padQueue.get(note);
     if (!queued?.length) return;
@@ -627,8 +625,6 @@ function drainLeds(): void {
     const queued = padQueue.get(note);
     const head = queued?.[0];
     if (!head || head[1] !== packet[1] || head[3] !== packet[3]) continue;
-    if (packet[1] === 0x90 && note >= 16 && note <= 31) latchedStep[note - 16] = packet[3];
-    if (packet[1] === 0x90 && note >= 68 && note <= 99) latchedPad[note - 68] = packet[3];
     queued.shift();
     if (!queued.length) {
       padQueue.delete(note);
@@ -701,8 +697,6 @@ export function init(): void {
   sentPads = [];
   ledOut.clear();
   padQueue.clear();
-  latchedPad.length = 0;
-  latchedStep.length = 0;
   pendingClocks.length = 0;
   sentTracks = [];
   sentMenu = -1;

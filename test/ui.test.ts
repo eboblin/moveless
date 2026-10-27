@@ -10,7 +10,7 @@ import { parseStored, serializeStored } from "../src/core/persist.ts";
 import { createSet, journalPadIds, journalPageCount, launchScene, record } from "../src/core/performance.ts";
 import { generatePhrase } from "../src/core/phrase.ts";
 import { bindingFor, lanePages, mixerPage, pageCount, pageGroup, pageGroupColor, pagesFor, scopeIncludesPage } from "../src/core/pages.ts";
-import { LED, advancePulseClock, blinkHalfMs, directionLit, dropLed, faceButtonLed, ledColorAt, menuLed, modeButtonLed, offColor, offerLed, padBlinkSteps, padLeds, padPackets, PLAY_LED_ON, playLed, PULSE_CLOCK_IDLE, sceneShadeStep, shadeColor, stepLed, stepLeds, takeLeds, trackLeds } from "../src/ui/leds.ts";
+import { LED, advancePulseClock, blinkHalfMs, directionLit, dropLed, faceButtonLed, ledColorAt, menuLed, modeButtonLed, offColor, offerLed, padLeds, padPackets, PLAY_LED_ON, playLed, PULSE_CLOCK_IDLE, sceneShadeStep, shadeColor, stepLed, stepLeds, takeLeds, trackLeds } from "../src/ui/leds.ts";
 import { DIGIT_H, displayAmount, fractionFromLabel, plotAmount } from "../src/ui/digits.ts";
 import { lettersWidth, plotLetters } from "../src/ui/letters.ts";
 import { CAPTION_GAP, CAPTION_LANE_Y, CAPTION_OUTLINE, CAPTION_PAGE_Y, CAPTION_SINGLE_Y, CHAR_W, DIGIT_Y, FONT_H, HEADER_H, HEIGHT, NAME_Y, PAGER_Y, PARAM_COL_W, PARAM_H, SEP_Y, TITLE_Y, VALUE_Y, VIZ_H, WIDTH, loadWidth, pageTitlePaintKey, pageTitleTravel, pixel, renderScreen, type Screen } from "../src/ui/screen.ts";
@@ -454,6 +454,11 @@ describe("pages and leds", () => {
     assert.equal(ledColorAt(step, 0, tempo), step.color);
     assert.equal(ledColorAt(step, half, tempo), step.blinkTo ?? LED.off);
     assert.equal(ledColorAt(step, half * 2, tempo), step.color);
+    assert.deepEqual(padPackets(16, step), [
+      [0x09, 0x90, 16, LED.white],
+      [0x09, 0x90, 16, 66],
+      [0x09, 0x99, 16, LED.red],
+    ]);
     const project = { ...defaultProject(), wander: "fast" as const };
     const wheel = padLeds(project, "journal", { wheelTouch: true, context: "kick", page: 0 });
     const capture = padLeds(project, "journal", { sampleHeld: true });
@@ -464,10 +469,14 @@ describe("pages and leds", () => {
     ] as const;
     for (const [note, lit] of pads) {
       assert.equal(lit.blink, true);
-      assert.deepEqual(padPackets(note, lit), [
-        [0x09, 0x90, note, lit.color],
-        [0x09, 0x99, note, lit.blinkTo ?? LED.off],
-      ]);
+      const packets = padPackets(note, lit);
+      const pulse = packets[packets.length - 1];
+      assert.equal(pulse[1], 0x99);
+      assert.equal(pulse[2], note);
+      assert.equal(pulse[3], lit.color);
+      assert.notEqual(pulse[3], 0);
+      assert.ok(packets.slice(0, -1).every((packet) => packet[1] === 0x90 && packet[2] === note && packet[3] !== 0));
+      if (lit.blinkTo) assert.ok(packets.some((packet) => packet[1] === 0x90 && packet[3] === lit.blinkTo));
     }
     assert.equal(capture[1].blink, false);
     assert.equal(capture[1].color, LED.yellow);
@@ -516,50 +525,60 @@ describe("pages and leds", () => {
     assert.deepEqual(retimed.packets, []);
   });
 
-  it("pokes a pad before arming its blink, including one that was dim", () => {
+  it("arms a blink with the visible colour on the pulse channel", () => {
     const led = { family: "yellow" as const, color: 3, blink: true, blinkTo: offColor(3) };
-    const fresh = padBlinkSteps(92, led, null);
-    assert.deepEqual(fresh, [
-      [0x09, 0x90, 92, offColor(3)],
-      [0x09, 0x90, 92, 3],
-      [0x09, 0x99, 92, offColor(3)],
-    ]);
-    const bright = padBlinkSteps(92, led, 3);
-    assert.deepEqual(bright, [
-      [0x09, 0x90, 92, offColor(3)],
-      [0x09, 0x90, 92, 3],
-      [0x09, 0x99, 92, offColor(3)],
-    ]);
-    const dim = padBlinkSteps(92, led, offColor(3));
-    assert.deepEqual(dim, [
+    assert.deepEqual(padPackets(92, led), [
       [0x09, 0x90, 92, LED.white],
-      [0x09, 0x90, 92, 3],
+      [0x09, 0x90, 92, offColor(3)],
+      [0x09, 0x99, 92, 3],
+    ]);
+    const cleared = { family: "yellow" as const, color: LED.red, blink: true, blinkTo: 66 };
+    assert.deepEqual(padPackets(92, cleared), [
+      [0x09, 0x90, 92, LED.white],
+      [0x09, 0x90, 92, 66],
+      [0x09, 0x99, 92, LED.red],
+    ]);
+    const step = stepLed(defaultProject(), "bass", "bass");
+    assert.deepEqual(padPackets(17, step), [
+      [0x09, 0x90, 17, LED.white],
+      [0x09, 0x90, 17, offColor(LED.yellow)],
+      [0x09, 0x99, 17, LED.yellow],
+    ]);
+    const locked = stepLed({ ...defaultProject(), lock: { ...defaultProject().lock, bass: true } }, "bass", "bass");
+    assert.deepEqual(padPackets(17, locked), [
+      [0x09, 0x90, 17, LED.white],
+      [0x09, 0x90, 17, 104],
+      [0x09, 0x99, 17, LED.lock],
+    ]);
+    const dimmed = { family: "yellow" as const, color: offColor(3), blink: true, blinkTo: LED.off };
+    const dimPackets = padPackets(92, dimmed);
+    assert.deepEqual(dimPackets, [
+      [0x09, 0x90, 92, LED.white],
+      [0x09, 0x90, 92, 124],
       [0x09, 0x99, 92, offColor(3)],
     ]);
-    const cleared = padBlinkSteps(92, { family: "yellow", color: LED.red, blink: true, blinkTo: 66 }, LED.red);
-    assert.deepEqual(cleared[0], [0x09, 0x90, 92, 66]);
-    assert.deepEqual(cleared[2], [0x09, 0x99, 92, 66]);
+    assert.ok(dimPackets.every((packet) => packet[3] !== 0));
   });
 
   it("drains a full pad repaint without dropping colours or pulsing early", () => {
     const out = new Map<number, number[]>();
     for (let note = 68; note < 100; note++) offerLed(out, [0x09, 0x90, note, 0]);
-    offerLed(out, [0x09, 0x90, 68, 14]);
-    offerLed(out, [0x09, 0x99, 68, offColor(14)]);
+    offerLed(out, [0x09, 0x90, 68, offColor(14)]);
+    offerLed(out, [0x09, 0x99, 68, 14]);
     const first = takeLeds(out, 16);
     assert.equal(first.length, 16);
     assert.ok(first.every((packet) => packet[1] === 0x90));
-    assert.equal(first[0][3], 14);
+    assert.equal(first[0][3], offColor(14));
     const second = takeLeds(out, 16);
     assert.equal(second.length, 16);
     assert.ok(second.every((packet) => packet[1] === 0x90));
-    assert.deepEqual(takeLeds(out, 16), [[0x09, 0x99, 68, offColor(14)]]);
+    assert.deepEqual(takeLeds(out, 16), [[0x09, 0x99, 68, 14]]);
 
     const stopped = new Map<number, number[]>();
-    offerLed(stopped, [0x09, 0x90, 68, 3]);
-    offerLed(stopped, [0x09, 0x99, 68, offColor(3)]);
+    offerLed(stopped, [0x09, 0x90, 68, offColor(3)]);
+    offerLed(stopped, [0x09, 0x99, 68, 3]);
     dropLed(stopped, 0x99, 68);
-    assert.deepEqual(takeLeds(stopped, 16), [[0x09, 0x90, 68, 3]]);
+    assert.deepEqual(takeLeds(stopped, 16), [[0x09, 0x90, 68, offColor(3)]]);
   });
 });
 

@@ -35,6 +35,15 @@ export const LED = {
 /** Dark partner of the standard red. Pure red 127 has none of its own. */
 const DIM_RED = 66;
 
+/** Dark navy partner of lock blue. The 1–26 table and red do not cover 125. */
+const DIM_LOCK = 104;
+
+/**
+ * Near-black palette index. Channel 0 with velocity 0 clears the LED and
+ * stops a pulse, so a blink cannot latch black itself.
+ */
+const NEAR_OFF = 124;
+
 export type LedFamily = "red" | "yellow" | "purple" | "lock" | "green" | "off";
 
 export interface Led {
@@ -382,48 +391,51 @@ function pageLed(context: ContextId, index: number, current: boolean): Led {
 }
 
 /**
- * Pad MIDI. Channel 0 sets the colour and stops a pulse. Channel 9 is Push's
- * pulsing quarter: the velocity is the other colour. The device latches the
- * channel-0 colour only after that message has left, so a pulse queued beside
- * its own colour waits for the next drain. Move's MIDI out holds 20 messages
- * per audio block; a full pad repaint has to be drained across blocks or the
- * dropped colour leaves the pulse on the previous page.
+ * Pad MIDI. Channel 0 sets the colour and stops a pulse. A blink latches its
+ * dim end on channel 0, then channel 9 carries the colour that stays visible.
+ * The mirror keeps only the last note-on, so that visible colour has to be
+ * the pulse velocity.
+ *
+ * The device latches a channel-0 colour only when it differs from the colour
+ * the pad is already holding, and only after that message has left. A pulse
+ * aimed at the colour the pad already shows never leaves it. The dim write
+ * is therefore preceded by a third colour, and each step waits for the next
+ * drain. Move's MIDI out holds 20 messages per audio block; a full pad
+ * repaint has to be drained across blocks or the dropped colour leaves the
+ * pulse on the previous page.
  */
 const PAD_NOTE_ON = 0x90;
 const PAD_PULSE = 0x99;
 
+/** Dim end of a blink whose model says off. Never zero: that velocity clears the pulse. */
+function pulseTrough(color: number): number {
+  if (color === LED.red) return DIM_RED;
+  if (color === LED.lock) return DIM_LOCK;
+  const partner = offColor(color);
+  if (partner !== LED.off) return partner;
+  return color === NEAR_OFF ? 123 : NEAR_OFF;
+}
+
+function blinkTrough(led: Led): number {
+  if (led.blinkTo) return led.blinkTo;
+  return pulseTrough(led.color);
+}
+
+/** A colour that is neither the bright end nor the dim end, so the dim write changes the latch. */
+function pokeColor(bright: number, trough: number): number {
+  if (bright !== LED.white && trough !== LED.white) return LED.white;
+  if (bright !== 3 && trough !== 3) return 3;
+  return 1;
+}
+
 export function padPackets(note: number, led: Led): number[][] {
-  const rest: number[] = [0x09, PAD_NOTE_ON, note, led.color];
-  if (!led.blink) return [rest];
-  return [rest, [0x09, PAD_PULSE, note, led.blinkTo ?? LED.off]];
-}
-
-/**
- * Packets that arm one pad, one per drain. Channel 0 latches a colour only when it
- * differs from the one the pad is holding, and the pulse that follows uses that
- * latch as its start. A dim pad is already holding the colour it would blink
- * toward, so the bright colour has to arrive from some third colour or the pulse
- * never leaves the dim.
- */
-export function padBlinkSteps(note: number, led: Led, latched: number | null): number[][] {
-  const color = led.color;
-  if (!led.blink) return [[0x09, PAD_NOTE_ON, note, color]];
-  const second = led.blinkTo ?? LED.off;
-  const steps: number[][] = [];
-  if (second !== 0 && second !== color) {
-    const poke = latched === second ? thirdColor(color, second) : second;
-    steps.push([0x09, PAD_NOTE_ON, note, poke]);
-  }
-  steps.push([0x09, PAD_NOTE_ON, note, color]);
-  steps.push([0x09, PAD_PULSE, note, second]);
-  return steps;
-}
-
-/** A colour that is neither the pulse start nor the dim it is already showing. */
-function thirdColor(color: number, second: number): number {
-  if (LED.white !== color && LED.white !== second) return LED.white;
-  if (LED.off !== color && LED.off !== second) return LED.off;
-  return 3 !== color && 3 !== second ? 3 : 1;
+  if (!led.blink) return [[0x09, PAD_NOTE_ON, note, led.color]];
+  const trough = blinkTrough(led);
+  return [
+    [0x09, PAD_NOTE_ON, note, pokeColor(led.color, trough)],
+    [0x09, PAD_NOTE_ON, note, trough],
+    [0x09, PAD_PULSE, note, led.color],
+  ];
 }
 
 /** Latest unsent LED packet per status+note. A newer offer replaces the old one in place. */
