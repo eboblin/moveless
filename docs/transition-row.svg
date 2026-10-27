@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 872 148" role="img">
+  <title>Transition row. Left four pads yellow: Now, Fast, Medium, Slow. Right four pads purple: Off, Fast, Medium, Slow.</title>
+  <style>
+    text { font-family: ui-sans-serif, system-ui, sans-serif; }
+  </style>
+  <rect x="8" y="8" width="424" height="28" rx="6" fill="#F5D90A"/>
+  <rect x="440" y="8" width="424" height="28" rx="6" fill="#7A3FF2"/>
+  <text x="220" y="27" text-anchor="middle" font-size="16" font-weight="700" fill="#1a1a1a">Transition</text>
+  <text x="652" y="27" text-anchor="middle" font-size="16" font-weight="700" fill="#ffffff">Wander</text>
+  <g font-size="16" font-weight="700">
+    <rect x="8" y="44" width="100" height="88" rx="10" fill="#F5D90A"/>
+    <text x="58" y="80" text-anchor="middle" fill="#1a1a1a">Now</text>
+    <text x="58" y="104" text-anchor="middle" font-size="13" font-weight="500" fill="#1a1a1a">0 bars</text>
+    <rect x="116" y="44" width="100" height="88" rx="10" fill="#F5D90A"/>
+    <text x="166" y="80" text-anchor="middle" fill="#1a1a1a">Fast</text>
+    <text x="166" y="104" text-anchor="middle" font-size="13" font-weight="500" fill="#1a1a1a">1 bar</text>
+    <rect x="224" y="44" width="100" height="88" rx="10" fill="#F5D90A"/>
+    <text x="274" y="80" text-anchor="middle" fill="#1a1a1a">Medium</text>
+    <text x="274" y="104" text-anchor="middle" font-size="13" font-weight="500" fill="#1a1a1a">4 bars</text>
+    <rect x="332" y="44" width="100" height="88" rx="10" fill="#F5D90A"/>
+    <text x="382" y="80" text-anchor="middle" fill="#1a1a1a">Slow</text>
+    <text x="382" y="104" text-anchor="middle" font-size="13" font-weight="500" fill="#1a1a1a">8 bars</text>
+    <rect x="440" y="44" width="100" height="88" rx="10" fill="#7A3FF2"/>
+    <text x="490" y="92" text-anchor="middle" fill="#ffffff">Off</text>
+    <rect x="548" y="44" width="100" height="88" rx="10" fill="#7A3FF2"/>
+    <text x="598" y="80" text-anchor="middle" fill="#ffffff">Fast</text>
+    <text x="598" y="104" text-anchor="middle" font-size="13" font-weight="500" fill="#ffffff">2 bars</text>
+    <rect x="656" y="44" width="100" height="88" rx="10" fill="#7A3FF2"/>
+    <text x="706" y="80" text-anchor="middle" fill="#ffffff">Medium</text>
+    <text x="706" y="104" text-anchor="middle" font-size="13" font-weight="500" fill="#ffffff">8 bars</text>
+    <rect x="764" y="44" width="100" height="88" rx="10" fill="#7A3FF2"/>
+    <text x="814" y="80" text-anchor="middle" fill="#ffffff">Slow</text>
+    <text x="814" y="104" text-anchor="middle" font-size="13" font-weight="500" fill="#ffffff">16 bars</text>
+  </g>
+</svg>
