@@ -119,16 +119,17 @@ function lampColor(color: number, amount: number): number {
 export function stepLed(project: Project, context: ContextId, lane: PatternId, gate?: number): Led {
   const current = context === lane;
   const family = project.lock[lane] ? "lock" : lane === "fx" ? "green" : laneFamily(lane);
-  // A pattern hit replaces the slow hardware pulse. Mute hides a neighbour; the lane on screen stays lit.
+  // A neighbour silenced by mute or solo stays off. The lane on screen keeps the unmuted hit shades.
+  const silenced = lane === "fx" ? project.mute.fx : !laneHeard(project, lane);
+  if (silenced && (!current || lane === "fx")) return led("off", false);
   if (gate !== undefined && lane !== "fx") {
-    if (!current && project.mute[lane]) return led("off", false);
     const color = lampColor(lampHue(family), laneLampAmount(current, gate));
     if (color === LED.off) return led("off", false);
     return { family, color, blink: false };
   }
   if (current) return led(family, true);
   if (lane === "fx") {
-    if (project.mute.fx || family !== "green") return led(project.mute.fx ? "off" : family, false);
+    if (family !== "green") return led(family, false);
     return { family, color: lampColor(COLOR.green, 0.5), blink: false };
   }
   if (!laneHeard(project, lane)) return led("off", false);

@@ -302,10 +302,9 @@ describe("pages and leds", () => {
     project.mute.bass = true;
     assert.equal(stepLed(project, "bass", "bass").family, "yellow");
     assert.equal(stepLed(project, "bass", "bass").blink, true);
-    assert.equal(stepLed(project, "bass", "bass").blinkTo, undefined);
     project.mute.kick = true;
+    assert.equal(stepLed(project, "kick", "kick").family, "red");
     assert.equal(stepLed(project, "kick", "kick").blink, true);
-    assert.equal(stepLed(project, "kick", "kick").blinkTo, undefined);
     project.lock.bass = true;
     assert.equal(stepLed(project, "bass", "bass").family, "lock");
     assert.equal(stepLed(project, "bass", "bass").blink, true);
@@ -318,6 +317,8 @@ describe("pages and leds", () => {
     assert.equal(stepLed(project, "kick", "fx").family, "green");
     assert.equal(stepLed(project, "kick", "kick").family, "red");
     assert.equal(stepLed(project, "kick", "kick").blink, true);
+    assert.equal(stepLed(project, "hat", "hat").family, "red");
+    assert.equal(stepLed(project, "hat", "hat").blink, true);
     assert.equal(stepLed(project, "kick", "hat").family, "red");
     assert.equal(stepLed(project, "kick", "hat").blink, false);
     assert.equal(stepLed(project, "bass", "bass").family, "lock");
@@ -345,7 +346,16 @@ describe("pages and leds", () => {
     assert.equal(stepLed(project, "kick", "snare", 1).family, "off");
     project.mute.kick = true;
     assert.equal(stepLed(project, "kick", "kick", 0).color, shadeColor(1, 0.5));
-    assert.equal(stepLed(project, "kick", "kick", 0).blink, false);
+    assert.equal(stepLed(project, "kick", "kick", 1).color, 1);
+    assert.equal(stepLed(project, "kick", "kick", 1).blink, false);
+    project.mute.kick = false;
+    project.mute.snare = false;
+    project.solo.snare = true;
+    assert.equal(stepLed(project, "kick", "kick", 1).color, 1);
+    assert.equal(stepLed(project, "kick", "kick", 1).blink, false);
+    assert.equal(stepLed(project, "snare", "kick", 1).family, "off");
+    assert.equal(stepLed(project, "snare", "snare", 1).color, 1);
+    project.solo.snare = false;
     project.lock.lead = true;
     assert.equal(stepLed(project, "lead", "lead", 0).color, shadeColor(20, 0.5));
     assert.equal(stepLed(project, "lead", "lead", 1).color, 20);
