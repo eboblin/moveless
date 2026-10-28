@@ -161,13 +161,14 @@ export interface PadSurface {
  * current working scene. Where those pads are showing, Sample lifts the first 24 patterns
  * one row and puts Transition and Wander on the bottom row.
  * Jog touch or a latched jog click shows randomize instead, so the Sample row stays hidden.
- * Mixer and DJ FX take every pad. On the purple lane the jog still draws the page row,
- * and the randomize rows stay off.
+ * Mixer and DJ FX take every pad. On the purple lane the same latch draws the page row
+ * and leaves the randomize rows off.
  */
 export function padLeds(project: Project, mode: "journal" | "set", surface?: PadSurface, tick = 0): Led[] {
   const context = surface?.context ?? "kick";
   const page = surface?.page ?? 0;
   const onAux = context === "aux" || surface?.heldContext === "aux";
+  const auxPages = context === "aux" && !!(surface?.wheelTouch || surface?.randomizeLatched);
   const scenes = scenePadLeds(project, mode, tick, surface?.journalPage ?? 0, surface?.copyHeld ?? false);
   if (surface?.face === "mixer") return mutePeekLeds(project);
   if (surface?.face === "deck") return deckPadLeds(scenes, project.deck);
@@ -177,7 +178,7 @@ export function padLeds(project: Project, mode: "journal" | "set", surface?: Pad
     const shown = surface.heldPage ?? surface.lanePages?.[surface.heldContext] ?? (surface.heldContext === context ? page : -1);
     leds = pageOverlay(scenes, surface.heldContext, shown, surface.heldContext === "aux" ? 1 : 2);
   } else {
-    leds = context === "aux" && surface?.wheelTouch ? pageOverlay(scenes, "aux", page, 1) : scenes;
+    leds = auxPages ? pageOverlay(scenes, "aux", page, 1) : scenes;
   }
   if (peekKind(surface ?? {}) === "sample" && patternPadsVisible({ ...surface, context, page })) {
     const lifted = liftPatterns(scenes, project);
@@ -185,7 +186,7 @@ export function padLeds(project: Project, mode: "journal" | "set", surface?: Pad
       const shown = surface.heldPage ?? surface.lanePages?.[surface.heldContext] ?? (surface.heldContext === context ? page : -1);
       return pageOverlay(lifted, surface.heldContext, shown, surface.heldContext === "aux" ? 1 : 2);
     }
-    if (context === "aux" && surface?.wheelTouch) return pageOverlay(lifted, "aux", page, 1);
+    if (auxPages) return pageOverlay(lifted, "aux", page, 1);
     return lifted;
   }
   return leds;

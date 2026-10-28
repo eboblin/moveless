@@ -1888,34 +1888,88 @@ describe("surface", () => {
     assert.equal(padLeds(state.project, state.ui.mode, state.ui)[8].color, 0);
   });
 
-  it("parks the randomize latch on the purple lane and restores it on any other", () => {
-    let state = session();
+  it("latches the page row on the purple lane and leaves the randomize rows off", () => {
+    let state = openAux(session(), 1);
+    const face = padLeds(state.project, state.ui.mode, state.ui);
+    state = reduce(state, { kind: "note", data1: 9, data2: 127 });
+    state = reduce(state, { kind: "cc", data1: 3, data2: 127 });
+    state = reduce(state, { kind: "cc", data1: 3, data2: 0 });
+    state = reduce(state, { kind: "note", data1: 9, data2: 0 });
+    const released = state.ui.wheelReleaseMs ?? 0;
+    state = { ...state, ui: settleWheel(state.ui, released + WHEEL_RELEASE_MS) };
+    assert.equal(state.ui.wheelTouch, false);
+    assert.equal(state.ui.randomizeLatched, true);
+    assert.equal(state.ui.randomizeParked, null);
+    const latched = padLeds(state.project, state.ui.mode, state.ui);
+    assert.deepEqual(latched.slice(24, 32).map((led) => led.color), [8, 14, 22, 16, 0, 0, 0, 0]);
+    assert.equal(latched[25].blink, true);
+    assert.equal(latched[8].color, face[8].color);
+    assert.notEqual(latched[8].color, LED.purple);
+    assert.equal(latched[0].color, face[0].color);
+    state = reduce(state, { kind: "note", data1: 94, data2: 127 });
+    assert.equal(state.ui.page, 2);
+    assert.equal(padLeds(state.project, state.ui.mode, state.ui)[26].blink, true);
+    state = reduce(state, { kind: "cc", data1: 3, data2: 127 });
+    assert.equal(state.ui.randomizeLatched, false);
+    assert.equal(padLeds(state.project, state.ui.mode, state.ui)[24].color, face[24].color);
+
+    state = session();
     state = reduce(state, { kind: "cc", data1: 3, data2: 127 });
     state = reduce(state, { kind: "note", data1: 31, data2: 127 });
     assert.equal(state.ui.heldContext, "aux");
     assert.equal(state.ui.context, "kick");
-    assert.equal(state.ui.randomizeLatched, false);
-    assert.equal(state.ui.randomizeParked, true);
+    assert.equal(state.ui.randomizeLatched, true);
+    assert.equal(state.ui.randomizeParked, null);
     assert.equal(padLeds(state.project, state.ui.mode, state.ui)[24].color, 8);
     assert.notEqual(padLeds(state.project, state.ui.mode, state.ui)[8].color, LED.purple);
     state = reduce(state, { kind: "note", data1: 16, data2: 127 });
     assert.equal(state.ui.heldContext, "kick");
     assert.equal(state.ui.randomizeLatched, true);
-    assert.equal(state.ui.randomizeParked, null);
-
+    assert.equal(padLeds(state.project, state.ui.mode, state.ui)[8].color, LED.purple);
     state = reduce(state, { kind: "note", data1: 16, data2: 0 });
     state = openAux(state, 0);
-    assert.equal(state.ui.randomizeLatched, false);
-    assert.equal(state.ui.randomizeParked, true);
+    assert.equal(state.ui.context, "aux");
+    assert.equal(state.ui.randomizeLatched, true);
+    assert.equal(state.ui.randomizeParked, null);
+    assert.equal(padLeds(state.project, state.ui.mode, state.ui)[24].color, 8);
+    assert.notEqual(padLeds(state.project, state.ui.mode, state.ui)[8].color, LED.purple);
     state = reduce(state, { kind: "cc", data1: 3, data2: 127 });
     assert.equal(state.ui.randomizeLatched, false);
-    assert.equal(state.ui.randomizeParked, false);
     state = reduce(state, { kind: "note", data1: 16, data2: 127 });
     state = reduce(state, { kind: "note", data1: 16, data2: 0 });
     assert.equal(state.ui.context, "kick");
     assert.equal(state.ui.randomizeLatched, false);
     assert.equal(state.ui.randomizeParked, null);
     assert.equal(padLeds(state.project, state.ui.mode, state.ui)[8].color, 0);
+  });
+
+  it("parks the jog latch on mixer and deck", () => {
+    let state = session();
+    state = reduce(state, { kind: "cc", data1: 3, data2: 127 });
+    state = openMixer(state);
+    assert.equal(state.ui.randomizeLatched, false);
+    assert.equal(state.ui.randomizeParked, true);
+    assert.notEqual(padLeds(state.project, state.ui.mode, state.ui)[8].color, LED.purple);
+    state = reduce(state, { kind: "cc", data1: 3, data2: 127 });
+    assert.equal(state.ui.randomizeLatched, false);
+    assert.equal(state.ui.randomizeParked, false);
+    state = reduce(state, { kind: "note", data1: 16, data2: 127 });
+    state = reduce(state, { kind: "note", data1: 16, data2: 0 });
+    assert.equal(state.ui.face, null);
+    assert.equal(state.ui.context, "kick");
+    assert.equal(state.ui.randomizeLatched, false);
+    assert.equal(state.ui.randomizeParked, null);
+    assert.equal(padLeds(state.project, state.ui.mode, state.ui)[8].color, 0);
+
+    state = openDeck(reduce(session(), { kind: "cc", data1: 3, data2: 127 }));
+    assert.equal(state.ui.randomizeLatched, false);
+    assert.equal(state.ui.randomizeParked, true);
+    state = reduce(state, { kind: "note", data1: 16, data2: 127 });
+    state = reduce(state, { kind: "note", data1: 16, data2: 0 });
+    assert.equal(state.ui.face, null);
+    assert.equal(state.ui.randomizeLatched, true);
+    assert.equal(state.ui.randomizeParked, null);
+    assert.equal(padLeds(state.project, state.ui.mode, state.ui)[8].color, LED.purple);
   });
 
   it("gives mixer and dj their own pads, and a step leaves the latch", () => {

@@ -148,7 +148,7 @@ function onPad(session: Session, index: number, press: boolean): Session {
   const randomize = !auxHidesRandomize(session.ui) && (session.ui.wheelTouch || session.ui.randomizeLatched);
   if (randomize) return onRandomizePad(session, row, col);
   const holdingAux = session.ui.heldContext === "aux";
-  if (!session.ui.heldContext && session.ui.context === "aux" && session.ui.wheelTouch && top) {
+  if (!session.ui.heldContext && session.ui.context === "aux" && (session.ui.wheelTouch || session.ui.randomizeLatched) && top) {
     if (col >= pageCount("aux")) return session;
     return { ...session, ui: settleRandomize(rememberPage(session.ui, "aux", col)) };
   }

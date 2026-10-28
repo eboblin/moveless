@@ -86,11 +86,11 @@ export interface UiState {
   wheelTouch: boolean;
   /** Release is pending until this time, so a contact bounce does not drop the wheel layer. */
   wheelReleaseMs: number | null;
-  /** Jog click leaves the randomize pads up after the touch ends. */
+  /** Jog click leaves the pad menu up after the touch ends. The purple lane keeps the page row. */
   randomizeLatched: boolean;
   /**
-   * Latch saved while the purple lane forces it off. Null while the latch is live.
-   * Leaving for any other lane writes this back.
+   * Latch saved while mixer or DJ FX forces it off. Null while the latch is live.
+   * Leaving either face writes this back.
    */
   randomizeParked: boolean | null;
   /** The randomize row last pressed, until its caption times out. */
@@ -272,14 +272,19 @@ function blankLanePages(): Record<ContextId, number> {
   return pages;
 }
 
-/** Purple lane, mixer, and DJ FX ignore the randomize menu. A held purple step counts. */
-export function auxHidesRandomize(ui: { context?: string | null; heldContext?: string | null; face?: FaceMode | null }): boolean {
-  return ui.context === "aux" || ui.heldContext === "aux" || ui.face === "mixer" || ui.face === "deck";
+/** Mixer and DJ FX take the pads, so the jog latch waits there. */
+export function faceHidesRandomize(ui: { face?: FaceMode | null }): boolean {
+  return ui.face === "mixer" || ui.face === "deck";
 }
 
-/** Park the jog latch on the purple lane and put it back on any other lane. */
+/** Purple lane, mixer, and DJ FX do not draw the randomize rows. A held purple step counts. */
+export function auxHidesRandomize(ui: { context?: string | null; heldContext?: string | null; face?: FaceMode | null }): boolean {
+  return ui.context === "aux" || ui.heldContext === "aux" || faceHidesRandomize(ui);
+}
+
+/** Park the jog latch on mixer and DJ FX, and put it back on any other face. */
 export function settleRandomize(ui: UiState): UiState {
-  if (auxHidesRandomize(ui)) {
+  if (faceHidesRandomize(ui)) {
     if (ui.randomizeParked !== null) return ui.randomizeLatched ? { ...ui, randomizeLatched: false } : ui;
     return { ...ui, randomizeParked: ui.randomizeLatched, randomizeLatched: false };
   }
@@ -287,7 +292,7 @@ export function settleRandomize(ui: UiState): UiState {
   return { ...ui, randomizeLatched: ui.randomizeParked, randomizeParked: null };
 }
 
-/** Jog click. On the purple lane this flips the parked value and the pads stay on the lane. */
+/** Jog click. Mixer and DJ FX flip the parked value and keep their own pads. */
 export function toggleRandomize(ui: UiState): UiState {
   const settled = settleRandomize(ui);
   if (settled.randomizeParked !== null) {
