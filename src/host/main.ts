@@ -10,7 +10,7 @@ import { assembleDeck, behaviorOf, formatDeckCommand, isDeckGroup } from "../cor
 import { formatBus, packPhraseBody, parseMeterPage } from "../dsp/voice.ts";
 import { midiMessage, reduce, settleTrackPeek, type Session } from "../ui/input.ts";
 import { CAPTURE_CC, DOWN_CC, LANES, MENU_CC, MUTE_CC, PLAY_CC, SAMPLE_CC, UP_CC } from "../core/types.ts";
-import { advancePulseClock, blinkHalfMs, directionLit, dropLed, faceButtonLed, ledColorAt, menuLed, modeButtonLed, offerLed, padLeds, padPackets, playLed, PULSE_CLOCK_IDLE, sceneShadeStep, stepLampKey, stepLeds, takeLeds, trackLeds, type PulseClock } from "../ui/leds.ts";
+import { advancePulseClock, blinkHalfMs, directionLit, dropLed, faceButtonLed, ledColorAt, menuLed, modeButtonLed, offerLed, padLeds, padPackets, playLed, PULSE_CLOCK_IDLE, sceneShadeStep, STEP_ICON_CC, stepIconColors, stepLampKey, stepLeds, takeLeds, trackLeds, type PulseClock } from "../ui/leds.ts";
 import { plotAmount, plotMinus } from "../ui/digits.ts";
 import {
   CHAR_W,
@@ -261,6 +261,7 @@ const padQueue = new Map<number, number[][]>();
 const pendingClocks: number[][] = [];
 const LED_BUDGET = 16;
 let sentTracks: number[] = [];
+let sentIcons: number[] = [];
 let sentMenu = -1;
 let sentPlay = -1;
 let sentMute = -1;
@@ -589,6 +590,11 @@ function paintLeds(levels?: readonly number[]): void {
     if (!queued?.length) return;
     offerLed(ledOut, queued[0]);
     if (queued[0][1] === 0x90) dropLed(ledOut, 0x99, note);
+  });
+  stepIconColors(session.project, session.ui.context, session.ui.heldContext).forEach((color, index) => {
+    if (sentIcons[index] === color) return;
+    sentIcons[index] = color;
+    offerLed(ledOut, [0x0b, 0xb0, STEP_ICON_CC + index, color]);
   });
   const menu = menuLed(session.ui.mode);
   if (sentMenu !== menu) {

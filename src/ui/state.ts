@@ -317,6 +317,7 @@ export function rememberPage(ui: UiState, context: ContextId, page: number): UiS
     context,
     page: clamped,
     lanePages: { ...ui.lanePages, [context]: clamped },
+    heldPage: ui.heldContext === context ? clamped : ui.heldPage,
     focus: moved ? null : ui.focus,
     detent: moved ? null : ui.detent,
     travel: moved ? null : ui.travel,

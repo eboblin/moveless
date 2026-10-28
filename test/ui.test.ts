@@ -10,7 +10,7 @@ import { parseStored, serializeStored } from "../src/core/persist.ts";
 import { createSet, journalPadIds, journalPageCount, launchScene, record } from "../src/core/performance.ts";
 import { generatePhrase, lanePattern } from "../src/core/phrase.ts";
 import { bindingFor, deckPage, lanePages, mixerPage, pageCount, pageGroup, pageGroupColor, pagesFor, scopeIncludesPage } from "../src/core/pages.ts";
-import { LED, advancePulseClock, blinkHalfMs, directionLit, dropLed, faceButtonLed, ledColorAt, menuLed, modeButtonLed, offColor, offerLed, padLeds, padPackets, PLAY_LED_ON, playLed, PULSE_CLOCK_IDLE, sceneShadeStep, shadeColor, stepLampKey, stepLed, stepLeds, takeLeds, trackLeds } from "../src/ui/leds.ts";
+import { LED, advancePulseClock, blinkHalfMs, directionLit, dropLed, faceButtonLed, ledColorAt, menuLed, modeButtonLed, offColor, offerLed, padLeds, padPackets, PLAY_LED_ON, playLed, PULSE_CLOCK_IDLE, sceneShadeStep, shadeColor, stepIconColors, stepLampKey, stepLed, stepLeds, takeLeds, trackLeds } from "../src/ui/leds.ts";
 import { DIGIT_H, displayAmount, fractionFromLabel, plotAmount } from "../src/ui/digits.ts";
 import { lettersWidth, plotLetters } from "../src/ui/letters.ts";
 import { CAPTION_GAP, CAPTION_LANE_Y, CAPTION_OUTLINE, CAPTION_PAGE_Y, CAPTION_SINGLE_Y, CHAR_W, DIGIT_Y, FONT_H, HEADER_H, HEIGHT, MIX_METER_BOTTOM, MIX_METER_TOP, MIX_METER_X, NAME_Y, PAGER_Y, PARAM_COL_W, PARAM_H, SEP_Y, TITLE_Y, VALUE_Y, VIZ_H, WIDTH, loadWidth, pageTitlePaintKey, pageTitleTravel, pixel, renderScreen, type Screen } from "../src/ui/screen.ts";
@@ -375,6 +375,28 @@ describe("pages and leds", () => {
     project.working.kick.gen2.hits = 0;
     assert.equal(lanePattern(project, "kick", 0), 1);
     assert.equal(lanePattern(project, "kick", 1), 0);
+  });
+
+  it("marks the selected lane on the icon under its step, at the darkest shade", () => {
+    const project = defaultProject();
+    const kick = stepIconColors(project, "kick");
+    assert.equal(kick[0], offColor(1));
+    assert.equal(kick.filter((color) => color !== LED.off).length, 1);
+    assert.equal(stepIconColors(project, "bass")[4], offColor(LED.yellow));
+    assert.equal(stepIconColors(project, "fx")[7], offColor(9));
+    assert.equal(stepIconColors(project, "aux")[15], offColor(LED.purple));
+    project.lock.lead = true;
+    assert.equal(stepIconColors(project, "lead")[5], offColor(20));
+    project.mute.kick = true;
+    assert.equal(stepIconColors(project, "kick")[0], offColor(1));
+    const pressed = reduce(session(), { kind: "note", data1: 20, data2: 127 });
+    assert.equal(pressed.ui.context, "bass");
+    assert.equal(pressed.ui.heldContext, "bass");
+    assert.equal(stepLeds(pressed.project, pressed.ui.context)[4].blink, true);
+    assert.equal(stepLeds(pressed.project, pressed.ui.context)[0].blink, false);
+    const held = stepIconColors(pressed.project, pressed.ui.context, pressed.ui.heldContext);
+    assert.equal(held[4], offColor(LED.yellow));
+    assert.equal(held[0], LED.off);
   });
 
   it("lights mixer pads in the track colour, and leaves a row dark until it is on", () => {
@@ -832,13 +854,16 @@ describe("surface", () => {
     assert.equal(state.ui.page, 4);
   });
 
-  it("selects a lane on release whether the press was short or long", () => {
+  it("selects a lane on press and drops the page grid on release", () => {
     let state = session();
     state = reduce(state, { kind: "note", data1: 20, data2: 127 });
-    assert.equal(state.ui.context, "kick");
+    assert.equal(state.ui.context, "bass");
     assert.equal(state.ui.heldContext, "bass");
+    assert.equal(stepLeds(state.project, state.ui.context)[4].blink, true);
     state = reduce({ ...state, tick: 10 }, { kind: "note", data1: 20, data2: 0 });
     assert.equal(state.ui.context, "bass");
+    assert.equal(state.ui.heldContext, null);
+    assert.equal(state.ui.pageTitleUntilMs, null);
     state = reduce(state, { kind: "note", data1: 16, data2: 127 });
     state = reduce({ ...state, tick: state.tick + 200 }, { kind: "note", data1: 16, data2: 0 });
     assert.equal(state.ui.context, "kick");
@@ -855,7 +880,7 @@ describe("surface", () => {
     state = reduce(state, { kind: "note", data1: 16, data2: 127 });
     state = reduce(state, { kind: "note", data1: 16, data2: 0 });
     state = reduce(state, { kind: "note", data1: 20, data2: 127 });
-    assert.equal(state.ui.context, "kick");
+    assert.equal(state.ui.context, "bass");
     assert.equal(state.ui.heldContext, "bass");
     assert.equal(state.ui.heldPage, 3);
     const pads = padLeds(state.project, state.ui.mode, state.ui);
@@ -873,7 +898,7 @@ describe("surface", () => {
     assert.equal(state.ui.randomizeLatched, true);
     state = reduce(state, { kind: "note", data1: 20, data2: 127 });
     const latched = padLeds(state.project, state.ui.mode, state.ui);
-    assert.equal(state.ui.context, "kick");
+    assert.equal(state.ui.context, "bass");
     assert.equal(latched[27].blink, true);
     assert.equal(latched[27].color, pageGroupColor("bass", 3));
     assert.equal(latched[25].blink, false);
@@ -902,7 +927,7 @@ describe("surface", () => {
     let state = session();
     state = reduce(state, { kind: "note", data1: 31, data2: 127 });
     assert.equal(state.ui.heldContext, "aux");
-    assert.equal(state.ui.context, "kick");
+    assert.equal(state.ui.context, "aux");
     const held = padLeds(state.project, "journal", state.ui);
     assert.deepEqual(held.slice(24, 32).map((led) => led.color), [8, 14, 22, 16, 0, 0, 0, 0]);
     assert.equal(held[24].blink, true);
@@ -2046,7 +2071,7 @@ describe("surface", () => {
     state = reduce(state, { kind: "cc", data1: 3, data2: 127 });
     state = reduce(state, { kind: "note", data1: 31, data2: 127 });
     assert.equal(state.ui.heldContext, "aux");
-    assert.equal(state.ui.context, "kick");
+    assert.equal(state.ui.context, "aux");
     assert.equal(state.ui.randomizeLatched, true);
     assert.equal(state.ui.randomizeParked, null);
     assert.equal(padLeds(state.project, state.ui.mode, state.ui)[24].color, 8);
@@ -2301,11 +2326,11 @@ describe("surface", () => {
     held = reduce(held, { kind: "note", data1: 16, data2: 0 });
     assert.equal(held.ui.lanePages.aux, mixer);
     held = reduce(held, { kind: "note", data1: 31, data2: 127 });
-    assert.equal(held.ui.context, "kick");
+    assert.equal(held.ui.context, "aux");
     assert.equal(held.ui.heldContext, "aux");
     held = shiftTrack(held, 1);
     assert.deepEqual(held.project.bookmarks[1], { context: "aux", page: mixer });
-    assert.equal(held.ui.context, "kick");
+    assert.equal(held.ui.context, "aux");
     assert.equal(held.ui.heldContext, "aux");
     const saved = parseStored(serializeStored(held.project, { context: held.ui.context, page: held.ui.page, mode: held.ui.mode, playing: false, sampleLatched: false }));
     assert.deepEqual(saved?.project.bookmarks[1], { context: "aux", page: mixer });

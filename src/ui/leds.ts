@@ -154,6 +154,25 @@ export function stepLeds(project: Project, context: ContextId, levels?: readonly
   return out;
 }
 
+/** Icons under the step buttons. CC 16–31, palette colour, output only. */
+export const STEP_ICON_CC = 16;
+
+/**
+ * The icon under the lane on screen, in that lane's colour at the darkest
+ * palette step. A finger down on a step lights it immediately; the latched
+ * lane is only the fallback once the finger is up. The other icons stay off.
+ * The step button keeps its own lamp.
+ */
+export function stepIconColors(project: Project, context: ContextId, held?: ContextId | null): number[] {
+  const shown = held ?? context;
+  return Array.from({ length: STEP_COUNT }, (_, index) => {
+    const id = contextAtStep(index);
+    if (id !== shown) return LED.off;
+    const family = id === "aux" ? "purple" : project.lock[id] ? "lock" : id === "fx" ? "green" : laneFamily(id);
+    return offColor(lampHue(family));
+  });
+}
+
 /** Menu is a white button. Lit in Journal, dark in Set. */
 export function menuLed(mode: "journal" | "set"): number {
   return mode === "journal" ? PLAY_LED_ON : 0;

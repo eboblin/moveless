@@ -106,41 +106,39 @@ function onStep(session: Session, index: number, press: boolean): Session {
   if (press && session.ui.face && !session.ui.faceHeld) session = { ...session, ui: clearFace(session.ui) };
   const step = contextAtStep(index);
   if (!step) return session;
-  if (isLane(step)) {
-    if (session.ui.deleteHeld && press) {
-      return {
-        ...session,
-        project: resetLane(session.project, step),
-        ui: showPageTitle({
-          ...session.ui,
-          heldContext: step,
-          heldPage: session.ui.lanePages[step] ?? 0,
-          focus: null,
-          pageTitleLane: true,
-        }),
-      };
-    }
-  }
   if (!press) {
     if (session.ui.heldContext !== step) return session;
-    const page = session.ui.heldPage ?? session.ui.lanePages[step] ?? 0;
-    const placed = rememberPage(session.ui, step, page);
     return {
       ...session,
-      ui: settleRandomize({ ...placed, heldContext: null, heldPage: null, pageTitleUntilMs: null }),
+      ui: {
+        ...session.ui,
+        heldContext: null,
+        heldPage: null,
+        pageTitleUntilMs: null,
+        pageTitleSlide: null,
+      },
     };
   }
+  const deleting = isLane(step) && session.ui.deleteHeld;
+  const page = session.ui.lanePages[step] ?? 0;
+  const placed = rememberPage(
+    settleRandomize({
+      ...session.ui,
+      focus: deleting || step !== session.ui.context ? null : session.ui.focus,
+    }),
+    step,
+    page,
+  );
   return {
     ...session,
-    ui: showPageTitle(
-      settleRandomize({
-        ...session.ui,
-        heldContext: step,
-        heldPage: session.ui.lanePages[step] ?? 0,
-        focus: step === session.ui.context ? session.ui.focus : null,
-        pageTitleLane: true,
-      }),
-    ),
+    project: deleting ? resetLane(session.project, step) : session.project,
+    ui: showPageTitle({
+      ...placed,
+      heldContext: step,
+      heldPage: placed.page,
+      focus: deleting ? null : placed.focus,
+      pageTitleLane: true,
+    }),
   };
 }
 
