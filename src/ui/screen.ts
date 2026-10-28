@@ -1031,6 +1031,52 @@ function noteBounds(step: number, lengthSteps: number, steps: number): [number, 
   return [start, end];
 }
 
+const columnBook = new WeakMap<TimedEvent[], Uint8Array>();
+
+/** Columns the phrase picture paints. The same spans as {@link paintBar}, with no height. */
+function glyphColumns(events: TimedEvent[], steps: number, melodic: boolean, collapse: boolean): Uint8Array {
+  const cached = columnBook.get(events);
+  if (cached) return cached;
+  const cols = new Uint8Array(WIDTH);
+  for (const glyph of layoutGlyphs(events, steps, melodic, collapse)) fillColumns(cols, glyph.x0, glyph.x1);
+  columnBook.set(events, cols);
+  return cols;
+}
+
+function fillColumns(cols: Uint8Array, x0: number, x1: number): void {
+  const paint = (from: number, to: number) => {
+    const a = Math.max(0, from);
+    const b = Math.min(WIDTH, to);
+    for (let x = a; x < b; x++) cols[x] = 1;
+  };
+  if (x1 <= WIDTH) {
+    paint(x0, x1);
+    return;
+  }
+  paint(x0, WIDTH);
+  const tail = x1 - WIDTH;
+  if (tail > 0) paint(0, tail);
+}
+
+/**
+ * 1 when the playhead sits on ink in this lane's picture.
+ * Chords use the piano roll. Drums, bass and lead use the phrase strip.
+ * Velocity only changes how tall a mark is, so it does not count.
+ */
+export function laneMark(project: Project, phrase: Phrase, lane: LaneId, playhead: number): number {
+  if (playhead < 0) return 0;
+  if (lane === "chords") {
+    const steps = Math.max(1, phrase.steps.chords);
+    const cols = glyphColumns(phrase.lanes.chords, steps, true, false);
+    return cols[columnX(playhead, steps)] ?? 0;
+  }
+  const view = lanePicture(project, phrase, lane, playhead);
+  const steps = Math.max(1, view.steps);
+  const cols = glyphColumns(view.events, steps, isPitched(lane), true);
+  if (view.playhead < 0) return 0;
+  return cols[columnX(view.playhead, steps)] ?? 0;
+}
+
 function paintBar(pixels: Uint8Array, x0: number, x1: number, y0: number, y1: number): void {
   const paint = (from: number, to: number) => {
     const a = Math.max(0, from);

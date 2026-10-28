@@ -9,7 +9,7 @@ import {
   swungStepTick,
   tickToSample,
 } from "./clock.ts";
-import { euclidPattern, generateHits, keptVelocity, patternAt, phraseStepsOf, rotatePattern } from "./events.ts";
+import { euclidPattern, generateHits, keptVelocity, phraseStepsOf, rotatePattern } from "./events.ts";
 import { mixFieldValues } from "./fields.ts";
 import { hash01 } from "./hash.ts";
 import { applyFollowMidi, chordTonePitchClasses, degreeToMidi, generateHarmony, harmonyAt, pitchClassName, scaleOf } from "./harmony.ts";
@@ -426,13 +426,6 @@ function shapeParams(sound: Record<string, number>): { id: string; value: number
   return params;
 }
 
-/** Pattern gate at this step, 0 or 1. The voice, its envelope, and probability do not count. */
-export function lanePattern(project: Project, lane: LaneId, step: number): number {
-  const box = project.working[lane];
-  const gen2 = "gen2" in box ? box.gen2 : null;
-  return patternAt(box.gen1, gen2, laneSteps(project.working, lane, project.global), step);
-}
-
 export function laneSteps(lanes: Lanes, lane: LaneId, global: GlobalSettings): number {
   if (lane === "chords") return sixteenthSteps(global.phrase, global.bar);
   // Bass/lead must loop over the chord phrase, or follow only ever sees the
@@ -648,6 +641,9 @@ function pitchedEvents(
     for (let r = 0; r < count; r++) {
       const extra = shaped ? Math.round((r * whole) / count) : 0;
       const at = hit.step + extra / SIXTEENTH_TICKS;
+      const tick = swungStepTick(hit.step, global.swing) + extra;
+      const heard = noteTicks(lane.length, at, macros, global.bar);
+      const lengthTicks = shaped ? Math.max(1, Math.round(heard / count)) : heard;
       const velocity = keptVelocity(lane.gen1, lane.gen2, hit.generators, global.seed, id, hit.step, r, macro(macros, "velocity"), macro(macros, "probability"), at);
       if (velocity === null) continue;
       const pitchU = evalModulated(withMacro(lane.pitch, macro(macros, "pitch")), at);
@@ -655,12 +651,9 @@ function pitchedEvents(
       const along = shaped ? r / (count - 1) : 0;
       const degree = scaleOffset(pitchU) + Math.round(span * along);
       const desiredMidi = degreeToMidi(degree, scale, rootPc, octaveNumber(octaveU));
-      const tick = swungStepTick(hit.step, global.swing) + extra;
       const harm = harmonyAt(harmony, tick);
       const chordPcs = harm ? chordTonePitchClasses(harm, scale, rootPc) : [];
       const note = Math.max(0, Math.min(127, Math.round(applyFollowMidi(desiredMidi, lane.follow, chordPcs))));
-      const heard = noteTicks(lane.length, at, macros, global.bar);
-      const lengthTicks = shaped ? Math.max(1, Math.round(heard / count)) : heard;
       const sound = soundValues(lane.sound, at, macros);
       const filter = filterValues(lane.filter, at, macros);
       const send = sendValues(lane.send, at, macros);

@@ -2,7 +2,7 @@ import { SAMPLE_RATE, SIXTEENTH_TICKS } from "../core/clock.ts";
 import { defaultProject } from "../core/defaults.ts";
 import { holdNote, latchStamp, releaseChannel, resetLatch, settleLatch } from "../core/latch.ts";
 import { advance, clampJournalPage, heardFx, journalPageCount, sameHeard, wanderCandidates } from "../core/performance.ts";
-import { generatePhrase, lanePattern } from "../core/phrase.ts";
+import { generatePhrase } from "../core/phrase.ts";
 import { loadStoredProject, saveStoredProject, type HostFiles, type StoredUi } from "../core/persist.ts";
 import { phraseLoop, soundMotions } from "../dsp/schedule.ts";
 import { formatFx } from "../dsp/fx.ts";
@@ -28,6 +28,7 @@ import {
   cellTextX,
   deckFrame,
   loadWidth,
+  laneMark,
   nudgePlayhead,
   pageTitlePaintKey,
   pageTitleVisible,
@@ -356,8 +357,10 @@ function screenDelta(): "same" | "full" | "head" {
 }
 
 function laneGates(): readonly number[] {
-  const step = session.playing ? Math.max(0, session.tick) / SIXTEENTH_TICKS : -1;
-  return LANES.map((lane) => (step < 0 ? 0 : lanePattern(session.project, lane, step)));
+  if (!session.playing) return LANES.map(() => 0);
+  const phrase = generatePhrase(session.project);
+  const step = Math.max(0, session.tick) / SIXTEENTH_TICKS;
+  return LANES.map((lane) => laneMark(session.project, phrase, lane, step));
 }
 
 function ledsChanged(gates: readonly number[]): boolean {

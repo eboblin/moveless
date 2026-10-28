@@ -8,12 +8,12 @@ import { modulated } from "../src/core/modulate.ts";
 import { applyMorph } from "../src/core/morph.ts";
 import { parseStored, serializeStored } from "../src/core/persist.ts";
 import { createSet, journalPadIds, journalPageCount, launchScene, record } from "../src/core/performance.ts";
-import { generatePhrase, lanePattern } from "../src/core/phrase.ts";
+import { generatePhrase } from "../src/core/phrase.ts";
 import { bindingFor, deckPage, lanePages, mixerPage, pageCount, pageGroup, pageGroupColor, pagesFor, scopeIncludesPage } from "../src/core/pages.ts";
 import { LED, advancePulseClock, blinkHalfMs, directionLit, dropLed, faceButtonLed, ledColorAt, menuLed, modeButtonLed, offColor, offerLed, padLeds, padPackets, PLAY_LED_ON, playLed, PULSE_CLOCK_IDLE, sceneShadeStep, shadeColor, stepIconColors, stepLampKey, stepLed, stepLeds, takeLeds, trackLeds } from "../src/ui/leds.ts";
 import { DIGIT_H, displayAmount, fractionFromLabel, plotAmount } from "../src/ui/digits.ts";
 import { lettersWidth, plotLetters } from "../src/ui/letters.ts";
-import { CAPTION_GAP, CAPTION_LANE_Y, CAPTION_OUTLINE, CAPTION_PAGE_Y, CAPTION_SINGLE_Y, CHAR_W, DIGIT_Y, FONT_H, HEADER_H, HEIGHT, MIX_METER_BOTTOM, MIX_METER_TOP, MIX_METER_X, NAME_Y, PAGER_Y, PARAM_COL_W, PARAM_H, SEP_Y, TITLE_Y, VALUE_Y, VIZ_H, WIDTH, loadWidth, pageTitlePaintKey, pageTitleTravel, pixel, renderScreen, type Screen } from "../src/ui/screen.ts";
+import { CAPTION_GAP, CAPTION_LANE_Y, CAPTION_OUTLINE, CAPTION_PAGE_Y, CAPTION_SINGLE_Y, CHAR_W, DIGIT_Y, FONT_H, HEADER_H, HEIGHT, MIX_METER_BOTTOM, MIX_METER_TOP, MIX_METER_X, NAME_Y, PAGER_Y, PARAM_COL_W, PARAM_H, SEP_Y, TITLE_Y, VALUE_Y, VIZ_H, WIDTH, laneMark, loadWidth, pageTitlePaintKey, pageTitleTravel, pixel, renderScreen, type Screen } from "../src/ui/screen.ts";
 import { WAVE_HOP, emptyWave, type WaveTape } from "../src/ui/wave.ts";
 import { defaultUi, HOLD_MS, HOLD_TICKS, openSetMode, PAGE_TITLE_MS, PAGE_TITLE_SLIDE_MS, restoreUi, settleWheel, WHEEL_RELEASE_MS, type DetentHold } from "../src/ui/state.ts";
 import { midiMessage, reduce, relDelta, settleTrackPeek, type Session } from "../src/ui/input.ts";
@@ -130,6 +130,16 @@ function shiftTrack(state: Session, index: number): Session {
 function tapTrack(state: Session, index: number): Session {
   const down = reduce(state, { kind: "cc", data1: 40 + index, data2: 127 });
   return reduce({ ...down, tick: down.tick + 10 }, { kind: "cc", data1: 40 + index, data2: 0 });
+}
+
+/** Ink in the phrase band. The separator under it is not part of the picture. */
+function vizInk(pixels: Uint8Array, x: number): boolean {
+  const y0 = HEADER_H;
+  const y1 = HEADER_H + VIZ_H - 2;
+  for (let y = y0; y <= y1; y++) {
+    if (pixels[y * WIDTH + x]) return true;
+  }
+  return false;
 }
 
 describe("pages and leds", () => {
@@ -368,10 +378,36 @@ describe("pages and leds", () => {
     assert.equal(stepLampKey("kick", gates), "4111112");
     assert.equal(stepLampKey("chords", [0, 0, 0, 0, 0, 0, 0]), "1111113");
     project.working.kick.gen1.hits = 4;
-    project.working.kick.gen1.probability = 0;
     project.working.kick.gen2.hits = 0;
-    assert.equal(lanePattern(project, "kick", 0), 1);
-    assert.equal(lanePattern(project, "kick", 1), 0);
+    const phrase = generatePhrase(project);
+    const drawn = renderScreen(project, { ...defaultUi(), context: "kick" }, 0, false);
+    const steps = phrase.steps.kick;
+    for (let x = 0; x < WIDTH; x++) {
+      const step = (x * steps) / WIDTH;
+      assert.equal(laneMark(project, phrase, "kick", step), vizInk(drawn.pixels, x) ? 1 : 0);
+    }
+    project.working.kick.gen1.velocity = modulated(0);
+    const silent = generatePhrase(project);
+    const silentScreen = renderScreen(project, { ...defaultUi(), context: "kick" }, 0, false);
+    assert.equal(laneMark(project, silent, "kick", 0), 1);
+    assert.equal(vizInk(silentScreen.pixels, 0), true);
+
+    project.working.bass.gen1.hits = 4;
+    project.working.bass.gen2.hits = 0;
+    project.working.bass.length = modulated(0.25);
+    const bass = generatePhrase(project);
+    const bassScreen = renderScreen(project, { ...defaultUi(), context: "bass" }, 0, false);
+    for (let x = 0; x < WIDTH; x++) {
+      const step = (x * bass.steps.bass) / WIDTH;
+      assert.equal(laneMark(project, bass, "bass", step), vizInk(bassScreen.pixels, x) ? 1 : 0);
+    }
+    project.working.chords.gen1.hits = 4;
+    const chords = generatePhrase(project);
+    const chordScreen = renderScreen(project, { ...defaultUi(), context: "chords" }, 0, false);
+    for (let x = 0; x < WIDTH; x++) {
+      const step = (x * chords.steps.chords) / WIDTH;
+      assert.equal(laneMark(project, chords, "chords", step), vizInk(chordScreen.pixels, x) ? 1 : 0);
+    }
   });
 
   it("marks the selected lane on the icon under its step, at the darkest shade", () => {
