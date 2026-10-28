@@ -3580,7 +3580,7 @@ describe("page title", () => {
     assertOutline(snapped, snappedBare, [captionAt(next)]);
   });
 
-  it("outlines a button page title and writes the lane above it when the lane changes", () => {
+  it("outlines a button page title and writes the lane above the section while the button is held", () => {
     const paint = (state: ReturnType<typeof session>) => {
       const until = (state.ui.pageTitleUntilMs ?? 0) - 1;
       const shown = renderScreen(state.project, state.ui, 0, false, until);
@@ -3619,17 +3619,17 @@ describe("page title", () => {
     const droppedBare = renderScreen(state.project, { ...state.ui, pageTitleUntilMs: null }, 0, false, Date.now());
     assert.deepEqual(dropped.pixels, droppedBare.pixels);
     state = reduce(state, { kind: "note", data1: 20, data2: 127 });
-    assert.equal(state.ui.pageTitleLane, false);
+    assert.equal(state.ui.pageTitleLane, true);
     assert.equal(state.ui.pageTitleSlide, null);
     frame = paint(state);
-    assertOutline(frame.shown, frame.bare, [captionAt(page)]);
+    assertOutline(frame.shown, frame.bare, [captionAt("BASS", CAPTION_LANE_Y), captionAt(page, CAPTION_PAGE_Y)]);
 
     state = reduce(state, { kind: "note", data1: 94, data2: 127 });
     assert.equal(state.ui.page, 2);
-    assert.equal(state.ui.pageTitleLane, false);
+    assert.equal(state.ui.pageTitleLane, true);
     const next = pagesFor("bass")[2]?.title ?? "";
     frame = paint(state);
-    assertOutline(frame.shown, frame.bare, [captionAt(next)]);
+    assertOutline(frame.shown, frame.bare, [captionAt("BASS", CAPTION_LANE_Y), captionAt(next, CAPTION_PAGE_Y)]);
 
     state = reduce(state, { kind: "note", data1: 20, data2: 0 });
     state = reduce(state, { kind: "note", data1: 16, data2: 127 });

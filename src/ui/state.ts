@@ -328,7 +328,7 @@ export function rememberPage(ui: UiState, context: ContextId, page: number): UiS
     pageTitleSlide: null,
   };
   if (!moved) return next;
-  return showPageTitle({ ...next, pageTitleLane: context !== ui.context });
+  return showPageTitle({ ...next, pageTitleLane: ui.heldContext !== null || context !== ui.context });
 }
 
 export function defaultUi(): UiState {

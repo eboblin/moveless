@@ -111,7 +111,7 @@ function onStep(session: Session, index: number, press: boolean): Session {
       return {
         ...session,
         project: resetLane(session.project, step),
-        ui: showPageTitle({ ...session.ui, heldContext: step, focus: null, pageTitleLane: step !== session.ui.context }),
+        ui: showPageTitle({ ...session.ui, heldContext: step, focus: null, pageTitleLane: true }),
       };
     }
   }
@@ -131,7 +131,7 @@ function onStep(session: Session, index: number, press: boolean): Session {
         ...session.ui,
         heldContext: step,
         focus: step === session.ui.context ? session.ui.focus : null,
-        pageTitleLane: step !== session.ui.context,
+        pageTitleLane: true,
       }),
     ),
   };
@@ -330,7 +330,7 @@ function touchWheel(session: Session, press: boolean): Session {
         wheelTouch: true,
         wheelReleaseMs: null,
         pageTitleUntilMs: Date.now() + PAGE_TITLE_MS,
-        ...(fresh ? { pageTitleSlide: null, pageTitleLane: false } : {}),
+        ...(fresh ? { pageTitleSlide: null, pageTitleLane: session.ui.heldContext !== null } : {}),
       },
     };
   }
@@ -374,7 +374,7 @@ function turnWheel(session: Session, value: number): Session {
       ...ui,
       pageTitleUntilMs: Date.now() + PAGE_TITLE_MS,
       pageTitleSlide: { from, dir: delta > 0 ? 1 : -1, startedMs: Date.now() },
-      pageTitleLane: false,
+      pageTitleLane: session.ui.heldContext !== null,
     },
   };
 }
