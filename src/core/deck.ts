@@ -68,6 +68,18 @@ export interface DeckKnobs {
   duty: number;
   /** Pitch bend. On scratch, centre is the written hand: left reverses, right leans into the push. */
   ramp: number;
+  /** DJ filter. 0.5 is dry, below is high-pass, above is low-pass. */
+  filter: number;
+  /** Resonance on that filter. 0 is the gentle corner. */
+  resonance: number;
+  /** Saturation after the filter. 0 leaves the sample alone. */
+  drive: number;
+  /** Isolator low. 0.5 is unity, 0 kills the band, 1 is about +6 dB. */
+  low: number;
+  /** Isolator mid. Same law as {@link DeckKnobs.low}. */
+  mid: number;
+  /** Isolator high. Same law as {@link DeckKnobs.low}. */
+  high: number;
   /** Remembered field cell for each {@link DECK_GROUPS} entry. */
   cells: DeckCell[];
   /** Group whose cell the knobs are showing. */
@@ -115,10 +127,17 @@ export const DECK_FADE = Math.round(0.008 * SAMPLE_RATE);
 
 export type DeckKnobId = "div" | "len" | "depth" | "brake" | "vary" | "quant" | "duty" | "ramp";
 
-/** A cell axis that is not one of the eight shared numbers. Pitch rate and throw length stay off DIV. */
-export type DeckSlot = DeckKnobId | "row" | "rate" | "open";
+/** Tone strip. These stay off the focused group's cell. */
+export type DeckToneId = "filter" | "resonance" | "drive" | "low" | "mid" | "high";
 
-const SLOT_IDS: readonly DeckSlot[] = ["div", "len", "depth", "brake", "vary", "quant", "duty", "ramp", "row", "rate", "open"];
+/** A cell axis that is not one of the eight shared numbers. Pitch rate and throw length stay off DIV. */
+export type DeckSlot = DeckKnobId | DeckToneId | "row" | "rate" | "open";
+
+const SLOT_IDS: readonly DeckSlot[] = [
+  "div", "len", "depth", "brake", "vary", "quant", "duty", "ramp",
+  "row", "rate", "open",
+  "filter", "resonance", "drive", "low", "mid", "high",
+];
 
 /**
  * Knobs left of the fixed trio. The field column — a division, a window, a
@@ -292,9 +311,41 @@ export function defaultDeck(): DeckKnobs {
     quant: 2,
     duty: 0.5,
     ramp: 0.5,
+    filter: 0.5,
+    resonance: 0,
+    drive: 0,
+    low: 0.5,
+    mid: 0.5,
+    high: 0.5,
     cells: FACTORY_CELLS.map((cell) => ({ ...cell })),
     focus: 0,
   };
+}
+
+/** Factory knobs and field. The group on screen stays. */
+export function resetDeckKnobs(deck: DeckKnobs): DeckKnobs {
+  const home = defaultDeck();
+  if (
+    deck.div === home.div &&
+    deck.len === home.len &&
+    deck.depth === home.depth &&
+    deck.brake === home.brake &&
+    deck.vary === home.vary &&
+    deck.quant === home.quant &&
+    deck.duty === home.duty &&
+    deck.ramp === home.ramp &&
+    deck.filter === home.filter &&
+    deck.resonance === home.resonance &&
+    deck.drive === home.drive &&
+    deck.low === home.low &&
+    deck.mid === home.mid &&
+    deck.high === home.high &&
+    deck.cells.length === home.cells.length &&
+    deck.cells.every((cell, index) => cell.x === home.cells[index]?.x && cell.y === home.cells[index]?.y)
+  ) {
+    return deck;
+  }
+  return { ...home, cells: home.cells, focus: deck.focus };
 }
 
 export function isDeckGroup(value: string): value is DeckGroup {
@@ -404,8 +455,17 @@ export function stickDeckFocus(deck: DeckKnobs, barBeats: number): DeckKnobs {
   return next;
 }
 
+function isToneKnob(id: DeckSlot): id is DeckToneId {
+  return id === "filter" || id === "resonance" || id === "drive" || id === "low" || id === "mid" || id === "high";
+}
+
 /** A knob turn writes the shared value, and the focused group's cell when that knob is its column or row. */
 export function writeDeckKnob(deck: DeckKnobs, id: DeckSlot, value: number, barBeats: number): DeckKnobs {
+  if (isToneKnob(id)) {
+    const next = clamp01(value);
+    if (deck[id] === next) return deck;
+    return { ...deck, [id]: next };
+  }
   const group = focusedGroup(deck);
   const index = groupIndex(group);
   const base = deck.cells.length === 8 ? deck.cells : defaultDeck().cells;
@@ -1162,9 +1222,10 @@ export function formatDeckCommand(command: DeckCommand): string {
   const nums = [knobs.div, knobs.len, knobs.depth, knobs.brake, knobs.vary, knobs.quant, knobs.duty, knobs.ramp]
     .map((n, index) => (index === 1 || index === 2 || index === 4 || index === 6 || index === 7 ? n.toFixed(4) : String(Math.round(n))))
     .join(",");
+  const tone = [knobs.filter, knobs.resonance, knobs.drive, knobs.low, knobs.mid, knobs.high].map((n) => n.toFixed(4)).join(",");
   const name = command.gesture ?? "-";
   const token = command.gesture && command.press ? `${name}#${Math.round(command.press)}` : name;
-  return `D|${token}|${nums}|${command.warm ? 1 : 0}|${Math.round(command.seed)}|${Math.max(1, Math.round(command.barBeats))}`;
+  return `D|${token}|${nums},${tone}|${command.warm ? 1 : 0}|${Math.round(command.seed)}|${Math.max(1, Math.round(command.barBeats))}`;
 }
 
 export function parseDeckCommand(text: string): DeckCommand | null {
@@ -1172,7 +1233,8 @@ export function parseDeckCommand(text: string): DeckCommand | null {
   const parts = text.split("|");
   if (parts.length < 6) return null;
   const nums = parts[2].split(",").map((item) => Number(item));
-  if (nums.length !== 8 || nums.some((n) => !Number.isFinite(n))) return null;
+  if ((nums.length !== 8 && nums.length !== 14) || nums.some((n) => !Number.isFinite(n))) return null;
+  const home = defaultDeck();
   const hash = parts[1].indexOf("#");
   const token = hash >= 0 ? parts[1].slice(0, hash) : parts[1];
   const press = hash >= 0 ? Math.round(Number(parts[1].slice(hash + 1))) || 0 : 0;
@@ -1190,7 +1252,13 @@ export function parseDeckCommand(text: string): DeckCommand | null {
       quant: nums[5],
       duty: nums[6],
       ramp: nums[7],
-      cells: defaultDeck().cells,
+      filter: nums.length === 14 ? nums[8] : home.filter,
+      resonance: nums.length === 14 ? nums[9] : home.resonance,
+      drive: nums.length === 14 ? nums[10] : home.drive,
+      low: nums.length === 14 ? nums[11] : home.low,
+      mid: nums.length === 14 ? nums[12] : home.mid,
+      high: nums.length === 14 ? nums[13] : home.high,
+      cells: home.cells,
       focus: 0,
     },
     warm: parts[3] === "1",

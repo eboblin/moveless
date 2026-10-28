@@ -2,14 +2,14 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { clone } from "../src/core/clone.ts";
 import { CHORD_RATES, RATES, SIXTEENTH_TICKS, unitForIndex } from "../src/core/clock.ts";
-import { BRAKE_LABEL, DIV_LABEL } from "../src/core/deck.ts";
+import { BRAKE_LABEL, DIV_LABEL, defaultDeck, focusedGroup } from "../src/core/deck.ts";
 import { defaultProject } from "../src/core/defaults.ts";
 import { modulated } from "../src/core/modulate.ts";
 import { applyMorph } from "../src/core/morph.ts";
 import { parseStored, serializeStored } from "../src/core/persist.ts";
 import { createSet, journalPadIds, journalPageCount, launchScene, record } from "../src/core/performance.ts";
 import { generatePhrase } from "../src/core/phrase.ts";
-import { bindingFor, lanePages, mixerPage, pageCount, pageGroup, pageGroupColor, pagesFor, scopeIncludesPage } from "../src/core/pages.ts";
+import { bindingFor, deckPage, lanePages, mixerPage, pageCount, pageGroup, pageGroupColor, pagesFor, scopeIncludesPage } from "../src/core/pages.ts";
 import { LED, advancePulseClock, blinkHalfMs, directionLit, dropLed, faceButtonLed, ledColorAt, menuLed, modeButtonLed, offColor, offerLed, padLeds, padPackets, PLAY_LED_ON, playLed, PULSE_CLOCK_IDLE, sceneShadeStep, shadeColor, stepLed, stepLeds, takeLeds, trackLeds } from "../src/ui/leds.ts";
 import { DIGIT_H, displayAmount, fractionFromLabel, plotAmount } from "../src/ui/digits.ts";
 import { lettersWidth, plotLetters } from "../src/ui/letters.ts";
@@ -869,6 +869,72 @@ describe("surface", () => {
     assert.equal(state.ui.page, 0);
     assert.equal(state.project.mute.kick, true);
     assert.equal(state.project.randomizeScope, "group");
+  });
+
+  it("turns the deck jog between the group knobs and the tone strip", () => {
+    let state = reduce(session(), { kind: "cc", data1: 52, data2: 127 });
+    assert.equal(state.ui.face, "deck");
+    assert.equal(state.ui.deckLayer, "group");
+    const group = deckPage(focusedGroup(state.project.deck), state.project.deck, "group");
+    assert.equal(group.bindings[7]?.path, "deck.depth");
+    state = reduce(state, { kind: "cc", data1: 14, data2: 1 });
+    assert.equal(state.ui.deckLayer, "tone");
+    state = reduce(state, { kind: "cc", data1: 14, data2: 1 });
+    assert.equal(state.ui.deckLayer, "tone");
+    const tone = deckPage(focusedGroup(state.project.deck), state.project.deck, state.ui.deckLayer);
+    assert.deepEqual(tone.bindings.map((binding) => binding?.path ?? null), [
+      "deck.filter",
+      "deck.resonance",
+      "deck.drive",
+      null,
+      "deck.low",
+      "deck.mid",
+      "deck.high",
+      "deck.depth",
+    ]);
+    assert.deepEqual(tone.groups, ["FILTER", "ISO"]);
+    state = reduce(state, { kind: "cc", data1: 14, data2: 127 });
+    assert.equal(state.ui.deckLayer, "group");
+    let mix = reduce(session(), { kind: "cc", data1: 88, data2: 127 });
+    mix = reduce(mix, { kind: "cc", data1: 14, data2: 1 });
+    assert.equal(mix.ui.face, "mixer");
+    assert.equal(mix.ui.page, 0);
+    assert.equal(mix.ui.deckLayer, "group");
+  });
+
+  it("puts the deck knobs back to the factory when Delete is pressed", () => {
+    let state = session();
+    const home = defaultDeck();
+    state.project.deck = {
+      ...state.project.deck,
+      depth: 0.2,
+      filter: 0.9,
+      low: 0,
+      focus: 3,
+      cells: state.project.deck.cells.map((cell, index) => (index === 3 ? { x: 5, y: 3 } : { ...cell })),
+    };
+    state = reduce(state, { kind: "cc", data1: 52, data2: 127 });
+    state = reduce(state, { kind: "cc", data1: 119, data2: 127 });
+    assert.equal(state.ui.face, "deck");
+    assert.equal(state.ui.deleteHeld, true);
+    assert.equal(state.project.deck.depth, home.depth);
+    assert.equal(state.project.deck.filter, home.filter);
+    assert.equal(state.project.deck.low, home.low);
+    assert.equal(state.project.deck.focus, 3);
+    assert.deepEqual(state.project.deck.cells[3], home.cells[3]);
+
+    let parked = session();
+    parked.project.deck = { ...parked.project.deck, depth: 0.2 };
+    parked = reduce(parked, { kind: "cc", data1: 119, data2: 127 });
+    assert.equal(parked.project.deck.depth, 0.2);
+
+    let shifted = reduce(session(), { kind: "cc", data1: 52, data2: 127 });
+    shifted.project.deck = { ...shifted.project.deck, depth: 0.2 };
+    shifted.project.working.kick.gen1.hits = 4;
+    shifted = reduce(shifted, { kind: "cc", data1: 49, data2: 127 });
+    shifted = reduce(shifted, { kind: "cc", data1: 119, data2: 127 });
+    assert.equal(shifted.project.deck.depth, 0.2);
+    assert.equal(shifted.project.working.kick.gen1.hits, defaultProject().working.kick.gen1.hits);
   });
 
   it("zeros a knob on shift plus tap and leaves a plain tap alone", () => {
@@ -2909,6 +2975,14 @@ describe("knob sensitivity", () => {
     const clicks = sweepClicks("filter.cutoff.value", 0, 1);
     const degrees = clicks * (360 / ENCODER_CLICKS_PER_TURN);
     assert.ok(Math.abs(degrees - KNOB_SWEEP_DEG) < 4, `sweep was ${degrees}`);
+  });
+
+  it("sweeps a deck knob in about two thirds of the usual travel", () => {
+    for (const path of ["deck.depth", "deck.filter", "deck.quant", "deck.div"]) {
+      assert.equal(knob(path).sensitivity, 1.5);
+    }
+    const degrees = sweepClicks("deck.depth", 0, 1) * (360 / ENCODER_CLICKS_PER_TURN);
+    assert.ok(Math.abs(degrees - KNOB_SWEEP_DEG / 1.5) < 4, `sweep was ${degrees}`);
   });
 
   it("keeps a sparse step inside 20 degrees and a shorter total travel", () => {

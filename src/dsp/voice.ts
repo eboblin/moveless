@@ -92,6 +92,8 @@ export interface Engine {
   glueGain: number;
   tiltL: number;
   tiltR: number;
+  /** Isolator and filter memory. The ring is written before this runs. */
+  tone: DeckToneState;
   tank: Tank;
   echo: Echo;
   /** Pitched-note timing of the phrase last loaded. Same grid must not re-attack. */
@@ -107,6 +109,37 @@ export interface Engine {
   armClock: number;
   /** Baked voice-pattern envelopes. Null until some live motion asks for that lane. */
   env: (EnvelopeTable | null)[];
+}
+
+/** One cascaded one-pole. `b` is the second pole, the band we keep. */
+interface TonePole {
+  a: number;
+  b: number;
+}
+
+/** Per-channel isolator and the shared lane filter, after the platter. */
+export interface DeckToneState {
+  lowL: TonePole;
+  highL: TonePole;
+  lowR: TonePole;
+  highR: TonePole;
+  fltL: { low: number; band: number };
+  fltR: { low: number; band: number };
+}
+
+function emptyPole(): TonePole {
+  return { a: 0, b: 0 };
+}
+
+function emptyTone(): DeckToneState {
+  return {
+    lowL: emptyPole(),
+    highL: emptyPole(),
+    lowR: emptyPole(),
+    highR: emptyPole(),
+    fltL: { low: 0, band: 0 },
+    fltR: { low: 0, band: 0 },
+  };
 }
 
 interface DrumVoice {
@@ -249,6 +282,7 @@ export function createEngine(): Engine {
     glueGain: 1,
     tiltL: 0,
     tiltR: 0,
+    tone: emptyTone(),
     tank: createTank(),
     echo: createEcho(),
     holdSig: "",
@@ -462,8 +496,9 @@ function renderFrames(engine: Engine, frames: number, at: (frame: number) => voi
     const wetD = echoSample(engine.echo, engine.fx.delay, engine.beats, engine.tempo, dlyL, dlyR);
     const mixed = glueMix(engine, tiltMix(engine, left + wetR[0] + wetD[0], right + wetR[1] + wetD[1]));
     const heard = ahead ? mixed : hearDeck(engine.deck, engine.clock, engine.tempo, mixed[0], mixed[1]);
-    out[i * 2] = ahead ? heard[0] : soft(heard[0]);
-    out[i * 2 + 1] = ahead ? heard[1] : soft(heard[1]);
+    const colored = ahead ? heard : applyDeckTone(engine, heard[0], heard[1]);
+    out[i * 2] = ahead ? colored[0] : soft(colored[0]);
+    out[i * 2 + 1] = ahead ? colored[1] : soft(colored[1]);
     decayPump(engine);
   }
   return out;
@@ -1309,6 +1344,62 @@ export function filterSample(state: { low: number; band: number }, input: number
   const raw = lp ? v2 : input - k * v1 - v2;
   const trim = lp ? 1 + shaped * 0.5 : 1 + shaped * 2.5;
   return clipPeak(raw * trim);
+}
+
+/** Low/mid split and mid/high split. Two one-poles, about 12 dB/octave. */
+const ISO_LOW_COEF = 1 - Math.exp((-TWO_PI * 250) / SAMPLE_RATE);
+const ISO_HIGH_COEF = 1 - Math.exp((-TWO_PI * 2500) / SAMPLE_RATE);
+
+function cascade(pole: TonePole, input: number, coef: number): number {
+  pole.a += (input - pole.a) * coef;
+  pole.b += (pole.a - pole.b) * coef;
+  return pole.b;
+}
+
+/** 0 kills, 0.5 is unity, 1 is +6 dB. Exactly 0.5 stays 1 so the bypass is a wire. */
+function isoGain(knob: number): number {
+  const x = clamp01(knob);
+  if (x === 0.5) return 1;
+  if (x < 0.5) return x * 2;
+  return 1 + (x - 0.5) * 2;
+}
+
+/**
+ * Complementary three-band split. At unity gain the bands add back to the
+ * input, including on the first sample, so a factory isolator is silent.
+ */
+function isolate(lowPole: TonePole, highPole: TonePole, input: number, low: number, mid: number, high: number): number {
+  const lowBand = cascade(lowPole, input, ISO_LOW_COEF);
+  const highSplit = cascade(highPole, input, ISO_HIGH_COEF);
+  const gL = isoGain(low);
+  const gM = isoGain(mid);
+  const gH = isoGain(high);
+  if (gL === 1 && gM === 1 && gH === 1) return input;
+  return lowBand * gL + (highSplit - lowBand) * gM + (input - highSplit) * gH;
+}
+
+/** Soft clip after the filter. Zero drive returns the sample unchanged. */
+function driveSample(input: number, drive: number): number {
+  const amount = clamp01(drive);
+  if (amount < 1e-4) return input;
+  const gain = 1 + amount * 8;
+  const wet = Math.tanh(input * gain) / gain;
+  return input * (1 - amount) + wet * amount;
+}
+
+/** Isolator, then the lane filter, then drive. Heard after the platter, not written into the ring. */
+export function applyDeckTone(engine: Engine, left: number, right: number): [number, number] {
+  const knobs = engine.deck.knobs;
+  const tone = engine.tone;
+  const l = driveSample(
+    filterSample(tone.fltL, isolate(tone.lowL, tone.highL, left, knobs.low, knobs.mid, knobs.high), knobs.filter, knobs.resonance),
+    knobs.drive,
+  );
+  const r = driveSample(
+    filterSample(tone.fltR, isolate(tone.lowR, tone.highR, right, knobs.low, knobs.mid, knobs.high), knobs.filter, knobs.resonance),
+    knobs.drive,
+  );
+  return [l, r];
 }
 
 function evalMotion(engine: Engine, motion: LaneMotion, step: number, at: number): number {

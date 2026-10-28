@@ -189,6 +189,14 @@ typedef struct {
     int deck_down;
     int deck_up;
     float deck_k[8];
+    /* filter, resonance, drive, low, mid, high. Factory is a bypass. */
+    float deck_tone[6];
+    float tone_lo_l[2];
+    float tone_hi_l[2];
+    float tone_lo_r[2];
+    float tone_hi_r[2];
+    float tone_flt_l[2];
+    float tone_flt_r[2];
     int deck_seed;
     float deck_bar;
     float *deck_peak_l;
@@ -1816,6 +1824,10 @@ static int fx_init(Engine *engine) {
     engine->deck_k[5] = 2.0f;
     engine->deck_k[6] = 0.5f;
     engine->deck_k[7] = 0.5f;
+    engine->deck_tone[0] = 0.5f;
+    engine->deck_tone[3] = 0.5f;
+    engine->deck_tone[4] = 0.5f;
+    engine->deck_tone[5] = 0.5f;
     engine->deck_bar = 4.0f;
     engine->deck_seed = 1;
     engine->deck_peak_l = calloc((size_t)DECK_PEAKS, sizeof(float));
@@ -3315,9 +3327,20 @@ static void deck_apply_text(Engine *engine, const char *text) {
     if (!text || text[0] != 'D') return;
     char name[32];
     float k0, k1, k2, k3, k4, k5, k6, k7;
+    float t0 = 0.5f, t1 = 0.0f, t2 = 0.0f, t3 = 0.5f, t4 = 0.5f, t5 = 0.5f;
     int warm = 0, seed = 0, bar = 4;
-    if (sscanf(text, "D|%31[^|]|%f,%f,%f,%f,%f,%f,%f,%f|%d|%d|%d",
-            name, &k0, &k1, &k2, &k3, &k4, &k5, &k6, &k7, &warm, &seed, &bar) != 12) return;
+    int got = sscanf(text, "D|%31[^|]|%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f|%d|%d|%d",
+            name, &k0, &k1, &k2, &k3, &k4, &k5, &k6, &k7, &t0, &t1, &t2, &t3, &t4, &t5, &warm, &seed, &bar);
+    if (got != 18) {
+        t0 = 0.5f;
+        t1 = 0.0f;
+        t2 = 0.0f;
+        t3 = 0.5f;
+        t4 = 0.5f;
+        t5 = 0.5f;
+        if (sscanf(text, "D|%31[^|]|%f,%f,%f,%f,%f,%f,%f,%f|%d|%d|%d",
+                name, &k0, &k1, &k2, &k3, &k4, &k5, &k6, &k7, &warm, &seed, &bar) != 12) return;
+    }
     char *serial_at = strchr(name, '#');
     int serial = 0;
     int gesture;
@@ -3335,6 +3358,12 @@ static void deck_apply_text(Engine *engine, const char *text) {
     engine->deck_k[5] = k5;
     engine->deck_k[6] = k6;
     engine->deck_k[7] = k7;
+    engine->deck_tone[0] = t0;
+    engine->deck_tone[1] = t1;
+    engine->deck_tone[2] = t2;
+    engine->deck_tone[3] = t3;
+    engine->deck_tone[4] = t4;
+    engine->deck_tone[5] = t5;
     engine->deck_warm = warm ? 1 : 0;
     engine->deck_seed = seed;
     engine->deck_bar = bar > 1 ? (float)bar : 1.0f;
@@ -3356,6 +3385,59 @@ typedef struct {
     int offset;
     int index;
 } Fire;
+
+static float deck_tone_cascade(float *pole, float input, float coef) {
+    pole[0] += (input - pole[0]) * coef;
+    pole[1] += (pole[0] - pole[1]) * coef;
+    return pole[1];
+}
+
+/* 0 kills, 0.5 is unity, 1 is +6 dB. Exactly 0.5 stays 1. */
+static float deck_iso_gain(float knob) {
+    float x = knob;
+    if (x < 0.0f) x = 0.0f;
+    if (x > 1.0f) x = 1.0f;
+    if (x == 0.5f) return 1.0f;
+    if (x < 0.5f) return x * 2.0f;
+    return 1.0f + (x - 0.5f) * 2.0f;
+}
+
+static float deck_isolate(float *low_pole, float *high_pole, float input, float low, float mid, float high) {
+    static float low_coef = 0.0f;
+    static float high_coef = 0.0f;
+    float low_band, high_split, g_l, g_m, g_h;
+    if (low_coef == 0.0f) {
+        low_coef = pole_coef(250.0f);
+        high_coef = pole_coef(2500.0f);
+    }
+    low_band = deck_tone_cascade(low_pole, input, low_coef);
+    high_split = deck_tone_cascade(high_pole, input, high_coef);
+    g_l = deck_iso_gain(low);
+    g_m = deck_iso_gain(mid);
+    g_h = deck_iso_gain(high);
+    if (g_l == 1.0f && g_m == 1.0f && g_h == 1.0f) return input;
+    return low_band * g_l + (high_split - low_band) * g_m + (input - high_split) * g_h;
+}
+
+static float deck_drive(float input, float drive) {
+    float amount = drive;
+    float gain, wet;
+    if (amount < 0.0f) amount = 0.0f;
+    if (amount > 1.0f) amount = 1.0f;
+    if (amount < 1e-4f) return input;
+    gain = 1.0f + amount * 8.0f;
+    wet = tanhf(input * gain) / gain;
+    return input * (1.0f - amount) + wet * amount;
+}
+
+/* Isolator, then the lane filter, then drive. The ring is already written. */
+static void deck_tone_color(Engine *engine, float *l, float *r) {
+    float *t = engine->deck_tone;
+    *l = deck_drive(filter_sample(&engine->tone_flt_l[0], &engine->tone_flt_l[1],
+        deck_isolate(engine->tone_lo_l, engine->tone_hi_l, *l, t[3], t[4], t[5]), t[0], t[1]), t[2]);
+    *r = deck_drive(filter_sample(&engine->tone_flt_r[0], &engine->tone_flt_r[1],
+        deck_isolate(engine->tone_lo_r, engine->tone_hi_r, *r, t[3], t[4], t[5]), t[0], t[1]), t[2]);
+}
 
 static int fire_cmp(const void *a, const void *b) {
     const Fire *fa = (const Fire *)a;
@@ -3492,6 +3574,7 @@ static void render(Engine *engine, int16_t *out, int frames) {
         tilt_mix(engine, &l, &r);
         glue_mix(engine, &l, &r);
         if (engine->phrase_on) deck_hear(engine, &l, &r);
+        deck_tone_color(engine, &l, &r);
         l = soft(l);
         r = soft(r);
         decay_pump(engine);

@@ -235,6 +235,12 @@ function mergeDeck(base: Project["deck"], raw: unknown): Project["deck"] {
     quant: clamp(asInt(raw.quant, home.quant), 0, 3),
     duty: clamp(asNumber(raw.duty, home.duty), 0, 1),
     ramp: clamp(asNumber(raw.ramp, home.ramp), 0, 1),
+    filter: clamp(asNumber(raw.filter, home.filter), 0, 1),
+    resonance: clamp(asNumber(raw.resonance, home.resonance), 0, 1),
+    drive: clamp(asNumber(raw.drive, home.drive), 0, 1),
+    low: clamp(asNumber(raw.low, home.low), 0, 1),
+    mid: clamp(asNumber(raw.mid, home.mid), 0, 1),
+    high: clamp(asNumber(raw.high, home.high), 0, 1),
     cells,
     focus: clamp(asInt(raw.focus, home.focus), 0, 7),
   };

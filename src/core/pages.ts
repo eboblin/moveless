@@ -38,7 +38,7 @@ export interface Binding {
   morph: MorphKind;
   /** Randomize cost of one full-scale step toward home. */
   weight: number;
-  /** 1 keeps the 220°/20° travel. Smaller turns the same step more slowly. */
+  /** 1 keeps the 220°/20° travel. Above 1 the same sweep is shorter. */
   sensitivity: number;
   display: KnobDisplay;
   /** Macro keys that add into this knob. Absent when the knob is not shifted. */
@@ -625,12 +625,59 @@ const DECK_FACE: Record<DeckSlot, { label: string; min: number; max: number; ste
   row: { label: "WAY", min: 0, max: 3, step: 1, integer: true },
   rate: { label: "RTE", min: 0, max: 5, step: 1, integer: true },
   open: { label: "OPN", min: 0, max: 5, step: 1, integer: true },
+  filter: { label: "FLT", min: 0, max: 1, step: 0.01, integer: false },
+  resonance: { label: "RES", min: 0, max: 1, step: 0.01, integer: false },
+  drive: { label: "DRV", min: 0, max: 1, step: 0.01, integer: false },
+  low: { label: "LOW", min: 0, max: 1, step: 0.01, integer: false },
+  mid: { label: "MID", min: 0, max: 1, step: 0.01, integer: false },
+  high: { label: "HIG", min: 0, max: 1, step: 0.01, integer: false },
 };
 
 const deckPageCache = new Map<string, Page>();
 
-/** Knobs of the selected group. Depth is always the rightmost encoder. The page is shared for a group and its slot layout. */
-export function deckPage(group: DeckGroup, knobs: DeckKnobs): Page {
+/** Deck encoders reach the end in about two thirds of the usual sweep. */
+const DECK_SENSITIVITY = 1.5;
+
+/** Which strip the deck encoders show. Tone is the filter and isolator; group is the selected effect. */
+export type DeckLayer = "group" | "tone";
+
+function toneKnob(key: string, label: string, detent: number): Binding {
+  return bind({
+    path: `deck.${key}`,
+    label,
+    min: 0,
+    max: 1,
+    step: 0.01,
+    weight: PLAIN_WEIGHT,
+    store: "deck",
+    detents: [detent],
+    sensitivity: DECK_SENSITIVITY,
+  });
+}
+
+/** Filter, drive, a gap, then the isolator. Depth stays on the last encoder. */
+function toneDeckPage(): Page {
+  return page("tone", "DJ FX", ["FILTER", "ISO"], "bus", [
+    toneKnob("filter", "FLT", 0.5),
+    toneKnob("resonance", "RES", 0),
+    toneKnob("drive", "DRV", 0),
+    null,
+    toneKnob("low", "LOW", 0.5),
+    toneKnob("mid", "MID", 0.5),
+    toneKnob("high", "HIG", 0.5),
+    plain("deck.depth", "DEP", 0, 1, 0.01, false, "deck", undefined, undefined, DECK_SENSITIVITY),
+  ]);
+}
+
+/** Knobs of the selected group, or the tone strip. Depth is always the rightmost encoder. */
+export function deckPage(group: DeckGroup, knobs: DeckKnobs, layer: DeckLayer = "group"): Page {
+  if (layer === "tone") {
+    const hit = deckPageCache.get("tone");
+    if (hit) return hit;
+    const built = toneDeckPage();
+    deckPageCache.set("tone", built);
+    return built;
+  }
   const quant = Number.isFinite(knobs.quant) ? Math.max(0, Math.min(3, Math.round(knobs.quant))) : 0;
   const key = group !== "stp" && quant === 1 ? `${group}:div` : group;
   const hit = deckPageCache.get(key);
@@ -639,7 +686,7 @@ export function deckPage(group: DeckGroup, knobs: DeckKnobs): Page {
     if (!slot) return null;
     const face = DECK_FACE[slot];
     const label = slotKnobName(group, slot) ?? (slot === "row" ? rowKnobName(group) : face.label);
-    return plain(`deck.${slot}`, label, face.min, face.max, face.step, face.integer, "deck");
+    return plain(`deck.${slot}`, label, face.min, face.max, face.step, face.integer, "deck", undefined, undefined, DECK_SENSITIVITY);
   });
   const built = page("deck", "DJ FX", [null, null], "bus", bindings);
   deckPageCache.set(key, built);
@@ -649,7 +696,9 @@ export function deckPage(group: DeckGroup, knobs: DeckKnobs): Page {
 function rememberDeck(): void {
   const knobs = defaultDeck();
   const divided = { ...knobs, quant: 1 };
-  for (const group of DECK_GROUPS) remember([deckPage(group, knobs), deckPage(group, divided)]);
+  const pages: Page[] = [deckPage("rpt", knobs, "tone")];
+  for (const group of DECK_GROUPS) pages.push(deckPage(group, knobs), deckPage(group, divided));
+  remember(pages);
 }
 
 function mixPage(): Page {

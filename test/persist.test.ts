@@ -168,6 +168,11 @@ describe("project persist", () => {
     assert.equal(parsed.project.deck.vary, 0);
     assert.equal(parsed.project.deck.cells[3]?.y, 1);
     assert.equal(parsed.project.deck.cells[3]?.x, 1);
+    assert.equal(parsed.project.deck.filter, 0.5);
+    assert.equal(parsed.project.deck.resonance, 0);
+    assert.equal(parsed.project.deck.drive, 0);
+    assert.equal(parsed.project.deck.low, 0.5);
+    assert.equal(parsed.project.deck.high, 0.5);
   });
 
   it("clears morph and wander origin on parse", () => {

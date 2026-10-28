@@ -24,7 +24,7 @@ import {
   toggleLock,
   toggleMute,
 } from "../core/performance.ts";
-import { DECK_GROUPS, fieldAt, focusedGroup, groupAt, recallGroup, setGroupCell, type DeckGroup } from "../core/deck.ts";
+import { DECK_GROUPS, fieldAt, focusedGroup, groupAt, recallGroup, resetDeckKnobs, setGroupCell, type DeckGroup } from "../core/deck.ts";
 import { CAPTURE_CC, contextAtStep, DOWN_CC, isLane, JOG_CLICK_CC, LANES, LOOP_CC, MENU_CC, MUTE_CC, PLAY_CC, RANDOMIZE_DEPTHS, RANDOMIZE_SCOPES, RECORD_CC, SAMPLE_CC, TRANSITIONS, UP_CC, WANDERS, type ContextId, type PatternId, type Project } from "../core/types.ts";
 import { resetControl, writeControl } from "./controls.ts";
 import { bindingFor, bindingPaths, deckPage, livePage, mixerPage, pageCount, pageGroup, pageTitle, pagesFor, scopeIncludesPage } from "../core/pages.ts";
@@ -345,10 +345,21 @@ function touchWheel(session: Session, press: boolean): Session {
   };
 }
 
+/** Forward opens the tone strip. Back returns the group knobs. The same way again stays put. */
+function turnDeckLayer(session: Session, delta: number): Session {
+  const deckLayer = delta > 0 ? "tone" : "group";
+  if (session.ui.deckLayer === deckLayer) return session;
+  return {
+    ...session,
+    ui: { ...session.ui, deckLayer, focus: null, detent: null, travel: null },
+  };
+}
+
 function turnWheel(session: Session, value: number): Session {
-  if (session.ui.face) return session;
   const delta = relDelta(value);
   if (!delta) return session;
+  if (session.ui.face === "deck") return turnDeckLayer(session, delta);
+  if (session.ui.face) return session;
   const count = pageCount(session.ui.context);
   let page = session.ui.page + (delta > 0 ? 1 : -1);
   if (page < 0) page = 0;
@@ -476,7 +487,7 @@ function currentBinding(session: Session, index: number) {
 /** Knobs under the fingers. Mixer and DJ FX replace the page that was open. */
 function shownPage(session: Session) {
   if (session.ui.face === "mixer") return mixerPage();
-  if (session.ui.face === "deck") return deckPage(focusedGroup(session.project.deck), session.project.deck);
+  if (session.ui.face === "deck") return deckPage(focusedGroup(session.project.deck), session.project.deck, session.ui.deckLayer);
   return livePage(session.project, session.ui.context, session.ui.page);
 }
 
@@ -522,6 +533,7 @@ function onFace(session: Session, which: FaceMode, press: boolean): Session {
         focus: null,
         detent: null,
         travel: null,
+        ...(which === "deck" && session.ui.face !== "deck" ? { deckLayer: "group" as const } : {}),
         ...(leavingDeck
           ? {
               deckGesture: null,
@@ -597,7 +609,7 @@ function applyRandomize(session: Session): Session {
     return { ...session, project: randomizeSurface(session.project, "mix", bindingPaths(mixerPage())) };
   }
   if (session.ui.face === "deck") {
-    const knobs = deckPage(focusedGroup(session.project.deck), session.project.deck);
+    const knobs = deckPage(focusedGroup(session.project.deck), session.project.deck, session.ui.deckLayer);
     return { ...session, project: randomizeSurface(session.project, "deck", bindingPaths(knobs)) };
   }
   const { context, page } = randomizeTarget(session);
@@ -690,6 +702,11 @@ function holdShift(session: Session, press: boolean): Session {
 function holdDelete(session: Session, press: boolean): Session {
   const next = { ...session, ui: { ...session.ui, deleteHeld: press } };
   if (press && next.ui.shiftHeld) return { ...next, project: resetPattern(next.project) };
+  if (press && next.ui.face === "deck") {
+    const deck = resetDeckKnobs(next.project.deck);
+    if (deck === next.project.deck) return next;
+    return { ...next, project: { ...next.project, deck }, ui: { ...next.ui, detent: null, travel: null } };
+  }
   return next;
 }
 

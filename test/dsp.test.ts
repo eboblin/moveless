@@ -10,7 +10,7 @@ import { launchScene, record } from "../src/core/performance.ts";
 import { mapFilter, mapKick, mapSend, mapSound } from "../src/dsp/map.ts";
 import { eventsInBlock, phraseLoop, soundMotions } from "../src/dsp/schedule.ts";
 import { envelopeTable, laneEnvelopeAt, melodyContour, melodyLevel, readEnvelope } from "../src/dsp/envelope.ts";
-import { applyDeckCommand, createEngine, filterSample, formatBus, glideSeconds, loadPhrase, melodyCutoff, packBlock, packPhrase, packPhraseBody, renderBlock, renderClock } from "../src/dsp/voice.ts";
+import { applyDeckCommand, applyDeckTone, createEngine, filterSample, formatBus, glideSeconds, loadPhrase, melodyCutoff, packBlock, packPhrase, packPhraseBody, renderBlock, renderClock } from "../src/dsp/voice.ts";
 import type { BlockEvent } from "../src/dsp/schedule.ts";
 import type { FxDelay, FxReverb, LaneId } from "../src/core/types.ts";
 import { createEcho, createTank, echoSample, tankSample } from "../src/dsp/fx.ts";
@@ -82,6 +82,25 @@ describe("dsp adapter", () => {
     const open = saw(0.5);
     assert.ok(saw(0.3) > open * 0.5);
     assert.ok(saw(0.8) > open * 0.5);
+  });
+
+  it("leaves a factory deck tone untouched and kills lows without taking the highs", () => {
+    const engine = createEngine();
+    assert.equal(applyDeckTone(engine, 0.37, -0.2)[0], 0.37);
+    assert.equal(applyDeckTone(engine, 0.37, -0.2)[1], -0.2);
+    const energy = (freq: number, low: number) => {
+      const voice = createEngine();
+      voice.deck.knobs = { ...voice.deck.knobs, low };
+      let sum = 0;
+      for (let i = 0; i < 8000; i++) {
+        const input = Math.sin((2 * Math.PI * freq * i) / 44100);
+        const [out] = applyDeckTone(voice, input, input);
+        if (i > 4000) sum += out * out;
+      }
+      return sum;
+    };
+    assert.ok(energy(60, 0) < energy(60, 0.5) * 0.25);
+    assert.ok(energy(8000, 0) > energy(8000, 0.5) * 0.5);
   });
 
   it("rings an acid peak on the low-pass corner without lifting the note under it", () => {

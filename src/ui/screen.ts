@@ -109,13 +109,14 @@ export function renderScreen(
   const face = ui.face;
   const mixer = !notice && face === "mixer";
   const decking = !notice && face === "deck";
-  const shown = mixer ? mixerPage() : decking ? deckPage(focusedGroup(project.deck), project.deck) : page;
+  const tone = decking && ui.deckLayer === "tone";
+  const shown = mixer ? mixerPage() : decking ? deckPage(focusedGroup(project.deck), project.deck, tone ? "tone" : "group") : page;
   const effectTitle = GROUP_PAD.find((pad) => pad.id === focusedGroup(project.deck))?.title ?? "BEAT REPEAT";
   const knobLine = decking && focus && focusBinding ? deckKnobHeader(project, focusBinding) : null;
   const header = mixer
     ? (focusBinding?.title ?? focus ?? "MIXER")
     : decking
-      ? (knobLine ?? effectTitle)
+      ? (knobLine ?? (tone ? "" : effectTitle))
     : (focusBinding ? figureHeader(project, context, focusBinding) : null) ??
       focusBinding?.title ??
       (focus ? focus : laneHeader(project, context, page));
@@ -146,7 +147,7 @@ export function renderScreen(
   else if (vizLane && phrase) drawPhrase(pixels, project, phrase, vizLane, playhead);
   else if (decking) drawDeck(pixels, project, ui, tick, wave);
   if (playing && phrase && !notice && !mixer && !decking) armViz(project, phrase, vizLane, chordRoll, bars, generator, tick);
-  const deckFocus = decking ? (focus ?? effectTitle) : focus;
+  const deckFocus = decking ? (tone ? focus : (focus ?? effectTitle)) : focus;
   const labels = mixer
     ? [{ x: 1, y: TITLE_Y, text: header.slice(0, LINE_LIMIT) }, ...mixerChannelLabels(project, focus)]
     : decking
@@ -1163,6 +1164,18 @@ function deckKnobTitle(path: string, group: ReturnType<typeof focusedGroup>): st
       return "DUTY";
     case "deck.ramp":
       return "BEND";
+    case "deck.filter":
+      return "FILTER";
+    case "deck.resonance":
+      return "RESONANCE";
+    case "deck.drive":
+      return "DRIVE";
+    case "deck.low":
+      return "LOW";
+    case "deck.mid":
+      return "MID";
+    case "deck.high":
+      return "HIGH";
     case "deck.rate":
       return "RATE";
     case "deck.open":

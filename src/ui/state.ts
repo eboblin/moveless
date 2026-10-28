@@ -69,6 +69,9 @@ export interface KnobTravel {
 /** A pad-taking screen on its own button. Mixer is Mute, DJ FX is Capture. */
 export type FaceMode = "mixer" | "deck";
 
+/** Which deck knobs the encoders edit. The tone itself stays in the project. */
+export type DeckLayer = "group" | "tone";
+
 /** What a long press of Mute or Capture restores on release. */
 export interface FaceReturn {
   latch: FaceMode | null;
@@ -139,6 +142,8 @@ export interface UiState {
   deckPress: number;
   /** Bits of deck pads still held. Sound stays until the last one lifts. */
   deckPads: number;
+  /** Encoders on the deck. Group is the selected effect; tone is the filter strip. */
+  deckLayer: DeckLayer;
   heldContext: ContextId | null;
   heldPage: number | null;
   focus: Focus | null;
@@ -358,6 +363,7 @@ export function defaultUi(): UiState {
     deckLatchTick: null,
     deckPress: 0,
     deckPads: 0,
+    deckLayer: "group",
     heldContext: null,
     heldPage: null,
     focus: null,

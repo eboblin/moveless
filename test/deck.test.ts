@@ -323,7 +323,24 @@ describe("deck curves", () => {
     assert.equal(parsed?.gesture, "roll");
     assert.equal(parsed?.warm, true);
     assert.equal(parsed?.knobs.div, command.knobs.div);
+    assert.equal(parsed?.knobs.filter, 0.5);
     assert.equal(parsed?.seed, 7);
+    const colored = {
+      ...command,
+      knobs: { ...defaultDeck(), filter: 0.8, resonance: 0.25, drive: 0.4, low: 0, mid: 0.5, high: 1 },
+    };
+    const again = parseDeckCommand(formatDeckCommand(colored));
+    assert.equal(again?.knobs.filter, 0.8);
+    assert.equal(again?.knobs.resonance, 0.25);
+    assert.equal(again?.knobs.drive, 0.4);
+    assert.equal(again?.knobs.low, 0);
+    assert.equal(again?.knobs.high, 1);
+    assert.equal(again?.knobs.div, defaultDeck().div);
+    const old = parseDeckCommand("D|-|2,0.5000,1.0000,4,0.2500,2,0.5000,0.5000|0|1|4");
+    assert.equal(old?.knobs.filter, 0.5);
+    assert.equal(old?.knobs.resonance, 0);
+    assert.equal(old?.knobs.low, 0.5);
+    assert.equal(old?.knobs.div, 2);
   });
 });
 
