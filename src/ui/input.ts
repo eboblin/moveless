@@ -111,7 +111,13 @@ function onStep(session: Session, index: number, press: boolean): Session {
       return {
         ...session,
         project: resetLane(session.project, step),
-        ui: showPageTitle({ ...session.ui, heldContext: step, focus: null, pageTitleLane: true }),
+        ui: showPageTitle({
+          ...session.ui,
+          heldContext: step,
+          heldPage: session.ui.lanePages[step] ?? 0,
+          focus: null,
+          pageTitleLane: true,
+        }),
       };
     }
   }
@@ -130,6 +136,7 @@ function onStep(session: Session, index: number, press: boolean): Session {
       settleRandomize({
         ...session.ui,
         heldContext: step,
+        heldPage: session.ui.lanePages[step] ?? 0,
         focus: step === session.ui.context ? session.ui.focus : null,
         pageTitleLane: true,
       }),
@@ -145,13 +152,7 @@ function onPad(session: Session, index: number, press: boolean): Session {
   const second = row === 2;
   if (session.ui.face === "mixer") return onMutePad(session, index);
   if (session.ui.face === "deck") return pressDeckPad(session, index);
-  const randomize = !auxHidesRandomize(session.ui) && (session.ui.wheelTouch || session.ui.randomizeLatched);
-  if (randomize) return onRandomizePad(session, row, col);
   const holdingAux = session.ui.heldContext === "aux";
-  if (!session.ui.heldContext && session.ui.context === "aux" && (session.ui.wheelTouch || session.ui.randomizeLatched) && top) {
-    if (col >= pageCount("aux")) return session;
-    return { ...session, ui: settleRandomize(rememberPage(session.ui, "aux", col)) };
-  }
   if (session.ui.heldContext && (holdingAux ? top : top || second)) {
     const page = top ? col : 8 + col;
     const held = session.ui.heldContext;
@@ -160,6 +161,12 @@ function onPad(session: Session, index: number, press: boolean): Session {
       ...session,
       ui: settleRandomize({ ...rememberPage(session.ui, held, page), heldContext: held, heldPage: page }),
     };
+  }
+  const randomize = !auxHidesRandomize(session.ui) && (session.ui.wheelTouch || session.ui.randomizeLatched);
+  if (randomize) return onRandomizePad(session, row, col);
+  if (!session.ui.heldContext && session.ui.context === "aux" && (session.ui.wheelTouch || session.ui.randomizeLatched) && top) {
+    if (col >= pageCount("aux")) return session;
+    return { ...session, ui: settleRandomize(rememberPage(session.ui, "aux", col)) };
   }
   if ((session.ui.sampleHeld || session.ui.sampleLatched) && patternPadsVisible(session.ui)) {
     if (row === 0) return onCaptureStrip(session, col);

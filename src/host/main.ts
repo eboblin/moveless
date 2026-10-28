@@ -36,7 +36,7 @@ import {
 } from "../ui/screen.ts";
 import { resetWaveform, serviceWaveform } from "../ui/wave-audio.ts";
 import { applyWavePages, strokeWaveform, type WaveTape } from "../ui/wave.ts";
-import { defaultUi, focusVisible, peekKind, rememberPage, settleWheel, type UiState } from "../ui/state.ts";
+import { defaultUi, focusVisible, peekKind, rememberPage, screenPlace, settleWheel, type UiState } from "../ui/state.ts";
 import type { Project } from "../core/types.ts";
 
 interface HostGlobals {
@@ -604,7 +604,8 @@ function paintLeds(levels?: readonly number[]): void {
     sentDown = arrows.down;
     offerLed(ledOut, [0x0b, 0xb0, DOWN_CC, arrows.down]);
   }
-  trackLeds(session.project, session.ui.context, session.ui.page).forEach((led, index) => {
+  const place = screenPlace(session.ui);
+  trackLeds(session.project, place.context, place.page).forEach((led, index) => {
     const color = ledColorAt(led, now, tempo);
     if (sentTracks[index] === color) return;
     sentTracks[index] = color;

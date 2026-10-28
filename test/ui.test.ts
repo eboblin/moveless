@@ -844,6 +844,42 @@ describe("surface", () => {
     assert.equal(state.ui.context, "kick");
   });
 
+  it("draws the held lane's page buttons and lights its page before release", () => {
+    let state = session();
+    state = reduce(state, { kind: "note", data1: 20, data2: 127 });
+    state = reduce(state, { kind: "note", data1: 20, data2: 0 });
+    state = reduce(state, { kind: "cc", data1: 14, data2: 1 });
+    state = reduce(state, { kind: "cc", data1: 14, data2: 1 });
+    state = reduce(state, { kind: "cc", data1: 14, data2: 1 });
+    assert.equal(state.ui.page, 3);
+    state = reduce(state, { kind: "note", data1: 16, data2: 127 });
+    state = reduce(state, { kind: "note", data1: 16, data2: 0 });
+    state = reduce(state, { kind: "note", data1: 20, data2: 127 });
+    assert.equal(state.ui.context, "kick");
+    assert.equal(state.ui.heldContext, "bass");
+    assert.equal(state.ui.heldPage, 3);
+    const pads = padLeds(state.project, state.ui.mode, state.ui);
+    assert.equal(pads[27].blink, true);
+    assert.equal(pads[27].color, pageGroupColor("bass", 3));
+    assert.equal(pads[24].blink, false);
+
+    state = reduce(state, { kind: "note", data1: 20, data2: 0 });
+    state = reduce(state, { kind: "note", data1: 16, data2: 127 });
+    state = reduce(state, { kind: "note", data1: 16, data2: 0 });
+    state = reduce(state, { kind: "cc", data1: 3, data2: 127 });
+    state = reduce(state, { kind: "cc", data1: 14, data2: 1 });
+    assert.equal(state.ui.context, "kick");
+    assert.equal(state.ui.page, 1);
+    assert.equal(state.ui.randomizeLatched, true);
+    state = reduce(state, { kind: "note", data1: 20, data2: 127 });
+    const latched = padLeds(state.project, state.ui.mode, state.ui);
+    assert.equal(state.ui.context, "kick");
+    assert.equal(latched[27].blink, true);
+    assert.equal(latched[27].color, pageGroupColor("bass", 3));
+    assert.equal(latched[25].blink, false);
+    assert.equal(latched[8].color, LED.purple);
+  });
+
   it("turns pages from the wheel and commits a peeked page", () => {
     let state = session();
     state = reduce(state, { kind: "cc", data1: 14, data2: 1 });
