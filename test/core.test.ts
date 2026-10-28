@@ -41,7 +41,7 @@ import { chordLabels, textPreview } from "../src/core/text-preview.ts";
 import { fieldsOf, getPath } from "../src/core/fields.ts";
 import { hash01 } from "../src/core/hash.ts";
 import { SOUND, bindingFor, livePage, macroOffset, pagesFor } from "../src/core/pages.ts";
-import { LANES, PATTERN_LANES, type PatternId, type Project, type ScaleId } from "../src/core/types.ts";
+import { DRUM_NOTE, LANES, PATTERN_LANES, type PatternId, type Project, type ScaleId } from "../src/core/types.ts";
 import { hasSoundMap } from "../src/dsp/map.ts";
 import { punch } from "../src/core/morph.ts";
 
@@ -196,6 +196,8 @@ describe("euclid generator", () => {
     for (const id of ["kick", "snare", "hat", "perc"] as const) {
       assert.equal(lanes[id].ratchet.count.value, 0);
       assert.equal(lanes[id].ratchet.rate.value, 0);
+      assert.equal(lanes[id].ratchet.fade.value, 0.5);
+      assert.equal(lanes[id].ratchet.tone.value, 0.5);
     }
     assert.equal(lanes.bass.repeat.value, 0);
     assert.equal(lanes.lead.repeat.value, 0);
@@ -304,18 +306,119 @@ describe("euclid generator", () => {
 
   it("expands ratchet counts inside one source event", () => {
     const project = bar(defaultProject());
-    project.working.kick.gen1 = { ...project.working.kick.gen1, length: 16, hits: 4, rotate: 0, probability: 1 };
-    project.working.kick.gen2.hits = 0;
+    project.working.kick.gen1.hits = 0;
+    project.working.kick.gen2 = { ...project.working.kick.gen2, length: 16, hits: 4, rotate: 0, probability: 1 };
     project.working.kick.ratchet.count = modulated(0.4);
     project.working.kick.ratchet.rate = modulated(unitForIndex(1, 6));
     const ticks = generatePhrase(project).lanes.kick.filter((event) => event.step === 0).map((event) => event.tick);
     assert.deepEqual(ticks, [0, 48, 96, 144]);
   });
 
+  it("leaves a beat hit whole when count is up", () => {
+    const project = bar(defaultProject());
+    project.working.kick.gen1 = { ...project.working.kick.gen1, length: 16, hits: 4, rotate: 0, probability: 1 };
+    project.working.kick.gen2.hits = 0;
+    project.working.kick.ratchet.count = modulated(1);
+    project.working.kick.ratchet.fade = modulated(0);
+    project.working.kick.ratchet.tone = modulated(1);
+    const kicks = generatePhrase(project).lanes.kick;
+    assert.deepEqual(kicks.map((event) => event.step), [0, 4, 8, 12]);
+    assert.ok(kicks.every((event) => event.tick === event.step * SIXTEENTH_TICKS));
+    assert.ok(kicks.every((event) => event.note === DRUM_NOTE.kick));
+    assert.ok(kicks.every((event) => event.sound.pitch === project.working.kick.sound.pitch.value));
+  });
+
+  it("fades a roll forward and skips a silent tick", () => {
+    const project = bar(defaultProject());
+    project.working.kick.gen1.hits = 0;
+    project.working.kick.gen2 = { ...project.working.kick.gen2, length: 16, hits: 1, rotate: 0, probability: 1, velocity: modulated(1) };
+    project.working.kick.sound.decay = modulated(1);
+    project.working.kick.ratchet.count = modulated(0.4);
+    project.working.kick.ratchet.rate = modulated(unitForIndex(1, 6));
+    project.working.kick.ratchet.fade = modulated(0);
+    const kicks = generatePhrase(project).lanes.kick;
+    assert.deepEqual(kicks.map((event) => event.tick), [0, 48, 96]);
+    assert.equal(kicks[0].velocity, 1);
+    assert.ok(Math.abs(kicks[1].velocity - 2 / 3) < 1e-9);
+    assert.ok(Math.abs(kicks[2].velocity - 1 / 3) < 1e-9);
+    assert.equal(kicks[0].sound.decay, 1);
+    assert.ok(kicks[2].sound.decay < kicks[0].sound.decay);
+  });
+
+  it("lands the loud tick of a rise on the roll step", () => {
+    const project = bar(defaultProject());
+    project.working.kick.gen1.hits = 0;
+    project.working.kick.gen2 = { ...project.working.kick.gen2, length: 16, hits: 1, rotate: 0, probability: 1, velocity: modulated(1) };
+    project.working.kick.ratchet.count = modulated(0.4);
+    project.working.kick.ratchet.rate = modulated(unitForIndex(1, 6));
+    project.working.kick.ratchet.fade = modulated(1);
+    const kicks = generatePhrase(project).lanes.kick;
+    assert.deepEqual(kicks.map((event) => event.tick), [-96, -48, 0]);
+    assert.equal(kicks[kicks.length - 1].velocity, 1);
+    assert.ok(kicks[0].velocity < kicks[kicks.length - 1].velocity);
+  });
+
+  it("raises later ticks of a roll and keeps the grid hit on the sound pitch", () => {
+    const project = bar(defaultProject());
+    project.working.kick.gen1.hits = 0;
+    project.working.kick.gen2 = { ...project.working.kick.gen2, length: 16, hits: 1, rotate: 0, probability: 1 };
+    project.working.kick.ratchet.count = modulated(0.4);
+    project.working.kick.ratchet.rate = modulated(unitForIndex(1, 6));
+    project.working.kick.ratchet.tone = modulated(1);
+    const kicks = generatePhrase(project).lanes.kick;
+    const pitch = project.working.kick.sound.pitch.value;
+    assert.equal(kicks[0].sound.pitch, pitch);
+    assert.equal(kicks[0].note, DRUM_NOTE.kick);
+    assert.ok(kicks[kicks.length - 1].sound.pitch > pitch);
+    assert.ok(kicks[kicks.length - 1].note > kicks[0].note);
+
+    project.working.snare.gen1.hits = 0;
+    project.working.snare.gen2 = { ...project.working.snare.gen2, length: 16, hits: 1, rotate: 0, probability: 1 };
+    project.working.snare.ratchet.count = modulated(0.4);
+    project.working.snare.ratchet.rate = modulated(unitForIndex(1, 6));
+    project.working.snare.ratchet.tone = modulated(1);
+    const snares = generatePhrase(project).lanes.snare;
+    assert.equal(snares[0].sound.tone, project.working.snare.sound.tone.value);
+    assert.ok(snares[snares.length - 1].sound.tone > snares[0].sound.tone);
+
+    project.working.hat.gen1.hits = 0;
+    project.working.hat.gen2 = { ...project.working.hat.gen2, length: 16, hits: 1, rotate: 0, probability: 1 };
+    project.working.hat.ratchet.count = modulated(0.4);
+    project.working.hat.ratchet.rate = modulated(unitForIndex(1, 6));
+    project.working.hat.ratchet.tone = modulated(1);
+    const hats = generatePhrase(project).lanes.hat;
+    assert.ok(hats[hats.length - 1].sound.color > hats[0].sound.color);
+  });
+
+  it("rolls the step when beat and roll land together", () => {
+    const project = bar(defaultProject());
+    project.working.kick.gen1 = { ...project.working.kick.gen1, length: 16, hits: 4, rotate: 0, probability: 1 };
+    project.working.kick.gen2 = { ...project.working.kick.gen2, length: 16, hits: 1, rotate: 0, probability: 1 };
+    project.working.kick.ratchet.count = modulated(0.4);
+    project.working.kick.ratchet.rate = modulated(unitForIndex(1, 6));
+    const kicks = generatePhrase(project).lanes.kick;
+    assert.deepEqual(kicks.filter((event) => event.step === 0).map((event) => event.tick), [0, 48, 96, 144]);
+    assert.deepEqual(kicks.filter((event) => event.step !== 0).map((event) => event.step), [4, 8, 12]);
+  });
+
+  it("ignores fade and tone when the roll count is one", () => {
+    const project = bar(defaultProject());
+    project.working.kick.gen1.hits = 0;
+    project.working.kick.gen2 = { ...project.working.kick.gen2, length: 16, hits: 1, rotate: 0, probability: 1, velocity: modulated(1) };
+    project.working.kick.ratchet.count = modulated(0);
+    project.working.kick.ratchet.fade = modulated(0);
+    project.working.kick.ratchet.tone = modulated(1);
+    const kicks = generatePhrase(project).lanes.kick;
+    assert.equal(kicks.length, 1);
+    assert.equal(kicks[0].tick, 0);
+    assert.equal(kicks[0].velocity, 1);
+    assert.equal(kicks[0].sound.pitch, project.working.kick.sound.pitch.value);
+  });
+
   it("thins each ratchet and each repeat on its own", () => {
     const project = bar(defaultProject());
-    project.working.kick.gen1 = { ...project.working.kick.gen1, length: 16, hits: 1, rotate: 0, probability: 0.45 };
-    project.working.kick.gen2.hits = 0;
+    project.working.kick.gen1.hits = 0;
+    project.working.kick.gen2 = { ...project.working.kick.gen2, length: 16, hits: 1, rotate: 0, probability: 0.45 };
     project.working.kick.ratchet.count = modulated(1);
     project.working.kick.ratchet.rate = modulated(unitForIndex(1, 6));
     project.working.bass.gen1 = { ...project.working.bass.gen1, length: 16, hits: 1, rotate: 0, probability: 0.45 };
@@ -336,13 +439,13 @@ describe("euclid generator", () => {
 
   it("reads generator velocity after count and rate have placed each note", () => {
     const project = bar(defaultProject());
-    project.working.kick.gen1 = { ...project.working.kick.gen1, length: 16, hits: 1, rotate: 0, probability: 1 };
-    project.working.kick.gen2.hits = 0;
+    project.working.kick.gen1.hits = 0;
+    project.working.kick.gen2 = { ...project.working.kick.gen2, length: 16, hits: 1, rotate: 0, probability: 1 };
     project.working.kick.ratchet.count = modulated(0.4);
     project.working.kick.ratchet.rate = modulated(unitForIndex(3, 6));
-    project.working.kick.gen1.velocity = modulated(0.5, 0, 16, 0.5);
+    project.working.kick.gen2.velocity = modulated(0.5, 0, 16, 0.5);
     const kicks = generatePhrase(project).lanes.kick;
-    const kickCurve = (step: number) => evalModulated(project.working.kick.gen1.velocity, step);
+    const kickCurve = (step: number) => evalModulated(project.working.kick.gen2.velocity, step);
     assert.deepEqual(kicks.map((event) => event.tick), [0, 24, 48, 72]);
     assert.deepEqual(kicks.map((event) => event.velocity), [0, 0.5, 1, 1.5].map(kickCurve));
     assert.notEqual(kicks[0].velocity, kicks[1].velocity);
@@ -373,13 +476,13 @@ describe("euclid generator", () => {
     project.working.kick.sound.pitch = modulated(0.35, -1, 8, 1);
     project.working.kick.filter.cutoff.pattern = -1;
     project.working.kick.filter.cutoff.cycle = 8;
-    const page = livePage(project, "kick", 7);
+    const page = livePage(project, "kick", 8);
     assert.equal(page?.bindings[1]?.path, "filter.cutoff.pattern");
     assert.equal(page?.bindings[2], null);
     assert.equal(page?.bindings[3]?.path, "filter.cutoff.amount");
     assert.equal(project.working.kick.filter.cutoff.cycle, 8);
     project.working.kick.filter.cutoff.pattern = 2;
-    assert.equal(livePage(project, "kick", 7)?.bindings[2]?.path, "filter.cutoff.cycle");
+    assert.equal(livePage(project, "kick", 8)?.bindings[2]?.path, "filter.cutoff.cycle");
     const kicks = generatePhrase(project).lanes.kick;
     assert.ok(kicks.length > 0);
     for (const event of kicks) assert.ok(event.sound.pitch > 0.35);
@@ -387,10 +490,14 @@ describe("euclid generator", () => {
 
   it("reads a voice envelope at the generator step", () => {
     const project = bar(defaultProject());
+    project.working.kick.gen1.hits = 0;
+    project.working.kick.gen2 = { ...project.working.kick.gen2, length: 16, hits: 1, rotate: 0, probability: 1 };
     project.working.kick.ratchet.count = modulated(0, -1, 4, 1);
     const kicks = generatePhrase(project).lanes.kick;
     assert.ok(kicks.length > 1);
     const quiet = bar(defaultProject());
+    quiet.working.kick.gen1.hits = 0;
+    quiet.working.kick.gen2 = { ...quiet.working.kick.gen2, length: 16, hits: 1, rotate: 0, probability: 1 };
     quiet.working.kick.ratchet.count = modulated(0, -1, 4, 0);
     assert.equal(generatePhrase(quiet).lanes.kick.length, 1);
   });
@@ -2285,7 +2392,7 @@ describe("surface catalog", () => {
     assert.equal(bindingFor("gen1.hits")?.weight, 2);
     assert.equal(bindingFor("gen2.hits")?.weight, 2);
     assert.equal(bindingFor("gen1.length")?.weight, 6);
-    assert.equal(bindingFor("gen1.length")?.title, "GEN 1 LENGTH");
+    assert.equal(bindingFor("gen1.length")?.title, "BEAT LENGTH");
     assert.equal(bindingFor("follow")?.short, "FOL");
   });
 });

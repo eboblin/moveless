@@ -20,7 +20,7 @@ import {
 export type MorphKind = "lerp" | "switch";
 export type KnobStore = "lane" | "progression" | "global" | "mixer" | "macro" | "bus" | "deck";
 /** How the screen draws a knob. `number` is the plain 0..99 cell. */
-export type KnobDisplay = "number" | "pitch" | "octave" | "note" | "scale" | "division" | "chordTone" | "slice" | "count" | "time";
+export type KnobDisplay = "number" | "pitch" | "octave" | "note" | "scale" | "division" | "chordTone" | "slice" | "count" | "time" | "fade" | "rollTone";
 
 export interface Binding {
   path: string;
@@ -183,6 +183,8 @@ const FIELD = {
   count: spec("COUNT", 8, { macro: ["count", "repeat"], display: "count", step: 1 / 8, max: 7 / 8 }),
   repeat: spec("REPEAT", 8),
   rate: spec("RATE", 8, { display: "division" }),
+  /** Level slope along a roll. 50 is flat. Macros do not move it. */
+  fade: spec("FADE", 2, { detent: [0.5], macro: [], display: "fade" }),
   bendTime: spec("B TIME", 1),
   bodyDecay: spec("B DECAY", 1, { macro: ["bodyDecay", "decay"] }),
   noiseDecay: spec("N DECAY", 1, { macro: ["noiseDecay", "decay"] }),
@@ -375,11 +377,11 @@ function pair(aPath: string, a: FieldSpec, bPath: string, b: FieldSpec, group: P
   return page(aPath, `${a.label} / ${b.label}`, [a.label, b.label], group, [...vpca(aPath, a, group), ...vpca(bPath, b, group)]);
 }
 
-function euclid(which: 1 | 2, slot: keyof typeof EUCLID): Binding {
+function euclid(which: 1 | 2, slot: keyof typeof EUCLID, name = `G${which}`): Binding {
   const role = EUCLID[slot];
   return bind({
     path: `gen${which}.${slot}`,
-    label: `G${which} ${role.word}`,
+    label: `${name} ${role.word}`,
     min: role.min,
     max: role.max,
     step: role.step,
@@ -429,11 +431,26 @@ function sendPage(): Page {
   return pair("send.reverb", FIELD.reverb, "send.delay", FIELD.delay, "fx");
 }
 
+/** Pitch slope along a roll. 50 is flat. Not FIELD.tone: that one picks a chord tone. */
+const ROLL_TONE: FieldSpec = spec("TONE", 2, { detent: [0.5], macro: [], display: "rollTone" });
+
+function drumGenPage(which: 1 | 2): Page {
+  const name = which === 1 ? "BEAT" : "ROLL";
+  return page(`gen${which}`, `${name} GEN`, [name, "VEL"], "pattern", [
+    euclid(which, "length", name),
+    euclid(which, "hits", name),
+    euclid(which, "rotate", name),
+    euclid(which, "probability", name),
+    ...vpca(`gen${which}.velocity`, FIELD.velocity, "pattern", `${name} VEL`),
+  ]);
+}
+
 function drumPages(lane: DrumId): Page[] {
   return [
-    genPage(1),
-    genPage(2),
+    drumGenPage(1),
+    drumGenPage(2),
     pair("ratchet.count", FIELD.count, "ratchet.rate", FIELD.rate, "pattern"),
+    pair("ratchet.fade", FIELD.fade, "ratchet.tone", ROLL_TONE, "pattern"),
     ...soundPages(SOUND[lane]),
     filterPage(),
     sendPage(),

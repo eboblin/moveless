@@ -1031,6 +1031,13 @@ function bucket(index: number, count: number, size: number): [number, number] {
   return [Math.min(size - 1, start), Math.min(size, Math.max(start + 1, end))];
 }
 
+/** 50 is flat. Below and above name the direction of the roll. */
+function tiltWord(unit: number, low: string, high: string): string {
+  if (unit < 0.5) return low;
+  if (unit > 0.5) return high;
+  return "FLAT";
+}
+
 /** Pitch and octave show the resting note. Rate shows its division, count shows how many hits. */
 function figureHeader(project: Project, context: ContextId, binding: Binding): string | null {
   if (binding.store === "progression" && binding.path === "count" && Math.round(readControl(project, context, binding.path)) === 0) {
@@ -1059,6 +1066,10 @@ function figureHeader(project: Project, context: ContextId, binding: Binding): s
       return delayDivision(readControl(project, context, binding.path), project.global.bar, project.global.tempo);
     case "count":
       return String(countFromUnit(readControl(project, context, binding.path)));
+    case "fade":
+      return tiltWord(readControl(project, context, binding.path), "FALL", "RISE");
+    case "rollTone":
+      return tiltWord(readControl(project, context, binding.path), "DOWN", "UP");
     case "slice":
       if (context !== "chords") return null;
       return restingSliceLabel(project.working.chords, project.global);

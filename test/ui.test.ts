@@ -133,15 +133,15 @@ function tapTrack(state: Session, index: number): Session {
 }
 
 describe("pages and leds", () => {
-  it("gives drums nine pages and bass twelve", () => {
-    assert.equal(pageCount("kick"), 9);
+  it("gives drums ten pages and bass twelve", () => {
+    assert.equal(pageCount("kick"), 10);
     assert.equal(pageCount("bass"), 12);
     assert.equal(pageCount("lead"), 12);
     assert.equal(pageCount("chords"), 11);
     assert.equal(pageGroup("chords", 0), "pattern");
     assert.equal(pageGroup("chords", 1), "pattern");
-    assert.equal(pageGroup("kick", 7), "fx");
     assert.equal(pageGroup("kick", 8), "fx");
+    assert.equal(pageGroup("kick", 9), "fx");
     assert.equal(pageGroup("bass", 9), "sound");
     assert.equal(lanePages("bass")[8]?.title, "ATTACK / SUSTAIN");
     assert.equal(lanePages("bass")[9]?.title, "RELEASE / FLT ENV");
@@ -162,17 +162,21 @@ describe("pages and leds", () => {
     assert.equal(pageGroup("chords", 8), "sound");
     assert.equal(pageGroup("chords", 9), "fx");
     assert.equal(pageGroup("chords", 10), "fx");
-    assert.equal(pageGroupColor("kick", 7), 9);
+    assert.equal(pageGroupColor("kick", 8), 9);
     assert.equal(lanePages("bass").at(-1)?.groups[0], "REV");
     assert.equal(lanePages("bass").at(-1)?.groups[1], "DLY");
     assert.equal(lanePages("bass").at(-2)?.groups[0], "FLT CUTOFF");
     assert.equal(lanePages("bass").at(-2)?.groups[1], "FLT RESO");
-    assert.equal(lanePages("kick")[0].title, "GENERATOR 1");
-    assert.deepEqual(lanePages("kick")[0].groups, ["GEN 1", "VEL"]);
+    assert.equal(lanePages("kick")[0].title, "BEAT GEN");
+    assert.deepEqual(lanePages("kick")[0].groups, ["BEAT", "VEL"]);
     assert.deepEqual(lanePages("kick")[2].groups, ["COUNT", "RATE"]);
-    assert.equal(lanePages("kick")[1].title, "GENERATOR 2");
-    assert.equal(lanePages("kick")[0].bindings[3]?.label, "G1 PRB");
+    assert.equal(lanePages("kick")[1].title, "ROLL GEN");
+    assert.deepEqual(lanePages("kick")[1].groups, ["ROLL", "VEL"]);
+    assert.equal(lanePages("kick")[3].title, "FADE / TONE");
+    assert.equal(lanePages("kick")[0].bindings[3]?.label, "BEAT PRB");
     assert.equal(lanePages("kick")[2].title, "COUNT / RATE");
+    assert.equal(lanePages("bass")[0].title, "GENERATOR 1");
+    assert.equal(lanePages("bass")[1].title, "GENERATOR 2");
     assert.equal(lanePages("bass")[2].bindings[0]?.label, "REPEAT V");
     assert.equal(lanePages("bass")[2].groups[1], "STEP");
     assert.equal(lanePages("bass")[3].bindings[0]?.label, "PITCH V");
@@ -182,7 +186,7 @@ describe("pages and leds", () => {
     assert.equal(pageGroupColor("bass", 2), pageGroupColor("bass", 0));
     assert.equal(pageGroup("bass", 3), "notes");
     assert.equal(pageGroup("lead", 2), "pattern");
-    assert.equal(lanePages("kick")[0].bindings[4]?.label, "G1 VEL V");
+    assert.equal(lanePages("kick")[0].bindings[4]?.label, "BEAT VEL V");
     const fx = pagesFor("fx");
     assert.equal(pageCount("fx"), 2);
     assert.deepEqual(fx.map((page) => page.id), ["reverb", "delay"]);
@@ -413,7 +417,7 @@ describe("pages and leds", () => {
     assert.equal(wheel[4].blink, false);
     assert.equal(wheel[7].color, LED.red);
     assert.equal(wheel[7].blink, false);
-    assert.equal(wheel[27].color, offColor(20));
+    assert.equal(wheel[27].color, 3);
     assert.equal(wheel[28].color, offColor(20));
     const reset = padLeds({ ...project, randomizeIntensity: "clear" }, "journal", { ...defaultUi(), wheelTouch: true });
     assert.equal(reset[24].color, wheel[24].color);
@@ -421,7 +425,7 @@ describe("pages and leds", () => {
     assert.equal(reset[24].blinkTo, wheel[24].blinkTo);
     assert.equal(reset[25].color, wheel[25].color);
     assert.equal(reset[7].color, LED.red);
-    assert.equal(reset[27].color, offColor(20));
+    assert.equal(reset[27].color, 3);
     const only = padLeds({ ...project, randomizeScope: "page" }, "journal", { ...defaultUi(), wheelTouch: true });
     assert.equal(only[24].color, 3);
     assert.equal(only[25].color, offColor(3));
@@ -891,10 +895,10 @@ describe("surface", () => {
     state.project.working.kick.gen2.hits = 0;
     state = reduce(state, { kind: "cc", data1: 71, data2: 127 });
     assert.ok(state.project.working.kick.gen1.length < 16);
-    assert.equal(state.ui.focus?.label, "G1 LEN");
+    assert.equal(state.ui.focus?.label, "BEAT LEN");
     const screen = renderScreen(state.project, state.ui, 0);
-    assert.equal(screen.header, "GEN 1 LENGTH");
-    assert.ok(screen.labels.some((label) => label.text === "GEN 1 LENGTH" && label.y === TITLE_Y));
+    assert.equal(screen.header, "BEAT LENGTH");
+    assert.ok(screen.labels.some((label) => label.text === "BEAT LENGTH" && label.y === TITLE_Y));
     assert.ok(screen.labels.some((label) => label.text === "KCK" && label.y === TITLE_Y && !label.invert));
     const marked = screen.labels.filter((label) => label.invert);
     assert.ok(marked.some((label) => label.text === "LEN"));
@@ -977,8 +981,8 @@ describe("surface", () => {
 
   it("splits a ratchet burst so close hits do not share a column", () => {
     const project = defaultProject();
-    project.working.kick.gen1 = { ...project.working.kick.gen1, length: 16, hits: 1, rotate: 0, probability: 1 };
-    project.working.kick.gen2.hits = 0;
+    project.working.kick.gen1.hits = 0;
+    project.working.kick.gen2 = { ...project.working.kick.gen2, length: 16, hits: 1, rotate: 0, probability: 1 };
     project.working.kick.ratchet.count = modulated(1);
     project.working.kick.ratchet.rate = modulated(1);
     const screen = renderScreen(project, defaultUi(), 0, false);
@@ -1152,12 +1156,12 @@ describe("surface", () => {
     assert.ok(lane);
     assert.equal(lane?.invert, undefined);
     assert.ok((lane?.x ?? 0) > 100);
-    assert.equal(screen.labels.some((label) => label.text === "GEN 1" && label.y === TITLE_Y), true);
+    assert.equal(screen.labels.some((label) => label.text === "BEAT" && label.y === TITLE_Y), true);
     assert.equal(screen.labels.some((label) => label.text === "VEL" && label.y === TITLE_Y), true);
     assert.equal(screen.labels.some((label) => label.text.includes("PLAY") && label.y === TITLE_Y), false);
     assert.equal(screen.labels.some((label) => label.text.includes("JRN")), false);
     assert.equal(screen.labels.some((label) => label.text.includes("SET")), false);
-    const genX = screen.labels.find((label) => label.text === "GEN 1")?.x ?? -1;
+    const genX = screen.labels.find((label) => label.text === "BEAT")?.x ?? -1;
     const velX = screen.labels.find((label) => label.text === "VEL")?.x ?? -1;
     assert.equal(genX, 1);
     assert.equal(velX, 65);
@@ -1210,7 +1214,7 @@ describe("surface", () => {
     const turned = renderScreen(defaultProject(), { ...defaultUi(), page: 2, wheelTouch: true }, 0);
     assert.equal(pixel(turned, 1, PAGER_Y), 0);
     assert.equal(pixel(turned, 36, PAGER_Y), 1);
-    assert.equal(pixel(turned, 37, PAGER_Y), 1);
+    assert.equal(pixel(turned, 37, PAGER_Y), 0);
     const mix = renderScreen(defaultProject(), { ...openMixer(session()).ui, wheelTouch: true }, 0);
     assert.equal(pixel(mix, 0, PAGER_Y), 1);
     assert.equal(pixel(mix, 1, PAGER_Y), 0);
@@ -1474,6 +1478,25 @@ describe("surface", () => {
     assert.equal(held.header, "5");
   });
 
+  it("names a roll gesture while its value is held", () => {
+    const project = defaultProject();
+    const header = (path: string, value: number) => {
+      const key = path.endsWith("fade.value") ? "fade" as const : "tone" as const;
+      project.working.kick.ratchet[key] = modulated(value);
+      return renderScreen(project, {
+        ...defaultUi(),
+        page: 3,
+        focus: { label: path, path, generator: path.slice(0, -6), showPattern: false, held: true, untilTick: 0, untilMs: 0 },
+      }, 0).header;
+    };
+    assert.equal(header("ratchet.fade.value", 0.5), "FLAT");
+    assert.equal(header("ratchet.fade.value", 0), "FALL");
+    assert.equal(header("ratchet.fade.value", 1), "RISE");
+    assert.equal(header("ratchet.tone.value", 0.5), "FLAT");
+    assert.equal(header("ratchet.tone.value", 0), "DOWN");
+    assert.equal(header("ratchet.tone.value", 1), "UP");
+  });
+
   it("keeps big digits for 0..99 and uses small 3+ digit text past that", () => {
     const small = { min: 0, max: 64, path: "x", label: "X", step: 1, integer: true };
     assert.deepEqual(displayAmount(0, small), { kind: "big", n: 0, negative: false });
@@ -1593,7 +1616,7 @@ describe("surface", () => {
     pattern = reduce(pattern, { kind: "note", data1: 1, data2: 127 });
     const phrase = renderScreen(pattern.project, pattern.ui, 0);
     assert.equal(phrase.viz, "phrase");
-    assert.equal(phrase.header, "GEN 1 HITS");
+    assert.equal(phrase.header, "BEAT HITS");
   });
 
   it("returns the lane view after a knob release while the clock is stopped, and when the page changes", () => {
@@ -1627,8 +1650,8 @@ describe("surface", () => {
     assert.equal(turned.ui.page, 3);
     const next = renderScreen(turned.project, turned.ui, 0);
     assert.equal(next.viz, "phrase");
-    assert.equal(next.header, "KCK PITCH DECAY");
-    assert.ok(next.labels.some((label) => label.text === "PITCH"));
+    assert.equal(next.header, "KCK FADE TONE");
+    assert.ok(next.labels.some((label) => label.text === "FADE"));
 
     let held = session();
     held = reduce(held, { kind: "cc", data1: 14, data2: 1 });
@@ -1639,7 +1662,7 @@ describe("surface", () => {
     const left = renderScreen(held.project, held.ui, 0);
     assert.equal(held.ui.focus, null);
     assert.equal(left.viz, "phrase");
-    assert.equal(left.header, "KCK PITCH DECAY");
+    assert.equal(left.header, "KCK FADE TONE");
   });
 
   it("draws a generator cycle on the phrase scale", () => {
@@ -1669,7 +1692,7 @@ describe("surface", () => {
     const named = renderScreen(project, {
       ...defaultUi(),
       context: "kick",
-      page: 7,
+      page: 8,
       focus: { label: "CUTOFF P", path: "filter.cutoff.pattern", generator: "filter.cutoff", showPattern: true, held: true, untilTick: 0, untilMs: 0 },
     }, 0);
     assert.ok(named.labels.some((label) => label.text === "KCK" && label.cell === 1));
@@ -1677,7 +1700,7 @@ describe("surface", () => {
     const flat = {
       ...defaultUi(),
       context: "kick" as const,
-      page: 7,
+      page: 8,
       focus: { label: "CUTOFF V", path: "filter.cutoff.value", generator: "filter.cutoff", showPattern: false, held: true, untilTick: 0, untilMs: 0 },
     };
     const screen = renderScreen(project, flat, 0);
@@ -1695,7 +1718,7 @@ describe("surface", () => {
     const ui = {
       ...defaultUi(),
       context: "kick" as const,
-      page: 7,
+      page: 8,
       focus: { label: "CUTOFF V", path: "filter.cutoff.value", generator: "filter.cutoff", showPattern: false, held: true, untilTick: 0, untilMs: 0 },
     };
     const screen = renderScreen(project, ui, 0);
@@ -2119,10 +2142,10 @@ describe("surface", () => {
     assert.deepEqual(sound.project.working.kick.filter, heard.filter);
 
     let fx = session();
-    for (let n = 0; n < 7; n++) fx = reduce(fx, { kind: "cc", data1: 14, data2: 1 });
+    for (let n = 0; n < 8; n++) fx = reduce(fx, { kind: "cc", data1: 14, data2: 1 });
     const open = fx.project.working.kick;
     fx = loop(fx);
-    assert.equal(fx.ui.page, 7);
+    assert.equal(fx.ui.page, 8);
     assert.notDeepEqual(fx.project.working.kick.filter, open.filter);
     assert.deepEqual(fx.project.working.kick.sound, open.sound);
     assert.deepEqual(fx.project.working.kick.gen1, open.gen1);
@@ -2175,9 +2198,9 @@ describe("surface", () => {
     assert.equal(pads[24].blinkTo, offColor(3));
     assert.equal(pads[25].color, 3);
     assert.equal(pads[25].blink, false);
-    assert.equal(pads[27].color, offColor(20));
+    assert.equal(pads[27].color, 3);
     assert.equal(pads[27].blink, false);
-    assert.equal(pads[17].color, 0);
+    assert.equal(pads[17].color, offColor(9));
     assert.equal(pads[0].color, shadeColor(LED.yellow, 0.2));
     assert.equal(pads[0].blink, false);
     assert.equal(pads[1].color, LED.yellow);
@@ -3249,13 +3272,13 @@ describe("page title", () => {
     assert.ok(until - Date.now() <= PAGE_TITLE_MS && until - Date.now() > PAGE_TITLE_MS - 1000);
     const shown = renderScreen(state.project, state.ui, 0, false, until - 1);
     const bare = renderScreen(state.project, { ...state.ui, pageTitleUntilMs: null }, 0, false, until - 1);
-    assertOutline(shown, bare, [captionAt("GENERATOR 1")]);
+    assertOutline(shown, bare, [captionAt("BEAT GEN")]);
     for (let y = DIGIT_Y; y < DIGIT_Y + DIGIT_H; y++) {
       for (let x = 0; x < WIDTH; x++) assert.equal(pixel(shown, x, y), 0);
     }
     const held = renderScreen(state.project, state.ui, 0, false, until);
     const heldBare = renderScreen(state.project, { ...state.ui, pageTitleUntilMs: null }, 0, false, until);
-    assertOutline(held, heldBare, [captionAt("GENERATOR 1")]);
+    assertOutline(held, heldBare, [captionAt("BEAT GEN")]);
 
     const released = reduce(state, { kind: "note", data1: 9, data2: 0 });
     assert.equal(released.ui.pageTitleUntilMs, null);
@@ -3280,24 +3303,24 @@ describe("page title", () => {
     state = reduce(state, { kind: "cc", data1: 14, data2: 1 });
     assert.equal(state.ui.page, 1);
     assert.ok((state.ui.pageTitleUntilMs ?? 0) >= touchedUntil);
-    assert.equal(state.ui.pageTitleSlide?.from, "GENERATOR 1");
+    assert.equal(state.ui.pageTitleSlide?.from, "BEAT GEN");
     assert.equal(state.ui.pageTitleSlide?.dir, 1);
     const started = state.ui.pageTitleSlide?.startedMs ?? 0;
     const travel = pageTitleTravel(PAGE_TITLE_SLIDE_MS / 2);
-    const fromX = titleLeft("GENERATOR 1") - travel;
-    const toX = titleLeft("GENERATOR 2") + (WIDTH - travel);
-    assert.ok(toX > titleLeft("GENERATOR 2"));
+    const fromX = titleLeft("BEAT GEN") - travel;
+    const toX = titleLeft("ROLL GEN") + (WIDTH - travel);
+    assert.ok(toX > titleLeft("ROLL GEN"));
     const at = started + PAGE_TITLE_SLIDE_MS / 2;
     const mid = renderScreen(state.project, state.ui, 0, false, at);
     const midBare = renderScreen(state.project, { ...state.ui, pageTitleUntilMs: null }, 0, false, at);
     assertOutline(mid, midBare, [
-      { text: "GENERATOR 1", x: fromX, y: CAPTION_SINGLE_Y },
-      { text: "GENERATOR 2", x: toX, y: CAPTION_SINGLE_Y },
+      { text: "BEAT GEN", x: fromX, y: CAPTION_SINGLE_Y },
+      { text: "ROLL GEN", x: toX, y: CAPTION_SINGLE_Y },
     ]);
     const settledAt = started + PAGE_TITLE_SLIDE_MS;
     const settled = renderScreen(state.project, state.ui, 0, false, settledAt);
     const settledBare = renderScreen(state.project, { ...state.ui, pageTitleUntilMs: null }, 0, false, settledAt);
-    assertOutline(settled, settledBare, [captionAt("GENERATOR 2")]);
+    assertOutline(settled, settledBare, [captionAt("ROLL GEN")]);
 
     const until = state.ui.pageTitleUntilMs ?? 0;
     state = reduce(state, { kind: "note", data1: 94, data2: 127 });

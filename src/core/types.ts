@@ -137,7 +137,7 @@ export interface Progression {
 export interface DrumLane {
   gen1: EuclidGen;
   gen2: EuclidGen;
-  ratchet: { count: Modulated; rate: Modulated };
+  ratchet: { count: Modulated; rate: Modulated; fade: Modulated; tone: Modulated };
   sound: Record<string, Modulated>;
   filter: LaneFilter;
   send: LaneSend;

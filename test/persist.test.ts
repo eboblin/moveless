@@ -67,6 +67,21 @@ describe("project persist", () => {
     assert.equal(parsed.project.working.bass.send.delay.value, 0);
   });
 
+  it("fills fade and tone when an older drum lane never stored them", () => {
+    const project = defaultProject();
+    const raw = JSON.parse(serializeStored(project, { context: "kick", page: 0, mode: "journal", playing: true, sampleLatched: false })) as {
+      project: { working: { kick: { ratchet: { fade?: unknown; tone?: unknown } } } };
+    };
+    delete raw.project.working.kick.ratchet.fade;
+    delete raw.project.working.kick.ratchet.tone;
+    const parsed = parseStored(JSON.stringify(raw));
+    assert.ok(parsed);
+    assert.equal(parsed.project.working.kick.ratchet.fade.value, 0.5);
+    assert.equal(parsed.project.working.kick.ratchet.tone.value, 0.5);
+    assert.equal(parsed.project.working.kick.ratchet.fade.amount, 0);
+    assert.equal(parsed.project.working.kick.ratchet.tone.amount, 0);
+  });
+
   it("keeps the factory progression when an older file never stored one", () => {
     const project = record(defaultProject());
     const raw = JSON.parse(serializeStored(project, { context: "kick", page: 0, mode: "journal", playing: true, sampleLatched: false })) as {
@@ -195,7 +210,7 @@ describe("project persist", () => {
     assert.equal(parsed.project.global.bar, defaultProject().global.bar);
     assert.ok(parsed.project.working.kick);
     assert.equal(parsed.ui.context, "snare");
-    assert.equal(parsed.ui.page, 8);
+    assert.equal(parsed.ui.page, 9);
     assert.equal(parsed.ui.playing, true);
     assert.equal(parsed.ui.sampleLatched, false);
   });

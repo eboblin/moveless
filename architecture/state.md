@@ -18,9 +18,9 @@ Mute убирает lane из слышимого выхода. Harmonic events C
 
 ## Lane
 
-Ударные и Bass/Lead: два параллельных евклида `gen1` / `gen2` (`length`, `hits`, `rotate`, `probability`, `velocity` V/P/C/A), без Form и без A/B.
+Bass/Lead: два параллельных евклида `gen1` / `gen2` (`length`, `hits`, `rotate`, `probability`, `velocity` V/P/C/A), без Form и без A/B.
 
-Ударные дополнительно: `ratchet.count/rate`, восемь sound-модуляторов.
+Ударные хранят те же поля. На экране `gen1` — Beat, `gen2` — Roll. Beat ставит одиночные удары: count, rate, fade и tone его не читают. Roll разворачивается в дробь. Count 1 — один удар без жеста. Хит, где попали оба, один, и это ролл. Дополнительно: `ratchet.count/rate/fade/tone`, восемь sound-модуляторов. Fade и tone — дом 0.5, макросы их не двигают. Fade ниже 50 затухает вперёд от шага, выше 50 нарастает в шаг. Тик тише 1/8 не ставится. Decay (у snare оба хвоста) множится на уровень тика. Tone — до октавы по ходу времени, удар на шаге остаётся на pitch страницы sound; snare `tone` и hat `color` едут следом на пол-октавы шкалы. Сдвиг высоты зажимается в диапазон голоса.
 
 Bass и Lead дополнительно: `follow`, генераторы `pitch` и `octave`, `length` (длительность ноты), `repeat`, `step`, восемь sound-модуляторов. Отдельного lane.velocity нет — громкость из `gen*.velocity`. `pitch` 0.5 — тоника выбранной гаммы, края — октава гаммы ниже и выше. `octave` — абсолютная октава тоники, одна шкала у баса и лида: 0 это C0, 9 это верхнее до рояля. По умолчанию бас 2, лид 4. Ступень и октава складываются.
 
@@ -36,7 +36,7 @@ Fx lane: общие реверб и дилей, объект `lanes.fx`. Руч�
 phraseSteps = max(length1, length2)   // length 0 = off
 local = step mod length
 pattern = rotate(euclid(hits, length))
-expand ratchet / repeat
+expand ratchet on a roll hit / repeat
 if hash(seed, lane, gen, sourceStep, index) >= probability → skip that note
 ```
 
@@ -66,7 +66,7 @@ out = clamp(value + envelope * amount * 3)
 
 Хеш вероятности: `seed + lane + generator + "prob" + исходный шаг + номер ratchet или repeat`. Идентификатора сцены в хеше нет.
 
-Ratchet и Repeat считают исходное событие за единицу: count 1 — одно событие. Повторы Repeat сдвигаются на `step` ступеней лада.
+Ratchet и Repeat считают исходное событие за единицу: count 1 — одно событие. Ratchet раскрывает только хит Roll. Повторы Repeat сдвигаются на `step` ступеней лада. Fade и tone читаются на шаге хита и рисуют форму дроби; середина шкалы оставляет ровную дробь вперёд.
 
 ## Гармония
 

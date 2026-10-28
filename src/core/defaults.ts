@@ -160,7 +160,7 @@ function drum(id: DrumId): DrumLane {
   return {
     gen1: euclid(DRUM_VELOCITY[id]),
     gen2: euclid(0.55),
-    ratchet: { count: home(0), rate: home(0) },
+    ratchet: { count: home(0), rate: home(0), fade: home(0.5), tone: home(0.5) },
     sound: sound(id),
     filter: laneFilter(),
     send: laneSend(),

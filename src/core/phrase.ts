@@ -27,6 +27,7 @@ import {
   PROGRESSION_KEYS,
   QUALITY_SEMITONES,
   type ChordLane,
+  type DrumId,
   type DrumLane,
   type EuclidGen,
   type GlobalSettings,
@@ -323,6 +324,8 @@ function takeLane(
     const box = lane as DrumLane;
     take(box.ratchet.count);
     take(box.ratchet.rate);
+    take(box.ratchet.fade);
+    take(box.ratchet.tone);
     take(box.gen1.velocity);
     take(box.gen2.velocity);
   }
@@ -517,22 +520,91 @@ function place(
   };
 }
 
-function drumEvents(lane: DrumLane, id: LaneId, global: GlobalSettings, macros: Record<string, number>, steps: number): TimedEvent[] {
+/** Same spans as drumPitchHz. An octave is this far along the log knob. */
+const DRUM_HZ: Record<DrumId, readonly [number, number]> = {
+  kick: [32, 180],
+  snare: [140, 900],
+  hat: [250, 4000],
+  perc: [70, 2500],
+};
+
+/** A tick this quiet is left out, so it does not retrigger the drum voice. */
+const ROLL_QUIET = 0.125;
+
+/** How far snare tone and hat color follow a pitch shift of one octave. */
+const ROLL_BRIGHT = 0.5;
+
+function rollLevel(fade: number, t: number): number {
+  const tilt = (fade - 0.5) * 2;
+  if (tilt >= 0) return 1 - tilt * (1 - t);
+  return 1 + tilt * t;
+}
+
+/** 0 on the grid hit. Positive means the tick is higher as time moves forward. */
+function rollOctaves(tone: number, t: number, rise: boolean): number {
+  const along = rise ? t - 1 : t;
+  return (tone - 0.5) * 2 * along;
+}
+
+function shiftPitch(id: DrumId, unit: number, octaves: number): number {
+  const [lo, hi] = DRUM_HZ[id];
+  const span = Math.log(hi / lo);
+  return clamp01(unit + (octaves * Math.LN2) / span);
+}
+
+function pictureNote(id: DrumId, unit: number, shifted: number): number {
+  const base = DRUM_NOTE[id];
+  if (Math.abs(shifted - unit) < 1e-6) return base;
+  const [lo, hi] = DRUM_HZ[id];
+  const hz = (u: number) => lo * (hi / lo) ** u;
+  const semis = Math.round(12 * Math.log2(hz(shifted) / hz(unit)));
+  return Math.max(0, Math.min(127, base + semis));
+}
+
+/** Pitch, decay and a little brightness. Returns the note the phrase strip draws. */
+function shapeRoll(id: DrumId, sound: Record<string, number>, octaves: number, level: number): number {
+  const pitch = sound.pitch ?? 0.5;
+  const shifted = shiftPitch(id, pitch, octaves);
+  sound.pitch = shifted;
+  if (id === "snare") {
+    if (typeof sound.bodyDecay === "number") sound.bodyDecay = clamp01(sound.bodyDecay * level);
+    if (typeof sound.noiseDecay === "number") sound.noiseDecay = clamp01(sound.noiseDecay * level);
+    if (typeof sound.tone === "number") sound.tone = clamp01(sound.tone + octaves * ROLL_BRIGHT);
+  } else if (typeof sound.decay === "number") {
+    sound.decay = clamp01(sound.decay * level);
+  }
+  if (id === "hat" && typeof sound.color === "number") sound.color = clamp01(sound.color + octaves * ROLL_BRIGHT);
+  return pictureNote(id, pitch, shifted);
+}
+
+function drumEvents(lane: DrumLane, id: DrumId, global: GlobalSettings, macros: Record<string, number>, steps: number): TimedEvent[] {
   const hits = generateHits(lane.gen1, lane.gen2, steps);
   const out: TimedEvent[] = [];
-  hits.forEach((hit) => {
-    const count = countFromUnit(evalModulated(withMacro(lane.ratchet.count, macro(macros, "count")), hit.step));
-    const rate = rateFromUnit(evalModulated(withMacro(lane.ratchet.rate, macro(macros, "rate")), hit.step));
+  for (const hit of hits) {
+    const rolls = hit.generators.includes(2);
+    const count = rolls ? countFromUnit(evalModulated(withMacro(lane.ratchet.count, macro(macros, "count")), hit.step)) : 1;
+    const rate = rolls ? rateFromUnit(evalModulated(withMacro(lane.ratchet.rate, macro(macros, "rate")), hit.step)) : null;
+    const shaped = rolls && count > 1;
+    const fade = shaped ? evalModulated(lane.ratchet.fade, hit.step) : 0.5;
+    const tone = shaped ? evalModulated(lane.ratchet.tone, hit.step) : 0.5;
+    const rise = fade > 0.5;
+    const ticks = rate?.ticks ?? SIXTEENTH_TICKS;
     for (let i = 0; i < count; i++) {
-      const step = hit.step + (i * rate.ticks) / SIXTEENTH_TICKS;
-      const velocity = keptVelocity(lane.gen1, lane.gen2, hit.generators, global.seed, id, hit.step, i, macro(macros, "velocity"), macro(macros, "probability"), step);
+      const t = count <= 1 ? 0 : i / (count - 1);
+      const level = shaped ? rollLevel(fade, t) : 1;
+      if (level < ROLL_QUIET) continue;
+      const extra = shaped && rise ? (i - (count - 1)) * ticks : i * ticks;
+      const at = hit.step + extra / SIXTEENTH_TICKS;
+      const velocity = keptVelocity(lane.gen1, lane.gen2, hit.generators, global.seed, id, hit.step, i, macro(macros, "velocity"), macro(macros, "probability"), at);
       if (velocity === null) continue;
-      const sound = soundValues(lane.sound, step, macros);
-      const filter = filterValues(lane.filter, step, macros);
-      const send = sendValues(lane.send, step, macros);
-      out.push(place(hit.step, i * rate.ticks, global, id, DRUM_NOTE[id as keyof typeof DRUM_NOTE], velocity, rate.ticks, sound, filter, send));
+      const heard = soundValues(lane.sound, at, macros);
+      const sound = shaped ? { ...heard } : heard;
+      const note = shaped ? shapeRoll(id, sound, rollOctaves(tone, t, rise), level) : DRUM_NOTE[id];
+      const filter = filterValues(lane.filter, at, macros);
+      const send = sendValues(lane.send, at, macros);
+      out.push(place(hit.step, extra, global, id, note, velocity * level, ticks, sound, filter, send));
     }
-  });
+  }
   return out;
 }
 
