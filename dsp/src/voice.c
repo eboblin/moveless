@@ -36,6 +36,11 @@
 #define LANE_BASS 4
 #define LANE_LEAD 5
 #define LANE_CHORDS 6
+/* Mixer strips. Seven lanes, then the heard master. */
+#define METER_N 8
+#define METER_MASTER 7
+#define METER_RELEASE_SEC 0.15f
+#define METER_HOLD_SEC 0.7f
 
 enum {
     P_NONE = 0,
@@ -208,6 +213,10 @@ typedef struct {
     float lane_freq[LANE_COUNT];
     int arm_serial;
     int arm_clock;
+    /* Linear followers for the mixer strips. Index 7 is the heard master. */
+    float meter_level[METER_N];
+    float meter_peak[METER_N];
+    float meter_hold[METER_N];
 } Engine;
 
 typedef struct {
@@ -3482,6 +3491,8 @@ static int fire_cmp(const void *a, const void *b) {
     return fa->offset - fb->offset;
 }
 
+static void follow_meters(Engine *engine, const float *block, int frames);
+
 static void render(Engine *engine, int16_t *out, int frames) {
     /* Events in this message belong at the start of the block. Sample offsets
      * are applied by triggering before the frame loop only when offset is 0,
@@ -3545,6 +3556,8 @@ static void render(Engine *engine, int16_t *out, int frames) {
     }
 
     int fi = 0;
+    float block_peak[METER_N];
+    for (int m = 0; m < METER_N; m++) block_peak[m] = 0.0f;
     for (int i = 0; i < frames; i++) {
         if (engine->phrase_on) {
             while (fi < fire_count && fires[fi].offset == i) {
@@ -3571,6 +3584,11 @@ static void render(Engine *engine, int16_t *out, int frames) {
             }
         }
         float left = 0, right = 0, revL = 0, revR = 0, dlyL = 0, dlyR = 0;
+        float lane_l[7], lane_r[7];
+        for (int lane = 0; lane < 7; lane++) {
+            lane_l[lane] = 0.0f;
+            lane_r[lane] = 0.0f;
+        }
         for (int d = 0; d < DRUMS; d++) {
             if (!engine->drums[d].on) continue;
             float l = 0, r = 0;
@@ -3579,6 +3597,13 @@ static void render(Engine *engine, int16_t *out, int frames) {
             else if (wide > 0.0f && engine->drums[d].lane == LANE_PERC) haas(engine->drums[d].haas, &engine->drums[d].haas_i, &l, &r, wide);
             left += l;
             right += r;
+            {
+                int lane = engine->drums[d].lane;
+                if (lane >= 0 && lane < 7) {
+                    lane_l[lane] += l;
+                    lane_r[lane] += r;
+                }
+            }
             revL += l * engine->drums[d].reverb;
             revR += r * engine->drums[d].reverb;
             dlyL += l * engine->drums[d].delay;
@@ -3593,10 +3618,23 @@ static void render(Engine *engine, int16_t *out, int frames) {
             pump_pair(engine, engine->notes[n].lane, &nl, &nr);
             left += nl;
             right += nr;
+            {
+                int lane = engine->notes[n].lane;
+                if (lane >= 0 && lane < 7) {
+                    lane_l[lane] += nl;
+                    lane_r[lane] += nr;
+                }
+            }
             revL += nl * engine->notes[n].reverb;
             revR += nr * engine->notes[n].reverb;
             dlyL += nl * engine->notes[n].delay;
             dlyR += nr * engine->notes[n].delay;
+        }
+        for (int lane = 0; lane < 7; lane++) {
+            float a = fabsf(lane_l[lane]);
+            float b = fabsf(lane_r[lane]);
+            float p = a > b ? a : b;
+            if (p > block_peak[lane]) block_peak[lane] = p;
         }
         float wetL = 0, wetR = 0, delL = 0, delR = 0, thrL = 0, thrR = 0;
         {
@@ -3622,6 +3660,12 @@ static void render(Engine *engine, int16_t *out, int frames) {
         deck_tone_color(engine, &l, &r);
         l = soft(l);
         r = soft(r);
+        {
+            float a = fabsf(l);
+            float b = fabsf(r);
+            float p = a > b ? a : b;
+            if (p > block_peak[METER_MASTER]) block_peak[METER_MASTER] = p;
+        }
         decay_pump(engine);
         if (out) {
             int il = (int)(l * 32767.0f);
@@ -3634,6 +3678,7 @@ static void render(Engine *engine, int16_t *out, int frames) {
             out[i * 2 + 1] = (int16_t)ir;
         }
     }
+    follow_meters(engine, block_peak, frames);
     deck_capture_view(engine);
 }
 
@@ -3728,6 +3773,60 @@ static void account_cpu(Engine *engine, int64_t spent_ns, int frames) {
     engine->cpu_pct = shown;
 }
 
+/** Instant attack, 150 ms release. The peak waits 700 ms, then falls the same way. */
+static void follow_meters(Engine *engine, const float *block, int frames) {
+    if (!engine || !block || frames <= 0) return;
+    float decay = expf(-(float)frames / (METER_RELEASE_SEC * SR));
+    float hold = METER_HOLD_SEC * SR;
+    for (int i = 0; i < METER_N; i++) {
+        float peak = block[i];
+        float level = engine->meter_level[i];
+        engine->meter_level[i] = peak >= level ? peak : peak + (level - peak) * decay;
+        if (peak >= engine->meter_peak[i]) {
+            engine->meter_peak[i] = peak;
+            engine->meter_hold[i] = hold;
+        } else {
+            engine->meter_hold[i] -= (float)frames;
+            if (engine->meter_hold[i] <= 0.0f) engine->meter_peak[i] = peak + (engine->meter_peak[i] - peak) * decay;
+        }
+        if (engine->meter_level[i] < 1e-8f) engine->meter_level[i] = 0.0f;
+        if (engine->meter_peak[i] < 1e-8f) engine->meter_peak[i] = 0.0f;
+    }
+}
+
+static int meter_byte(float peak) {
+    if (peak < 0.0f) peak = 0.0f;
+    if (peak > 1.0f) peak = 1.0f;
+    peak = sqrtf(peak);
+    int n = (int)lroundf(peak * 255.0f);
+    if (n < 0) n = 0;
+    if (n > 255) n = 255;
+    return n;
+}
+
+static int meter_key(const char *key) {
+    if (!key) return 0;
+    const char *colon = strrchr(key, ':');
+    const char *name = colon ? colon + 1 : key;
+    return strcmp(name, "meters") == 0;
+}
+
+/** Eight channels, level byte then peak byte, as 32 hex digits. */
+static int meter_page(const Engine *engine, char *buf, int buf_len) {
+    static const char hex[] = "0123456789abcdef";
+    if (!engine || !buf || buf_len < METER_N * 4 + 1) return -1;
+    for (int i = 0; i < METER_N; i++) {
+        int level = meter_byte(engine->meter_level[i]);
+        int peak = meter_byte(engine->meter_peak[i]);
+        buf[i * 4] = hex[level >> 4];
+        buf[i * 4 + 1] = hex[level & 15];
+        buf[i * 4 + 2] = hex[peak >> 4];
+        buf[i * 4 + 3] = hex[peak & 15];
+    }
+    buf[METER_N * 4] = 0;
+    return METER_N * 4;
+}
+
 static int cpu_key(const char *key) {
     if (!key) return 0;
     const char *colon = strrchr(key, ':');
@@ -3802,6 +3901,7 @@ static int get_param(void *instance, const char *key, char *buf, int buf_len) {
     if (!engine || !buf || buf_len < 1) return -1;
     int page = wave_key(key);
     if (page >= 0) return wave_page(engine, page, buf, buf_len);
+    if (meter_key(key)) return meter_page(engine, buf, buf_len);
     if (!cpu_key(key) || buf_len < 3) return -1;
     int pct = engine->cpu_pct;
     if (pct < 0) pct = 0;

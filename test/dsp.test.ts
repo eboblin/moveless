@@ -10,7 +10,7 @@ import { launchScene, record } from "../src/core/performance.ts";
 import { mapFilter, mapKick, mapSend, mapSound } from "../src/dsp/map.ts";
 import { eventsInBlock, phraseLoop, soundMotions } from "../src/dsp/schedule.ts";
 import { envelopeTable, laneEnvelopeAt, melodyContour, melodyLevel, readEnvelope } from "../src/dsp/envelope.ts";
-import { applyDeckCommand, applyDeckTone, createEngine, filterSample, formatBus, glideSeconds, loadPhrase, melodyCutoff, packBlock, packPhrase, packPhraseBody, renderBlock, renderClock } from "../src/dsp/voice.ts";
+import { applyDeckCommand, applyDeckTone, createEngine, filterSample, formatBus, glideSeconds, loadPhrase, melodyCutoff, meterPage, packBlock, packPhrase, packPhraseBody, parseMeterPage, renderBlock, renderClock, renderDryBlock } from "../src/dsp/voice.ts";
 import type { BlockEvent } from "../src/dsp/schedule.ts";
 import type { FxDelay, FxReverb, LaneId } from "../src/core/types.ts";
 import { createEcho, createTank, echoSample, tankSample } from "../src/dsp/fx.ts";
@@ -817,6 +817,32 @@ describe("dsp adapter", () => {
     assert.equal(engine.drums[0].bend, 0.2 * 3);
     assert.ok(Math.abs(engine.drums[0].bendTime - (0.008 + 0.4 * 0.4 * 0.392)) < 1e-6);
     assert.equal(engine.drums[0].click, 0.7);
+  });
+
+  it("meters a kick on its lane and the master, and holds the peak after the level falls", () => {
+    const engine = createEngine();
+    renderBlock(engine, [{
+      sampleOffset: 0, lane: "kick", note: 36, velocity: 120, lengthTicks: 48,
+      params: mapSound("kick", { pitch: 0.5, bend: 0.2, bendTime: 0.4, body: 0.1, click: 0.7, decay: 0.5, noise: 0.2, drive: 0.1 }),
+    }], 120, 256);
+    assert.ok(engine.meterLevel[0] > 0);
+    assert.ok(engine.meterPeak[0] > 0);
+    assert.ok(engine.meterLevel[7] > 0);
+    assert.equal(engine.meterLevel[1], 0);
+    const page = meterPage(engine);
+    assert.equal(page.length, 32);
+    const shown = parseMeterPage(page);
+    assert.ok(shown);
+    assert.ok(shown[0].level > 0);
+    assert.ok(shown[7].peak > 0);
+    const loud = engine.meterLevel[0];
+    const held = engine.meterPeak[0];
+    engine.drums[0].on = false;
+    renderDryBlock(engine, 128);
+    assert.equal(engine.meterLevel[0], loud);
+    for (let n = 0; n < 40; n++) renderBlock(engine, [], 120, 128);
+    assert.ok(engine.meterLevel[0] < loud);
+    assert.equal(engine.meterPeak[0], held);
   });
 
   it("changes early energy when snap moves and the body spectrum when body moves", () => {

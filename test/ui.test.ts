@@ -13,7 +13,7 @@ import { bindingFor, deckPage, lanePages, mixerPage, pageCount, pageGroup, pageG
 import { LED, advancePulseClock, blinkHalfMs, directionLit, dropLed, faceButtonLed, ledColorAt, menuLed, modeButtonLed, offColor, offerLed, padLeds, padPackets, PLAY_LED_ON, playLed, PULSE_CLOCK_IDLE, sceneShadeStep, shadeColor, stepLed, stepLeds, takeLeds, trackLeds } from "../src/ui/leds.ts";
 import { DIGIT_H, displayAmount, fractionFromLabel, plotAmount } from "../src/ui/digits.ts";
 import { lettersWidth, plotLetters } from "../src/ui/letters.ts";
-import { CAPTION_GAP, CAPTION_LANE_Y, CAPTION_OUTLINE, CAPTION_PAGE_Y, CAPTION_SINGLE_Y, CHAR_W, DIGIT_Y, FONT_H, HEADER_H, HEIGHT, NAME_Y, PAGER_Y, PARAM_COL_W, PARAM_H, SEP_Y, TITLE_Y, VALUE_Y, VIZ_H, WIDTH, loadWidth, pageTitlePaintKey, pageTitleTravel, pixel, renderScreen, type Screen } from "../src/ui/screen.ts";
+import { CAPTION_GAP, CAPTION_LANE_Y, CAPTION_OUTLINE, CAPTION_PAGE_Y, CAPTION_SINGLE_Y, CHAR_W, DIGIT_Y, FONT_H, HEADER_H, HEIGHT, MIX_METER_BOTTOM, MIX_METER_TOP, MIX_METER_X, NAME_Y, PAGER_Y, PARAM_COL_W, PARAM_H, SEP_Y, TITLE_Y, VALUE_Y, VIZ_H, WIDTH, loadWidth, pageTitlePaintKey, pageTitleTravel, pixel, renderScreen, type Screen } from "../src/ui/screen.ts";
 import { WAVE_HOP, emptyWave, type WaveTape } from "../src/ui/wave.ts";
 import { defaultUi, HOLD_MS, HOLD_TICKS, openSetMode, PAGE_TITLE_MS, PAGE_TITLE_SLIDE_MS, settleWheel, WHEEL_RELEASE_MS, type DetentHold } from "../src/ui/state.ts";
 import { midiMessage, reduce, relDelta, settleTrackPeek, type Session } from "../src/ui/input.ts";
@@ -1005,8 +1005,8 @@ describe("surface", () => {
     const screen = renderScreen(project, { ...openMixer({ project, ui: defaultUi(), tick: 0, playing: false }).ui, wheelTouch: true }, 0);
     assert.equal(screen.viz, "mixer");
     assert.equal(pixel(screen, 0, HEADER_H + VIZ_H - 1), 0);
-    const kickMid = 8;
-    const masterMid = 7 * 16 + 8;
+    const kickMid = 7;
+    const masterMid = 7 * 16 + 7;
     const faderTop = HEADER_H;
     const codeY = HEIGHT - FONT_H - 1;
     const markY = codeY - FONT_H - 1;
@@ -1019,20 +1019,57 @@ describe("surface", () => {
     assert.deepEqual(codes, ["KCK", "SNR", "HAT", "PRC", "BAS", "LEA", "CHD", "MST"]);
     assert.ok(screen.labels.some((label) => label.text === "MS" && label.y === markY && label.x >= 16 && label.x < 32));
     assert.ok(screen.labels.some((label) => label.text === "ML" && label.y === markY && label.x >= 64 && label.x < 80));
-    const snareMid = 16 + 8;
+    const snareMid = 16 + 7;
     for (const x of [snareMid - 1, snareMid, snareMid + 1]) {
       assert.equal(pixel(screen, x, faderBottom), (x + faderBottom) % 2 === 0 ? 1 : 0);
     }
     assert.equal(pixel(screen, kickMid + 1, faderBottom), 1);
+    assert.equal(pixel(screen, MIX_METER_X[0], faderBottom), 0);
     assert.equal(pixel(screen, 0, PAGER_Y), 1);
     assert.equal(pixel(screen, 1, PAGER_Y), 0);
     assert.equal(pixel(screen, 86, PAGER_Y), 1);
     assert.equal(pixel(screen, 105, PAGER_Y), 0);
     assert.equal(pixel(screen, 106, PAGER_Y), 1);
-    const hatMid = 32 + 8;
+    const hatMid = 32 + 7;
     for (const x of [hatMid - 1, hatMid, hatMid + 1]) {
       assert.equal(pixel(screen, x, faderBottom), (x + faderBottom) % 2 === 0 ? 1 : 0);
     }
+  });
+
+  it("draws a level bar and a held peak beside the fader", () => {
+    const project = defaultProject();
+    const ui = openMixer({ project, ui: defaultUi(), tick: 0, playing: false }).ui;
+    const dark = Array.from({ length: 8 }, () => ({ level: 0, peak: 0 }));
+    const quiet = renderScreen(project, ui, 0, false, 0, undefined, 0, null, dark);
+    const x = MIX_METER_X[0];
+    assert.equal(pixel(quiet, x, MIX_METER_BOTTOM), 0);
+    assert.equal(pixel(quiet, x, MIX_METER_TOP), 0);
+    const trackH = MIX_METER_BOTTOM - MIX_METER_TOP;
+    const fullMeters = dark.map((meter, i) => i === 0 ? { level: 1, peak: 1 } : meter);
+    const full = renderScreen(project, ui, 0, false, 0, undefined, 0, null, fullMeters);
+    assert.equal(pixel(full, x, MIX_METER_BOTTOM), 1);
+    assert.equal(pixel(full, x - 1, MIX_METER_BOTTOM), 0);
+    assert.equal(pixel(full, x - 2, MIX_METER_BOTTOM), 1);
+    assert.equal(pixel(full, x, MIX_METER_BOTTOM - (trackH - 1)), 1);
+    assert.equal(pixel(full, x, MIX_METER_TOP), 0);
+    assert.equal(pixel(full, MIX_METER_X[1], MIX_METER_BOTTOM), 0);
+    const level = 0.2;
+    const levelPx = Math.round(level * trackH);
+    const peakPx = trackH;
+    assert.ok(levelPx > 0 && peakPx > levelPx + 1);
+    const heldMeters = dark.map((meter, i) => i === 0 ? { level, peak: 1 } : meter);
+    const held = renderScreen(project, ui, 0, false, 0, undefined, 0, null, heldMeters);
+    assert.equal(pixel(held, x, MIX_METER_BOTTOM), 1);
+    assert.equal(pixel(held, x, MIX_METER_BOTTOM - (levelPx - 1)), 1);
+    assert.equal(pixel(held, x, MIX_METER_BOTTOM - levelPx), 0);
+    assert.equal(pixel(held, x, MIX_METER_BOTTOM - (peakPx - 1)), 1);
+    const framed = renderScreen(project, {
+      ...ui,
+      focus: { label: "KCK", path: "mixer.kick", generator: null, showPattern: false, held: true, untilTick: 0, untilMs: 0 },
+    }, 0, false, 0, undefined, 0, null, dark);
+    assert.equal(pixel(framed, x, MIX_METER_TOP), 1);
+    assert.equal(pixel(framed, x, MIX_METER_BOTTOM), 1);
+    assert.equal(pixel(framed, x, MIX_METER_BOTTOM - 1), 0);
   });
 
   it("leaves a one-pixel gap between adjacent same-pitch hits", () => {

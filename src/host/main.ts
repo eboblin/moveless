@@ -7,7 +7,7 @@ import { loadStoredProject, saveStoredProject, type HostFiles, type StoredUi } f
 import { phraseLoop, soundMotions } from "../dsp/schedule.ts";
 import { formatFx } from "../dsp/fx.ts";
 import { assembleDeck, behaviorOf, formatDeckCommand, isDeckGroup } from "../core/deck.ts";
-import { formatBus, packPhraseBody } from "../dsp/voice.ts";
+import { formatBus, packPhraseBody, parseMeterPage } from "../dsp/voice.ts";
 import { midiMessage, reduce, settleTrackPeek, type Session } from "../ui/input.ts";
 import { CAPTURE_CC, DOWN_CC, MENU_CC, MUTE_CC, PLAY_CC, SAMPLE_CC, UP_CC } from "../core/types.ts";
 import { advancePulseClock, blinkHalfMs, directionLit, dropLed, faceButtonLed, ledColorAt, menuLed, modeButtonLed, offerLed, padLeds, padPackets, playLed, PULSE_CLOCK_IDLE, sceneShadeStep, stepLeds, takeLeds, trackLeds, type PulseClock } from "../ui/leds.ts";
@@ -19,6 +19,9 @@ import {
   HEADER_H,
   HEIGHT,
   PARAM_COL_W,
+  MIX_METER_BOTTOM,
+  MIX_METER_TOP,
+  MIX_METER_X,
   SEP_Y,
   WIDTH,
   VIZ_H,
@@ -287,6 +290,9 @@ let ledPlaying = false;
 let ledPeek: string | null = null;
 /** Deck fast path has drawn both bands since the last full paint. */
 let deckFastLatched = false;
+/** Mixer strips have had one full paint since the face opened. */
+let mixerFastLatched = false;
+let mixerMeterText: string | null = null;
 let deckColumn = Number.NaN;
 let deckSpan = Number.NaN;
 let deckTape: WaveTape | null = null;
@@ -368,15 +374,43 @@ function readParam(key: string): string | null {
   return typeof raw === "string" && raw.length > 0 ? raw : null;
 }
 
+function mixerMeters(): ReturnType<typeof parseMeterPage> {
+  if (session.ui.face !== "mixer") return null;
+  return parseMeterPage(readParam("meters"));
+}
+
+/** A caption or a notice covers the faders, so a strip update would punch through the hatch. */
+function mixerCovered(ui: UiState, now: number): boolean {
+  if (ui.notice && now < ui.notice.untilMs) return true;
+  if (pageTitleVisible(ui, now)) return true;
+  return false;
+}
+
 function paintScreen(): void {
   let wave: WaveTape | null = null;
   if (deckVisible(session.ui)) {
     wave = serviceWaveform(session.project);
     applyWavePages(wave, [readParam("wave0"), readParam("wave1")]);
   }
-  const screen = renderScreen(session.project, session.ui, session.tick, session.playing, Date.now(), frame, audioLoad, wave);
+  const screen = renderScreen(session.project, session.ui, session.tick, session.playing, Date.now(), frame, audioLoad, wave, mixerMeters());
   blit(screen.pixels);
   paintHostReadout(screen);
+}
+
+/** Faders stay. Only the eight level columns move. */
+function paintMixerFast(now: number): void {
+  const text = readParam("meters");
+  const delta = screenDelta();
+  if (delta === "full" || !mixerFastLatched) {
+    paintScreen();
+    mixerFastLatched = true;
+    mixerMeterText = text;
+    return;
+  }
+  if (text === mixerMeterText) return;
+  mixerMeterText = text;
+  const screen = renderScreen(session.project, session.ui, session.tick, session.playing, now, frame, audioLoad, null, parseMeterPage(text));
+  blitColumns(screen.pixels, MIX_METER_X, MIX_METER_TOP, MIX_METER_BOTTOM);
 }
 
 function hostRect(x: number, y: number, w: number, h: number, value: number): void {
@@ -638,9 +672,15 @@ function drainLeds(): void {
 function paint(): void {
   paintPulseClock();
   const now = Date.now();
-  if (deckVisible(session.ui) && !deckOverlay(session.ui, now)) paintDeckFast(now);
-  else {
+  if (deckVisible(session.ui) && !deckOverlay(session.ui, now)) {
+    mixerFastLatched = false;
+    paintDeckFast(now);
+  } else if (session.ui.face === "mixer" && !mixerCovered(session.ui, now)) {
     deckFastLatched = false;
+    paintMixerFast(now);
+  } else {
+    deckFastLatched = false;
+    mixerFastLatched = false;
     const delta = screenDelta();
     if (delta === "full") paintScreen();
     else if (delta === "head") {
@@ -720,6 +760,8 @@ export function init(): void {
   ledPhase = -1;
   ledShade = -1;
   deckFastLatched = false;
+  mixerFastLatched = false;
+  mixerMeterText = null;
   deckColumn = Number.NaN;
   deckSpan = Number.NaN;
   deckTape = null;

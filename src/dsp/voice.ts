@@ -74,6 +74,12 @@ const HAAS_N = 544;
 const TILT_COEF = 1 - Math.exp((-TWO_PI * 1000) / SAMPLE_RATE);
 const GLUE_ATTACK = 1 - Math.exp(-1 / (0.015 * SAMPLE_RATE));
 const GLUE_RELEASE = 1 - Math.exp(-1 / (0.15 * SAMPLE_RATE));
+/** Mixer strips. Seven lanes, then the heard master. */
+const METER_COUNT = 8;
+const METER_MASTER = 7;
+const METER_RELEASE = 0.15;
+const METER_HOLD = 0.7;
+const METER_HEX = "0123456789abcdef";
 
 export interface Engine {
   noise: number;
@@ -112,6 +118,11 @@ export interface Engine {
   armClock: number;
   /** Baked voice-pattern envelopes. Null until some live motion asks for that lane. */
   env: (EnvelopeTable | null)[];
+  /** Linear followers for the mixer strips. Index 7 is the heard master. */
+  meterLevel: number[];
+  meterPeak: number[];
+  /** Samples left before that channel's peak may fall. */
+  meterHold: number[];
 }
 
 /** One cascaded one-pole. `b` is the second pole, the band we keep. */
@@ -298,7 +309,67 @@ export function createEngine(): Engine {
     armSerial: 0,
     armClock: -1,
     env: Array.from({ length: 7 }, () => null),
+    meterLevel: Array.from({ length: METER_COUNT }, () => 0),
+    meterPeak: Array.from({ length: METER_COUNT }, () => 0),
+    meterHold: Array.from({ length: METER_COUNT }, () => 0),
   };
+}
+
+/** One displayed channel. Both values are already on the square-root scale, 0..1. */
+export interface ChannelMeter {
+  level: number;
+  peak: number;
+}
+
+/** Instant attack, 150 ms release. The peak waits 700 ms, then falls the same way. */
+function followMeters(engine: Engine, block: number[], frames: number): void {
+  if (frames <= 0) return;
+  const decay = Math.exp(-frames / (METER_RELEASE * SAMPLE_RATE));
+  const hold = METER_HOLD * SAMPLE_RATE;
+  for (let i = 0; i < METER_COUNT; i++) {
+    const peak = block[i] ?? 0;
+    const level = engine.meterLevel[i] ?? 0;
+    engine.meterLevel[i] = peak >= level ? peak : peak + (level - peak) * decay;
+    if (peak >= engine.meterPeak[i]) {
+      engine.meterPeak[i] = peak;
+      engine.meterHold[i] = hold;
+    } else {
+      engine.meterHold[i] -= frames;
+      if (engine.meterHold[i] <= 0) engine.meterPeak[i] = peak + (engine.meterPeak[i] - peak) * decay;
+    }
+    if (engine.meterLevel[i] < 1e-8) engine.meterLevel[i] = 0;
+    if (engine.meterPeak[i] < 1e-8) engine.meterPeak[i] = 0;
+  }
+}
+
+function meterByte(peak: number): number {
+  if (!(peak > 0)) return 0;
+  const shown = Math.min(1, Math.sqrt(peak));
+  return Math.max(0, Math.min(255, Math.round(shown * 255)));
+}
+
+/** `meters` text: eight channels, level byte then peak byte, as 32 hex digits. */
+export function meterPage(engine: Engine): string {
+  let text = "";
+  for (let i = 0; i < METER_COUNT; i++) {
+    const level = meterByte(engine.meterLevel[i] ?? 0);
+    const peak = meterByte(engine.meterPeak[i] ?? 0);
+    text += METER_HEX[level >> 4]! + METER_HEX[level & 15]! + METER_HEX[peak >> 4]! + METER_HEX[peak & 15]!;
+  }
+  return text;
+}
+
+/** Read a `meters` page. A short or broken string leaves the strips dark. */
+export function parseMeterPage(text: string | null): ChannelMeter[] | null {
+  if (!text || text.length < METER_COUNT * 4) return null;
+  const out: ChannelMeter[] = [];
+  for (let i = 0; i < METER_COUNT; i++) {
+    const level = Number.parseInt(text.slice(i * 4, i * 4 + 2), 16);
+    const peak = Number.parseInt(text.slice(i * 4 + 2, i * 4 + 4), 16);
+    if (!Number.isFinite(level) || !Number.isFinite(peak)) return null;
+    out.push({ level: level / 255, peak: peak / 255 });
+  }
+  return out;
 }
 
 /** Store a looping phrase. `reset` starts the audio clock at the downbeat. */
@@ -454,6 +525,9 @@ function playBlock(engine: Engine, frames: number, ahead: boolean): Float32Array
 
 function renderFrames(engine: Engine, frames: number, at: (frame: number) => void, ahead = false): Float32Array {
   const out = new Float32Array(frames * 2);
+  const blockPeak = ahead ? null : new Array<number>(METER_COUNT).fill(0);
+  const laneL = blockPeak ? [0, 0, 0, 0, 0, 0, 0] : null;
+  const laneR = blockPeak ? [0, 0, 0, 0, 0, 0, 0] : null;
   for (let i = 0; i < frames; i++) {
     at(i);
     if ((i & (FOLLOW_STRIDE - 1)) === 0) follow(engine);
@@ -473,11 +547,19 @@ function renderFrames(engine: Engine, frames: number, at: (frame: number) => voi
     let revR = 0;
     let dlyL = 0;
     let dlyR = 0;
+    if (laneL && laneR) {
+      laneL.fill(0);
+      laneR.fill(0);
+    }
     for (const drum of engine.drums) {
       if (!drum.on) continue;
       const pair = placeDrum(drum, drumSample(engine, drum), wide);
       left += pair[0];
       right += pair[1];
+      if (laneL && laneR && drum.lane >= 0 && drum.lane < laneL.length) {
+        laneL[drum.lane] += pair[0];
+        laneR[drum.lane] += pair[1];
+      }
       revL += pair[0] * drum.reverb;
       revR += pair[1] * drum.reverb;
       dlyL += pair[0] * drum.delay;
@@ -489,10 +571,20 @@ function renderFrames(engine: Engine, frames: number, at: (frame: number) => voi
       pair = pumpPair(engine, note.lane, pair);
       left += pair[0];
       right += pair[1];
+      if (laneL && laneR && note.lane >= 0 && note.lane < laneL.length) {
+        laneL[note.lane] += pair[0];
+        laneR[note.lane] += pair[1];
+      }
       revL += pair[0] * note.reverb;
       revR += pair[1] * note.reverb;
       dlyL += pair[0] * note.delay;
       dlyR += pair[1] * note.delay;
+    }
+    if (blockPeak && laneL && laneR) {
+      for (let lane = 0; lane < laneL.length; lane++) {
+        const peak = Math.max(Math.abs(laneL[lane] ?? 0), Math.abs(laneR[lane] ?? 0));
+        if (peak > blockPeak[lane]) blockPeak[lane] = peak;
+      }
     }
     let throwL = 0;
     let throwR = 0;
@@ -515,8 +607,15 @@ function renderFrames(engine: Engine, frames: number, at: (frame: number) => voi
     const colored = ahead ? heard : applyDeckTone(engine, heard[0], heard[1]);
     out[i * 2] = ahead ? colored[0] : soft(colored[0]);
     out[i * 2 + 1] = ahead ? colored[1] : soft(colored[1]);
+    if (blockPeak) {
+      const heardL = out[i * 2] ?? 0;
+      const heardR = out[i * 2 + 1] ?? 0;
+      const peak = Math.max(Math.abs(heardL), Math.abs(heardR));
+      if (peak > blockPeak[METER_MASTER]) blockPeak[METER_MASTER] = peak;
+    }
     decayPump(engine);
   }
+  if (blockPeak) followMeters(engine, blockPeak, frames);
   return out;
 }
 

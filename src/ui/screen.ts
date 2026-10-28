@@ -12,6 +12,7 @@ import { bindingFor, deckPage, livePage, mixerPage, pageTitle, pagesFor, type Bi
 import { focusVisible, macroReturnValue, PAGE_TITLE_SLIDE_MS, screenPlace, type CaptureLine, type RandomizeLine, type UiState } from "./state.ts";
 import { lettersWidth, plotLetters } from "./letters.ts";
 import { readEnvelope } from "../dsp/envelope.ts";
+import type { ChannelMeter } from "../dsp/voice.ts";
 import { drawWaveform, emptyWave, type WaveTape } from "./wave.ts";
 
 export const WIDTH = 128;
@@ -93,6 +94,7 @@ export function renderScreen(
   pixels: Uint8Array = new Uint8Array(WIDTH * HEIGHT),
   cpu = 0,
   wave: WaveTape | null = null,
+  meters: ChannelMeter[] | null = null,
 ): Screen {
   const peek = ui.heldContext;
   const context = peek ?? ui.context;
@@ -136,7 +138,7 @@ export function renderScreen(
   const phrase = showPhrase ? generatePhrase(project) : null;
   const playhead = playing ? stepAt(project, tick) : -1;
   if (notice) fillViz(pixels);
-  else if (mixer) drawMixer(pixels, project, focus);
+  else if (mixer) drawMixer(pixels, project, focus, meters);
   else if (generator && phrase && vizLane) {
     if (chordRoll) drawChordRoll(pixels, phrase, -1);
     else drawPhrase(pixels, project, phrase, vizLane, -1);
@@ -254,6 +256,10 @@ const MIX_COL_W = 16;
 const MIX_CODE_Y = HEIGHT - FONT_H - 1;
 const MIX_MARK_Y = MIX_CODE_Y - FONT_H - 1;
 const MIX_FADER_BOTTOM = MIX_MARK_Y - 2;
+/** Level strip stays right of center. The fader sits one pixel left, leaving a 1 px gap. */
+export const MIX_METER_TOP = HEADER_H;
+export const MIX_METER_BOTTOM = MIX_FADER_BOTTOM;
+export const MIX_METER_X = MIX_CHANNELS.map((_, i) => i * MIX_COL_W + Math.floor(MIX_COL_W / 2) + 2);
 
 function mixCode(id: (typeof MIX_CHANNELS)[number]): string {
   return id === "master" ? "MST" : LANE_CODE[id];
@@ -264,7 +270,7 @@ function mixFocusLabel(id: (typeof MIX_CHANNELS)[number]): string {
 }
 
 /** Eight vertical faders; mute/lock then lane codes under the meters. */
-function drawMixer(pixels: Uint8Array, project: Project, focus: string | null): void {
+function drawMixer(pixels: Uint8Array, project: Project, focus: string | null, meters: ChannelMeter[] | null): void {
   const top = HEADER_H;
   const bottom = MIX_FADER_BOTTOM;
   const trackH = Math.max(1, bottom - top);
@@ -274,14 +280,15 @@ function drawMixer(pixels: Uint8Array, project: Project, focus: string | null): 
     const x0 = i * MIX_COL_W;
     const x1 = x0 + MIX_COL_W - 1;
     const mid = x0 + Math.floor(MIX_COL_W / 2);
+    const stem = mid - 1;
     const lit = focus === mixFocusLabel(id);
     const fill = Math.max(0, Math.round(level * trackH));
     for (let y = top; y <= bottom; y++) {
-      if (y % 2 === 0) set(pixels, mid, y, 1);
+      if (y % 2 === 0) set(pixels, stem, y, 1);
     }
     for (let y = 0; y < fill; y++) {
       const row = bottom - y;
-      for (let dx = -1; dx <= 1; dx++) set(pixels, mid + dx, row, 1);
+      for (let dx = -1; dx <= 1; dx++) set(pixels, stem + dx, row, 1);
     }
     if (lit) {
       for (let y = top; y <= bottom; y++) {
@@ -296,12 +303,34 @@ function drawMixer(pixels: Uint8Array, project: Project, focus: string | null): 
     if (id !== "master" && !laneHeard(project, id)) {
       for (let y = top; y <= bottom; y++) {
         for (let dx = -1; dx <= 1; dx++) {
-          const x = mid + dx;
+          const x = stem + dx;
           if ((x + y) % 2 !== 0) set(pixels, x, y, 0);
         }
       }
     }
+    const meter = meters?.[i];
+    if (meter) drawChannelMeter(pixels, mid + 2, top, bottom, trackH, meter, lit);
   }
+}
+
+/** One column beside the fader. The bar is the level; a pixel above it is the held peak. */
+function drawChannelMeter(
+  pixels: Uint8Array,
+  x: number,
+  top: number,
+  bottom: number,
+  trackH: number,
+  meter: ChannelMeter,
+  framed: boolean,
+): void {
+  const levelPx = Math.round(Math.max(0, Math.min(1, meter.level)) * trackH);
+  const peakPx = Math.round(Math.max(0, Math.min(1, meter.peak)) * trackH);
+  const paint = (row: number) => {
+    if (framed && (row === top || row === bottom)) return;
+    set(pixels, x, row, 1);
+  };
+  for (let y = 0; y < levelPx; y++) paint(bottom - y);
+  if (peakPx > 0) paint(bottom - (peakPx - 1));
 }
 
 function deckHeardTick(ui: UiState): number | null {
