@@ -98,7 +98,7 @@ function onCc(session: Session, cc: number, value: number, press: boolean): Sess
   if (cc >= 71 && cc <= 78) return turnEncoder(session, cc - 71, value);
   if (cc === 14) return turnWheel(session, value);
   if (cc >= 40 && cc <= 43) return onTrack(session, cc - 40, press);
-  if ((cc === DOWN_CC || cc === UP_CC) && press) return onArrow(session, cc === UP_CC ? -1 : 1);
+  if ((cc === DOWN_CC || cc === UP_CC) && press) return onArrow(session, cc === UP_CC ? 1 : -1);
   return session;
 }
 
@@ -651,9 +651,10 @@ function rerollLane(project: Project, lane: PatternId, page: number): Project {
   return randomizeLane(project, lane, group);
 }
 
+/** Plus moves toward older journal pages and the next set. Minus moves back. Delete and minus drops the set. */
 function onArrow(session: Session, direction: -1 | 1): Session {
   if (session.ui.mode === "set") {
-    if (direction > 0 && session.ui.deleteHeld) return deleteActiveSet(session);
+    if (direction < 0 && session.ui.deleteHeld) return deleteActiveSet(session);
     return { ...session, project: cycleSet(session.project, direction) };
   }
   const count = journalPageCount(session.project.journal.length);

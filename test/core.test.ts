@@ -25,6 +25,7 @@ import {
   sceneIdsForPads,
   journalPadIds,
   journalPageCount,
+  setPadIds,
   wanderCandidates,
   wanderLanes,
   setRandomizeDepth,
@@ -2087,6 +2088,7 @@ describe("randomize, wander, sets", () => {
     project = { ...project, clipboardSceneIds: ["001", "002", "001", "003"] };
     project = pasteClipboard(project);
     assert.deepEqual(project.sets[0].sceneIds, ["001", "002", "003"]);
+    assert.deepEqual(setPadIds(project).slice(0, 4), ["003", "002", "001", null]);
     assert.deepEqual(project.sets.at(-1)?.sceneIds, []);
   });
 
@@ -2097,7 +2099,8 @@ describe("randomize, wander, sets", () => {
     project = addSceneToSet(project, project.activeSetId!, "001");
     assert.deepEqual(wanderCandidates(project, "set").filter(Boolean), ["001"]);
     assert.equal(journalPageCount(project.journal.length), 2);
-    assert.equal(journalPadIds(project, 0)[0], "002");
+    assert.equal(journalPadIds(project, 0)[0], "033");
+    assert.equal(journalPadIds(project, 0)[31], "002");
     assert.equal(journalPadIds(project, 1)[0], "001");
   });
 
@@ -2105,7 +2108,7 @@ describe("randomize, wander, sets", () => {
     let project = defaultProject();
     project = record(project);
     project = record(punch(project, "kick.gen1.velocity.value", 0.4));
-    assert.deepEqual(sceneIdsForPads(project), ["001", "002", ...Array(30).fill(null)]);
+    assert.deepEqual(sceneIdsForPads(project), ["002", "001", ...Array(30).fill(null)]);
     project = createSet(project, "A");
     for (let n = 0; n < 40; n++) {
       const id = String(200 + n);

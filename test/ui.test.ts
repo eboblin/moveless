@@ -367,31 +367,31 @@ describe("pages and leds", () => {
     assert.notEqual(journal[0].color, 0);
     assert.notEqual(journal[1].color, 0);
     assert.notEqual(journal[0].color, journal[1].color);
-    assert.equal(journal[0].blink, false);
-    assert.equal(journal[1].blink, true);
-    assert.equal(journal[1].blinkTo, LED.white);
-    assert.equal(ledColorAt(journal[1], 0, 120), journal[1].color);
-    assert.equal(ledColorAt(journal[1], blinkHalfMs(120), 120), LED.white);
+    assert.equal(journal[0].blink, true);
+    assert.equal(journal[1].blink, false);
+    assert.equal(journal[0].blinkTo, LED.white);
+    assert.equal(ledColorAt(journal[0], 0, 120), journal[0].color);
+    assert.equal(ledColorAt(journal[0], blinkHalfMs(120), 120), LED.white);
     assert.equal(empty[0].blinkTo, LED.white);
     assert.equal(journal[2].color, 0);
-    const targetColor = journal[0].color;
+    const targetColor = journal[1].color;
     project = { ...project, transition: "fast" };
     project = launchScene(project, "001", 0);
     const start = padLeds(project, "journal", undefined, 0);
-    assert.equal(start[0].blink, true);
-    assert.equal(start[0].color, shadeColor(targetColor, 1 / 6));
     assert.equal(start[1].blink, true);
-    assert.equal(start[1].blinkTo, LED.white);
-    assert.equal(start[0].blinkTo, undefined);
+    assert.equal(start[1].color, shadeColor(targetColor, 1 / 6));
+    assert.equal(start[0].blink, true);
+    assert.equal(start[0].blinkTo, LED.white);
+    assert.equal(start[1].blinkTo, undefined);
     const halfTick = (project.morph?.originTick ?? 0) + (project.morph?.durationTicks ?? 0) / 2;
     const mid = padLeds(project, "journal", undefined, halfTick);
-    assert.equal(mid[0].color, shadeColor(targetColor, 0.5));
-    assert.equal(mid[0].blink, true);
+    assert.equal(mid[1].color, shadeColor(targetColor, 0.5));
     assert.equal(mid[1].blink, true);
+    assert.equal(mid[0].blink, true);
     const endTick = (project.morph?.originTick ?? 0) + (project.morph?.durationTicks ?? 0);
     const end = padLeds(project, "journal", undefined, endTick);
-    assert.equal(end[0].color, targetColor);
-    assert.equal(end[0].blink, true);
+    assert.equal(end[1].color, targetColor);
+    assert.equal(end[1].blink, true);
     assert.equal(shadeColor(3, 0), 0);
     assert.equal(shadeColor(3, 0.2), 70);
     assert.equal(shadeColor(3, 0.5), 69);
@@ -401,7 +401,7 @@ describe("pages and leds", () => {
     assert.equal(sceneShadeStep({ ...project, morph: null }, halfTick), 0);
     project = { ...project, sets: [{ id: "set-1", name: "A", sceneIds: ["002"] }], activeSetId: "set-1", morph: null };
     const bank = padLeds(project, "set");
-    assert.equal(bank[0].color, journal[1].color);
+    assert.equal(bank[0].color, journal[0].color);
     assert.equal(bank[0].blink, true);
     assert.equal(bank[1].color, 0);
     const wheel = padLeds(project, "journal", { ...defaultUi(), wheelTouch: true });
@@ -2492,14 +2492,14 @@ describe("surface", () => {
     const marked = padLeds(current.project, "journal", current.ui)[0];
     assert.equal(marked.color, 126);
     assert.equal(marked.blink, true);
-    assert.equal(marked.blinkTo, current.project.journal[0].color);
+    assert.equal(marked.blinkTo, current.project.journal[1].color);
     current = reduce(current, { kind: "cc", data1: 60, data2: 0 });
-    assert.deepEqual(current.project.clipboardSceneIds, ["001", "002"]);
-    assert.equal(padLeds(current.project, "journal", current.ui)[0].color, current.project.journal[0].color);
+    assert.deepEqual(current.project.clipboardSceneIds, ["002", "001"]);
+    assert.equal(padLeds(current.project, "journal", current.ui)[0].color, current.project.journal[1].color);
     current = { ...current, ui: openSetMode(current.ui) };
     current = reduce(current, { kind: "cc", data1: 60, data2: 127 });
     current = reduce(current, { kind: "cc", data1: 60, data2: 0 });
-    assert.deepEqual(current.project.sets[0].sceneIds, ["001", "002"]);
+    assert.deepEqual(current.project.sets[0].sceneIds, ["002", "001"]);
     assert.deepEqual(current.project.sets.at(-1)?.sceneIds, []);
     assert.deepEqual(current.project.clipboardSceneIds, []);
     assert.equal(padLeds(current.project, "set", current.ui)[0].color, current.project.journal[0].color);
@@ -2507,7 +2507,7 @@ describe("surface", () => {
     current = reduce(current, { kind: "cc", data1: 60, data2: 127 });
     current = reduce(current, { kind: "note", data1: 68, data2: 127 });
     current = reduce({ ...current, tick: HOLD_TICKS }, { kind: "cc", data1: 60, data2: 0 });
-    assert.deepEqual(current.project.clipboardSceneIds, ["001"]);
+    assert.deepEqual(current.project.clipboardSceneIds, ["002"]);
     current = reduce(current, { kind: "cc", data1: 60, data2: 127 });
     current = reduce({
       ...current,
@@ -2529,12 +2529,16 @@ describe("surface", () => {
     let project = defaultProject();
     for (let n = 0; n < 33; n++) project = record(project);
     state = { project, ui: defaultUi(), tick: 0, playing: false };
-    assert.equal(directionLit(0, journalPageCount(project.journal.length)).down, PLAY_LED_ON);
-    assert.equal(directionLit(0, journalPageCount(project.journal.length)).up, 0);
+    assert.equal(directionLit(0, journalPageCount(project.journal.length)).up, PLAY_LED_ON);
+    assert.equal(directionLit(0, journalPageCount(project.journal.length)).down, 0);
     state = reduce(state, { kind: "cc", data1: 54, data2: 127 });
+    assert.equal(state.ui.journalPage, 0);
+    assert.equal(journalPadIds(state.project, 0)[0], "033");
+    state = reduce(state, { kind: "cc", data1: 55, data2: 127 });
     assert.equal(state.ui.journalPage, 1);
     assert.equal(journalPadIds(state.project, state.ui.journalPage)[0], "001");
-    assert.equal(directionLit(1, journalPageCount(33)).up, PLAY_LED_ON);
+    assert.equal(directionLit(1, journalPageCount(33)).down, PLAY_LED_ON);
+    assert.equal(directionLit(1, journalPageCount(33)).up, 0);
   });
 
   it("restores a lane to factory defaults with Delete and its step", () => {
@@ -2688,7 +2692,7 @@ describe("surface", () => {
     state = { project, ui: defaultUi(), tick: 0, playing: false };
     assert.equal(menuLed(state.ui.mode), PLAY_LED_ON);
     assert.equal(renderScreen(state.project, state.ui, 0).header.includes("JRN"), false);
-    state = reduce(state, { kind: "note", data1: 68, data2: 127 });
+    state = reduce(state, { kind: "note", data1: 69, data2: 127 });
     assert.equal(state.project.morph?.targetId, "001");
     state = reduce(state, { kind: "cc", data1: 50, data2: 127 });
     assert.equal(state.ui.mode, "set");
@@ -2711,6 +2715,10 @@ describe("surface", () => {
     let project = createSet(defaultProject(), "A");
     project = createSet(project, "B");
     let state: Session = { project, ui: { ...defaultUi(), mode: "set" }, tick: 0, playing: false };
+    state = reduce(state, { kind: "cc", data1: 54, data2: 127 });
+    assert.equal(state.project.activeSetId, "set-1");
+    state = reduce(state, { kind: "cc", data1: 55, data2: 127 });
+    assert.equal(state.project.activeSetId, "set-2");
     state = reduce(state, { kind: "cc", data1: 119, data2: 127 });
     state = reduce(state, { kind: "cc", data1: 54, data2: 127 });
     assert.equal(state.project.sets.length, 1);
@@ -2729,14 +2737,14 @@ describe("surface", () => {
     let state: Session = { project, ui: { ...defaultUi(), mode: "set" }, tick: 0, playing: false };
     state = reduce(state, { kind: "cc", data1: 119, data2: 127 });
     state = reduce(state, { kind: "note", data1: 68, data2: 127 });
-    assert.deepEqual(state.project.sets[0].sceneIds, ["002"]);
+    assert.deepEqual(state.project.sets[0].sceneIds, ["001"]);
     assert.equal(state.project.journal.length, 2);
 
     state = { ...state, ui: { ...state.ui, mode: "journal", deleteHeld: true } };
-    state = reduce(state, { kind: "note", data1: 68, data2: 127 });
+    state = reduce(state, { kind: "note", data1: 69, data2: 127 });
     assert.equal(state.project.journal.length, 1);
     assert.equal(state.project.journal[0].id, "002");
-    assert.deepEqual(state.project.sets[0].sceneIds, ["002"]);
+    assert.deepEqual(state.project.sets[0].sceneIds, []);
   });
 });
 

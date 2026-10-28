@@ -106,7 +106,7 @@ export interface UiState {
   copyPicked: boolean;
   /** List from before this Copy press. A short click pastes it; a long press replaces it. */
   copySnapshot: string[] | null;
-  /** Journal page. 0 is the newest 32 scenes. */
+  /** Journal page. 0 is the newest 32 scenes, newest at the bottom-left pad. */
   journalPage: number;
   deleteHeld: boolean;
   /** Sample strip is under the finger. Transition and wander sit on the bottom row. */

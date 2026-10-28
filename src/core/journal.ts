@@ -55,6 +55,18 @@ function emptyPads(): (string | null)[] {
   return Array.from({ length: SET_CAPACITY }, () => null);
 }
 
+/**
+ * Newest id on pad 0, the bottom-left. Each older id sits one pad further:
+ * right along the row, then up to the next row.
+ */
+function placeNewestFirst(ids: readonly string[]): (string | null)[] {
+  const slots = emptyPads();
+  for (let index = 0; index < ids.length && index < slots.length; index++) {
+    slots[index] = ids[ids.length - 1 - index];
+  }
+  return slots;
+}
+
 /** Page 0 is the newest window of 32. Higher pages are older. */
 export function journalPageCount(sceneCount: number): number {
   return Math.max(1, Math.ceil(sceneCount / SET_CAPACITY));
@@ -65,23 +77,15 @@ export function clampJournalPage(page: number, sceneCount: number): number {
 }
 
 export function journalPadIds(project: Project, page = 0): (string | null)[] {
-  const slots = emptyPads();
   const clamped = clampJournalPage(page, project.journal.length);
   const end = project.journal.length - clamped * SET_CAPACITY;
   const start = Math.max(0, end - SET_CAPACITY);
-  project.journal.slice(start, end).forEach((scene, index) => {
-    slots[index] = scene.id;
-  });
-  return slots;
+  return placeNewestFirst(project.journal.slice(start, end).map((scene) => scene.id));
 }
 
 export function setPadIds(project: Project): (string | null)[] {
-  const slots = emptyPads();
   const active = project.sets.find((set) => set.id === project.activeSetId);
-  (active?.sceneIds ?? []).slice(0, SET_CAPACITY).forEach((id, index) => {
-    slots[index] = id;
-  });
-  return slots;
+  return placeNewestFirst((active?.sceneIds ?? []).slice(0, SET_CAPACITY));
 }
 
 /** Wander reads the active set when it has scenes, and the journal otherwise. */

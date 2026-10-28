@@ -97,11 +97,11 @@ export function menuLed(mode: "journal" | "set"): number {
   return mode === "journal" ? PLAY_LED_ON : 0;
 }
 
-/** Up is the lower index, down the higher one. Bright only when that neighbor exists. */
+/** Plus steps toward a higher index, minus toward a lower one. Bright only when that neighbor exists. */
 export function directionLit(index: number, count: number): { up: number; down: number } {
   return {
-    up: index > 0 ? PLAY_LED_ON : 0,
-    down: index < count - 1 ? PLAY_LED_ON : 0,
+    up: index < count - 1 ? PLAY_LED_ON : 0,
+    down: index > 0 ? PLAY_LED_ON : 0,
   };
 }
 

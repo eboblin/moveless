@@ -256,8 +256,15 @@ export const MUTE_CC = 88;
 export const CAPTURE_CC = 52;
 /** Loop. Runs one randomize pass with the stored depth, scope and intensity. */
 export const LOOP_CC = 58;
-/** White up/down buttons. Journal pages or sets, bright only when that neighbor exists. */
+/**
+ * Plus, the upper white button. Older journal pages, or the next set.
+ * Bright only when that neighbor exists.
+ */
 export const UP_CC = 55;
+/**
+ * Minus, the lower white button. Newer journal pages, or the previous set.
+ * Delete and minus deletes the current set. Bright only when that neighbor exists.
+ */
 export const DOWN_CC = 54;
 
 export const TRANSITION_BARS: Record<TransitionId, number> = {
