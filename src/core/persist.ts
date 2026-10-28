@@ -29,6 +29,9 @@ export const STORE_VERSION = 1;
 export const PROJECT_DIR = "/data/UserData/schwung/ptnmove";
 export const PROJECT_PATH = `${PROJECT_DIR}/project.json`;
 
+export type StoredFace = "mixer" | "deck";
+export type StoredDeckLayer = "group" | "tone";
+
 export interface StoredUi {
   context: ContextId;
   page: number;
@@ -40,6 +43,22 @@ export interface StoredUi {
    * A file written before this field boots with the strip off.
    */
   sampleLatched: boolean;
+  /**
+   * Jog click left the randomize pads up.
+   * A file written before this field boots with them down.
+   * While the saved face is mixer or DJ FX, this waits and returns when that face closes.
+   */
+  randomizeLatched: boolean;
+  /**
+   * Mixer or DJ FX left on screen. Null is the lane page.
+   * A file written before this field boots on the lane page.
+   */
+  face: StoredFace | null;
+  /**
+   * Deck encoders edit the selected group or the tone strip.
+   * A file written before this field boots on the group.
+   */
+  deckLayer: StoredDeckLayer;
 }
 
 export interface StoredBundle {
@@ -77,6 +96,9 @@ export function serializeStored(project: Project, ui: StoredUi): string {
       mode: ui.mode,
       playing: ui.playing,
       sampleLatched: ui.sampleLatched,
+      randomizeLatched: ui.randomizeLatched,
+      face: ui.face,
+      deckLayer: ui.deckLayer,
     },
   });
 }
@@ -175,7 +197,16 @@ function acceptClipboard(raw: Record<string, unknown>, journal: { id: string }[]
 }
 
 function mergeUi(raw: unknown): StoredUi {
-  const base: StoredUi = { context: "kick", page: 0, mode: "journal", playing: true, sampleLatched: false };
+  const base: StoredUi = {
+    context: "kick",
+    page: 0,
+    mode: "journal",
+    playing: true,
+    sampleLatched: false,
+    randomizeLatched: false,
+    face: null,
+    deckLayer: "group",
+  };
   if (!isRecord(raw)) return base;
   const context = asContext(raw.context) ?? base.context;
   const mode = raw.mode === "set" || raw.mode === "journal" ? raw.mode : base.mode;
@@ -183,7 +214,10 @@ function mergeUi(raw: unknown): StoredUi {
   const page = Math.min(Math.max(0, asInt(raw.page, 0)), count - 1);
   const playing = raw.playing === false ? false : true;
   const sampleLatched = raw.sampleLatched === true;
-  return { context, page, mode, playing, sampleLatched };
+  const randomizeLatched = raw.randomizeLatched === true;
+  const face = raw.face === "mixer" || raw.face === "deck" ? raw.face : null;
+  const deckLayer = raw.deckLayer === "tone" ? "tone" : "group";
+  return { context, page, mode, playing, sampleLatched, randomizeLatched, face, deckLayer };
 }
 
 const PROGRESSION_CLAMP: Record<(typeof PROGRESSION_KEYS)[number], [number, number, boolean]> = {

@@ -77,7 +77,8 @@ export function laneFamily(lane: LaneId): "red" | "yellow" {
 /**
  * Brightness for a pattern gate of 0 or 1.
  * The lane on screen is 50% at rest and full on a hit.
- * An unmuted neighbour is 10% at rest and 30% on a hit.
+ * A neighbour, and a soloed lane, is 10% at rest and 30% on a hit.
+ * Solo does not mark the button: the icon under it does.
  */
 export function laneLampAmount(selected: boolean, gate: number): number {
   const hit = gate >= 0.5;
@@ -117,22 +118,22 @@ function lampColor(color: number, amount: number): number {
 }
 
 export function stepLed(project: Project, context: ContextId, lane: PatternId, gate?: number): Led {
-  const current = context === lane;
   const family = project.lock[lane] ? "lock" : lane === "fx" ? "green" : laneFamily(lane);
-  // A neighbour silenced by mute or solo stays off. The lane on screen keeps the unmuted hit shades.
+  // Mute, and a solo that leaves this lane unheard, turn the button off even on screen.
   const silenced = lane === "fx" ? project.mute.fx : !laneHeard(project, lane);
-  if (silenced && (!current || lane === "fx")) return led("off", false);
+  if (silenced) return led("off", false);
+  // A soloed lane keeps the neighbour shades. The icon under the button marks the selection.
+  const marked = context === lane && !(isVoice(lane) && project.solo[lane]);
   if (gate !== undefined && lane !== "fx") {
-    const color = lampColor(lampHue(family), laneLampAmount(current, gate));
+    const color = lampColor(lampHue(family), laneLampAmount(marked, gate));
     if (color === LED.off) return led("off", false);
     return { family, color, blink: false };
   }
-  if (current) return led(family, true);
+  if (marked) return led(family, true);
   if (lane === "fx") {
     if (family !== "green") return led(family, false);
     return { family, color: lampColor(COLOR.green, 0.5), blink: false };
   }
-  if (!laneHeard(project, lane)) return led("off", false);
   return led(family, false);
 }
 
@@ -161,7 +162,8 @@ export const STEP_ICON_CC = 16;
  * The icon under the lane on screen, in that lane's colour at the darkest
  * palette step. A finger down on a step lights it immediately; the latched
  * lane is only the fallback once the finger is up. The other icons stay off.
- * The step button keeps its own lamp.
+ * The step button keeps its own lamp. A silenced lane's button stays off,
+ * and a soloed lane's button does not brighten: this icon is the selection.
  */
 export function stepIconColors(project: Project, context: ContextId, held?: ContextId | null): number[] {
   const shown = held ?? context;

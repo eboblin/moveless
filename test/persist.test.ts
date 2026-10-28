@@ -33,7 +33,16 @@ describe("project persist", () => {
     project = setRandomizeDepth(setRandomizeScope(setRandomizeIntensity(project, "hard"), "lane"), "generators");
     project.working.kick.gen1.hits = 7;
     project = { ...project, sets: [{ id: "set-1", name: "A", sceneIds: ["001"] }], activeSetId: "set-1" };
-    const ui = { context: "bass" as const, page: 2, mode: "set" as const, playing: false, sampleLatched: true };
+    const ui = {
+      context: "bass" as const,
+      page: 2,
+      mode: "set" as const,
+      playing: false,
+      sampleLatched: true,
+      randomizeLatched: true,
+      face: "deck" as const,
+      deckLayer: "tone" as const,
+    };
     const raw = serializeStored(project, ui);
     const parsed = parseStored(raw);
     assert.ok(parsed);
@@ -49,11 +58,14 @@ describe("project persist", () => {
     assert.equal(parsed.ui.mode, "set");
     assert.equal(parsed.ui.playing, false);
     assert.equal(parsed.ui.sampleLatched, true);
+    assert.equal(parsed.ui.randomizeLatched, true);
+    assert.equal(parsed.ui.face, "deck");
+    assert.equal(parsed.ui.deckLayer, "tone");
   });
 
   it("keeps a missing fx lane at the factory and ignores a stray fx field", () => {
     const project = defaultProject();
-    const raw = JSON.parse(serializeStored(project, { context: "kick", page: 0, mode: "journal", playing: true, sampleLatched: false })) as {
+    const raw = JSON.parse(serializeStored(project, { context: "kick", page: 0, mode: "journal", playing: true, sampleLatched: false, randomizeLatched: false, face: null, deckLayer: "group" })) as {
       project: { fx?: unknown; working: { fx?: unknown; bass: { send?: unknown } } };
     };
     delete raw.project.working.fx;
@@ -69,7 +81,7 @@ describe("project persist", () => {
 
   it("fills fade and tone when an older drum lane never stored them", () => {
     const project = defaultProject();
-    const raw = JSON.parse(serializeStored(project, { context: "kick", page: 0, mode: "journal", playing: true, sampleLatched: false })) as {
+    const raw = JSON.parse(serializeStored(project, { context: "kick", page: 0, mode: "journal", playing: true, sampleLatched: false, randomizeLatched: false, face: null, deckLayer: "group" })) as {
       project: { working: { kick: { ratchet: { fade?: unknown; tone?: unknown } } } };
     };
     delete raw.project.working.kick.ratchet.fade;
@@ -84,7 +96,7 @@ describe("project persist", () => {
 
   it("keeps the factory progression when an older file never stored one", () => {
     const project = record(defaultProject());
-    const raw = JSON.parse(serializeStored(project, { context: "kick", page: 0, mode: "journal", playing: true, sampleLatched: false })) as {
+    const raw = JSON.parse(serializeStored(project, { context: "kick", page: 0, mode: "journal", playing: true, sampleLatched: false, randomizeLatched: false, face: null, deckLayer: "group" })) as {
       project: {
         progression?: unknown;
         working: { chords: { start?: number; count?: number } };
@@ -105,14 +117,14 @@ describe("project persist", () => {
   it("keeps progression count 0 on the project and out of the scene", () => {
     const project = record(defaultProject());
     project.progression.count = 0;
-    const parsed = parseStored(serializeStored(project, { context: "aux", page: 0, mode: "journal", playing: true, sampleLatched: false }));
+    const parsed = parseStored(serializeStored(project, { context: "aux", page: 0, mode: "journal", playing: true, sampleLatched: false, randomizeLatched: false, face: null, deckLayer: "group" }));
     assert.ok(parsed);
     assert.equal(parsed.project.progression.count, 0);
     assert.equal("progression" in parsed.project.journal[0], false);
   });
 
   it("keeps the bus on the project and fills a missing one with zeros", () => {
-    const stored = JSON.parse(serializeStored(defaultProject(), { context: "aux", page: 0, mode: "journal", playing: true, sampleLatched: false })) as {
+    const stored = JSON.parse(serializeStored(defaultProject(), { context: "aux", page: 0, mode: "journal", playing: true, sampleLatched: false, randomizeLatched: false, face: null, deckLayer: "group" })) as {
       project: { bus?: unknown };
     };
     delete stored.project.bus;
@@ -121,13 +133,13 @@ describe("project persist", () => {
     assert.deepEqual(missing.project.bus, { glue: 0, pump: 0, wide: 0, tilt: 0 });
     const project = defaultProject();
     project.bus = { glue: 0.5, pump: 1, wide: 0.25, tilt: -0.4 };
-    const parsed = parseStored(serializeStored(project, { context: "aux", page: 4, mode: "journal", playing: true, sampleLatched: false }));
+    const parsed = parseStored(serializeStored(project, { context: "aux", page: 4, mode: "journal", playing: true, sampleLatched: false, randomizeLatched: false, face: null, deckLayer: "group" }));
     assert.ok(parsed);
     assert.deepEqual(parsed.project.bus, project.bus);
     const recorded = record(project);
     assert.equal("bus" in recorded.journal[0], false);
     assert.deepEqual(recorded.bus, project.bus);
-    const wild = JSON.parse(serializeStored(project, { context: "aux", page: 0, mode: "journal", playing: true, sampleLatched: false })) as {
+    const wild = JSON.parse(serializeStored(project, { context: "aux", page: 0, mode: "journal", playing: true, sampleLatched: false, randomizeLatched: false, face: null, deckLayer: "group" })) as {
       project: { bus: { tilt: number; glue: number } };
     };
     wild.project.bus.tilt = 4;
@@ -139,7 +151,7 @@ describe("project persist", () => {
   });
 
   it("keeps deck knobs on the project and fills a missing deck from the factory", () => {
-    const stored = JSON.parse(serializeStored(defaultProject(), { context: "aux", page: 0, mode: "journal", playing: true, sampleLatched: false })) as {
+    const stored = JSON.parse(serializeStored(defaultProject(), { context: "aux", page: 0, mode: "journal", playing: true, sampleLatched: false, randomizeLatched: false, face: null, deckLayer: "group" })) as {
       project: { deck?: unknown };
     };
     delete stored.project.deck;
@@ -148,7 +160,7 @@ describe("project persist", () => {
     assert.deepEqual(missing.project.deck, defaultDeck());
     const project = defaultProject();
     project.deck = { ...defaultDeck(), div: 4, depth: 0.25 };
-    const parsed = parseStored(serializeStored(project, { context: "aux", page: 0, mode: "journal", playing: true, sampleLatched: false }));
+    const parsed = parseStored(serializeStored(project, { context: "aux", page: 0, mode: "journal", playing: true, sampleLatched: false, randomizeLatched: false, face: null, deckLayer: "group" }));
     assert.ok(parsed);
     assert.deepEqual(parsed.project.deck, project.deck);
     const recorded = record(project);
@@ -157,7 +169,7 @@ describe("project persist", () => {
   });
 
   it("lifts an old brake and scratch curve onto the new field", () => {
-    const stored = JSON.parse(serializeStored(defaultProject(), { context: "aux", page: 0, mode: "journal", playing: true, sampleLatched: false })) as {
+    const stored = JSON.parse(serializeStored(defaultProject(), { context: "aux", page: 0, mode: "journal", playing: true, sampleLatched: false, randomizeLatched: false, face: null, deckLayer: "group" })) as {
       project: { deck: Record<string, unknown> };
     };
     stored.project.deck = { div: 2, len: 0.5, depth: 1, brake: 2, shape: 1, quant: 2, duty: 0.5, ramp: 0.5 };
@@ -188,7 +200,7 @@ describe("project persist", () => {
     };
     project.wander = "fast";
     project.wanderOriginTick = 999;
-    const parsed = parseStored(serializeStored(project, { context: "kick", page: 0, mode: "journal", playing: true, sampleLatched: false }));
+    const parsed = parseStored(serializeStored(project, { context: "kick", page: 0, mode: "journal", playing: true, sampleLatched: false, randomizeLatched: false, face: null, deckLayer: "group" }));
     assert.ok(parsed);
     assert.equal(parsed.project.morph, null);
     assert.equal(parsed.project.wander, "fast");
@@ -218,6 +230,17 @@ describe("project persist", () => {
     assert.equal(parsed.ui.page, 9);
     assert.equal(parsed.ui.playing, true);
     assert.equal(parsed.ui.sampleLatched, false);
+    assert.equal(parsed.ui.randomizeLatched, false);
+    assert.equal(parsed.ui.face, null);
+    assert.equal(parsed.ui.deckLayer, "group");
+    const junk = parseStored(JSON.stringify({
+      version: 1,
+      project: {},
+      ui: { context: "kick", page: 0, mode: "journal", face: "nope", deckLayer: "both", randomizeLatched: 1 },
+    }));
+    assert.equal(junk?.ui.randomizeLatched, false);
+    assert.equal(junk?.ui.face, null);
+    assert.equal(junk?.ui.deckLayer, "group");
   });
 
   it("reads randomize settings saved under the old capture keys", () => {
@@ -321,20 +344,20 @@ describe("project persist", () => {
   it("drops clipboard when the scene is gone", () => {
     const project = record(defaultProject());
     project.clipboardSceneIds = ["missing"];
-    const parsed = parseStored(serializeStored(project, { context: "kick", page: 0, mode: "journal", playing: true, sampleLatched: false }));
+    const parsed = parseStored(serializeStored(project, { context: "kick", page: 0, mode: "journal", playing: true, sampleLatched: false, randomizeLatched: false, face: null, deckLayer: "group" }));
     assert.ok(parsed);
     assert.deepEqual(parsed.project.clipboardSceneIds, []);
     const legacy = parseStored(JSON.stringify({
       version: 1,
       project: { ...project, clipboardSceneIds: undefined, clipboardSceneId: "001" },
-      ui: { context: "kick", page: 0, mode: "journal", playing: true, sampleLatched: false },
+      ui: { context: "kick", page: 0, mode: "journal", playing: true, sampleLatched: false, randomizeLatched: false, face: null, deckLayer: "group" },
     }));
     assert.deepEqual(legacy?.project.clipboardSceneIds, ["001"]);
   });
 
   it("reads an old pluck as the sustain it was holding", () => {
     const project = record(defaultProject());
-    const raw = JSON.parse(serializeStored(project, { context: "bass", page: 0, mode: "journal", playing: true, sampleLatched: false })) as {
+    const raw = JSON.parse(serializeStored(project, { context: "bass", page: 0, mode: "journal", playing: true, sampleLatched: false, randomizeLatched: false, face: null, deckLayer: "group" })) as {
       project: {
         working: { bass: { sound: Record<string, { value: number; pattern: number; cycle: number; amount: number }> } };
         journal: { lanes: { bass: { sound: Record<string, { value: number }> } } }[];
@@ -360,7 +383,7 @@ describe("project persist", () => {
   it("loads and saves through host file bindings", () => {
     const files = memoryFiles();
     const project = setRandomizeIntensity(defaultProject(), "clear");
-    const ui = { context: "hat" as const, page: 1, mode: "journal" as const, playing: true, sampleLatched: false };
+    const ui = { context: "hat" as const, page: 1, mode: "journal" as const, playing: true, sampleLatched: false, randomizeLatched: false, face: null, deckLayer: "group" as const };
     assert.equal(saveStoredProject(project, ui, files), true);
     assert.ok(PROJECT_PATH in files.store);
     const loaded = loadStoredProject(files);

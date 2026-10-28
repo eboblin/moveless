@@ -36,7 +36,7 @@ import {
 } from "../ui/screen.ts";
 import { resetWaveform, serviceWaveform } from "../ui/wave-audio.ts";
 import { applyWavePages, strokeWaveform, type WaveTape } from "../ui/wave.ts";
-import { defaultUi, focusVisible, peekKind, rememberPage, screenPlace, settleWheel, type UiState } from "../ui/state.ts";
+import { defaultUi, focusVisible, peekKind, restoreUi, screenPlace, settleWheel, type UiState } from "../ui/state.ts";
 import type { Project } from "../core/types.ts";
 
 interface HostGlobals {
@@ -79,6 +79,9 @@ function uiSlice(session: Session): StoredUi {
     mode: session.ui.mode,
     playing: session.playing,
     sampleLatched: session.ui.sampleLatched,
+    randomizeLatched: session.ui.randomizeParked ?? session.ui.randomizeLatched,
+    face: session.ui.faceLatch,
+    deckLayer: session.ui.deckLayer,
   };
 }
 
@@ -87,11 +90,7 @@ function boot(): Session {
   if (!stored) return { project: defaultProject(), ui: defaultUi(), tick: 0, playing: true };
   return {
     project: stored.project,
-    ui: {
-      ...rememberPage(defaultUi(), stored.ui.context, stored.ui.page),
-      mode: stored.ui.mode,
-      sampleLatched: stored.ui.sampleLatched,
-    },
+    ui: restoreUi(stored.ui),
     tick: 0,
     playing: stored.ui.playing,
   };
@@ -837,7 +836,10 @@ export function onMidiMessageInternal(data: number[]): void {
     session.ui.page !== beforeUi.page ||
     session.ui.mode !== beforeUi.mode ||
     session.playing !== beforePlaying ||
-    session.ui.sampleLatched !== beforeUi.sampleLatched
+    session.ui.sampleLatched !== beforeUi.sampleLatched ||
+    (session.ui.randomizeParked ?? session.ui.randomizeLatched) !== (beforeUi.randomizeParked ?? beforeUi.randomizeLatched) ||
+    session.ui.faceLatch !== beforeUi.faceLatch ||
+    session.ui.deckLayer !== beforeUi.deckLayer
   ) {
     projectDirty = true;
     dirtySinceMs = Date.now();

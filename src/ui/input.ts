@@ -538,7 +538,6 @@ function onFace(session: Session, which: FaceMode, press: boolean): Session {
         focus: null,
         detent: null,
         travel: null,
-        ...(which === "deck" && session.ui.face !== "deck" ? { deckLayer: "group" as const } : {}),
         ...(leavingDeck
           ? {
               deckGesture: null,

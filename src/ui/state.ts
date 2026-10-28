@@ -391,6 +391,30 @@ export function defaultUi(): UiState {
   };
 }
 
+/** Menus the project file keeps. Mixer and DJ FX share one latch. */
+export interface StoredMenus {
+  context: ContextId;
+  page: number;
+  mode: UiMode;
+  sampleLatched: boolean;
+  randomizeLatched: boolean;
+  face: FaceMode | null;
+  deckLayer: DeckLayer;
+}
+
+/** Put the saved menus back. Mixer and DJ FX park the jog latch until they close. */
+export function restoreUi(stored: StoredMenus): UiState {
+  return settleRandomize({
+    ...rememberPage(defaultUi(), stored.context, stored.page),
+    mode: stored.mode,
+    sampleLatched: stored.sampleLatched,
+    randomizeLatched: stored.randomizeLatched,
+    face: stored.face,
+    faceLatch: stored.face,
+    deckLayer: stored.deckLayer,
+  });
+}
+
 /** Lane and page on screen. A held step shows its page before the finger lifts. */
 export function screenPlace(ui: UiState): TrackPlace {
   const context = ui.heldContext ?? ui.context;

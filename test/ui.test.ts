@@ -15,7 +15,7 @@ import { DIGIT_H, displayAmount, fractionFromLabel, plotAmount } from "../src/ui
 import { lettersWidth, plotLetters } from "../src/ui/letters.ts";
 import { CAPTION_GAP, CAPTION_LANE_Y, CAPTION_OUTLINE, CAPTION_PAGE_Y, CAPTION_SINGLE_Y, CHAR_W, DIGIT_Y, FONT_H, HEADER_H, HEIGHT, MIX_METER_BOTTOM, MIX_METER_TOP, MIX_METER_X, NAME_Y, PAGER_Y, PARAM_COL_W, PARAM_H, SEP_Y, TITLE_Y, VALUE_Y, VIZ_H, WIDTH, loadWidth, pageTitlePaintKey, pageTitleTravel, pixel, renderScreen, type Screen } from "../src/ui/screen.ts";
 import { WAVE_HOP, emptyWave, type WaveTape } from "../src/ui/wave.ts";
-import { defaultUi, HOLD_MS, HOLD_TICKS, openSetMode, PAGE_TITLE_MS, PAGE_TITLE_SLIDE_MS, settleWheel, WHEEL_RELEASE_MS, type DetentHold } from "../src/ui/state.ts";
+import { defaultUi, HOLD_MS, HOLD_TICKS, openSetMode, PAGE_TITLE_MS, PAGE_TITLE_SLIDE_MS, restoreUi, settleWheel, WHEEL_RELEASE_MS, type DetentHold } from "../src/ui/state.ts";
 import { midiMessage, reduce, relDelta, settleTrackPeek, type Session } from "../src/ui/input.ts";
 import { DETENT_CLICKS, DETENT_REST_MS, ENCODER_CLICKS_PER_TURN, KNOB_MAX_STEP_DEG, KNOB_SWEEP_DEG, knobClicksPerStep, stepKnob, writeControl } from "../src/ui/controls.ts";
 
@@ -300,14 +300,11 @@ describe("pages and leds", () => {
     project.mute.snare = true;
     assert.equal(stepLed(project, "kick", "snare").family, "off");
     project.mute.bass = true;
-    assert.equal(stepLed(project, "bass", "bass").family, "yellow");
-    assert.equal(stepLed(project, "bass", "bass").blink, true);
+    assert.equal(stepLed(project, "bass", "bass").family, "off");
     project.mute.kick = true;
-    assert.equal(stepLed(project, "kick", "kick").family, "red");
-    assert.equal(stepLed(project, "kick", "kick").blink, true);
+    assert.equal(stepLed(project, "kick", "kick").family, "off");
     project.lock.bass = true;
-    assert.equal(stepLed(project, "bass", "bass").family, "lock");
-    assert.equal(stepLed(project, "bass", "bass").blink, true);
+    assert.equal(stepLed(project, "bass", "bass").family, "off");
     assert.equal(stepLed(project, "kick", "bass").family, "off");
     project.mute.bass = false;
     assert.equal(stepLed(project, "bass", "bass").family, "lock");
@@ -315,14 +312,14 @@ describe("pages and leds", () => {
     project.mute.kick = false;
     project.solo.hat = true;
     assert.equal(stepLed(project, "kick", "fx").family, "green");
-    assert.equal(stepLed(project, "kick", "kick").family, "red");
-    assert.equal(stepLed(project, "kick", "kick").blink, true);
+    assert.equal(stepLed(project, "kick", "kick").family, "off");
     assert.equal(stepLed(project, "hat", "hat").family, "red");
-    assert.equal(stepLed(project, "hat", "hat").blink, true);
+    assert.equal(stepLed(project, "hat", "hat").blink, false);
+    assert.equal(stepLed(project, "hat", "hat").color, LED.red);
     assert.equal(stepLed(project, "kick", "hat").family, "red");
     assert.equal(stepLed(project, "kick", "hat").blink, false);
-    assert.equal(stepLed(project, "bass", "bass").family, "lock");
-    assert.equal(stepLed(project, "bass", "bass").blink, true);
+    assert.equal(stepLed(project, "kick", "hat").color, LED.red);
+    assert.equal(stepLed(project, "bass", "bass").family, "off");
     assert.equal(stepLed(project, "kick", "bass").family, "off");
   });
 
@@ -345,16 +342,16 @@ describe("pages and leds", () => {
     project.mute.snare = true;
     assert.equal(stepLed(project, "kick", "snare", 1).family, "off");
     project.mute.kick = true;
-    assert.equal(stepLed(project, "kick", "kick", 0).color, shadeColor(1, 0.5));
-    assert.equal(stepLed(project, "kick", "kick", 1).color, 1);
-    assert.equal(stepLed(project, "kick", "kick", 1).blink, false);
+    assert.equal(stepLed(project, "kick", "kick", 0).family, "off");
+    assert.equal(stepLed(project, "kick", "kick", 1).family, "off");
     project.mute.kick = false;
     project.mute.snare = false;
     project.solo.snare = true;
-    assert.equal(stepLed(project, "kick", "kick", 1).color, 1);
-    assert.equal(stepLed(project, "kick", "kick", 1).blink, false);
+    assert.equal(stepLed(project, "kick", "kick", 1).family, "off");
     assert.equal(stepLed(project, "snare", "kick", 1).family, "off");
-    assert.equal(stepLed(project, "snare", "snare", 1).color, 1);
+    assert.equal(stepLed(project, "snare", "snare", 1).color, shadeColor(1, 0.5));
+    assert.equal(stepLed(project, "snare", "snare", 0).color, offColor(1));
+    assert.equal(stepLed(project, "kick", "snare", 1).color, shadeColor(1, 0.5));
     project.solo.snare = false;
     project.lock.lead = true;
     assert.equal(stepLed(project, "lead", "lead", 0).color, shadeColor(20, 0.5));
@@ -389,6 +386,12 @@ describe("pages and leds", () => {
     assert.equal(stepIconColors(project, "lead")[5], offColor(20));
     project.mute.kick = true;
     assert.equal(stepIconColors(project, "kick")[0], offColor(1));
+    assert.equal(stepLed(project, "kick", "kick", 1).family, "off");
+    project.mute.kick = false;
+    project.solo.kick = true;
+    assert.equal(stepIconColors(project, "kick")[0], offColor(1));
+    assert.equal(stepLed(project, "kick", "kick", 1).color, shadeColor(1, 0.5));
+    project.solo.kick = false;
     const pressed = reduce(session(), { kind: "note", data1: 20, data2: 127 });
     assert.equal(pressed.ui.context, "bass");
     assert.equal(pressed.ui.heldContext, "bass");
@@ -1012,11 +1015,54 @@ describe("surface", () => {
     assert.deepEqual(tone.groups, ["FILTER", "ISO"]);
     state = reduce(state, { kind: "cc", data1: 14, data2: 127 });
     assert.equal(state.ui.deckLayer, "group");
+    state = reduce(state, { kind: "cc", data1: 14, data2: 1 });
+    state = reduce(state, { kind: "cc", data1: 52, data2: 0 });
+    state = reduce(state, { kind: "cc", data1: 52, data2: 127 });
+    state = reduce(state, { kind: "cc", data1: 52, data2: 0 });
+    assert.equal(state.ui.face, null);
+    assert.equal(state.ui.deckLayer, "tone");
+    state = reduce(state, { kind: "cc", data1: 52, data2: 127 });
+    assert.equal(state.ui.face, "deck");
+    assert.equal(state.ui.deckLayer, "tone");
     let mix = reduce(session(), { kind: "cc", data1: 88, data2: 127 });
     mix = reduce(mix, { kind: "cc", data1: 14, data2: 1 });
     assert.equal(mix.ui.face, "mixer");
     assert.equal(mix.ui.page, 0);
     assert.equal(mix.ui.deckLayer, "group");
+  });
+
+  it("restores latched menus and parks randomize under DJ FX", () => {
+    const deck = restoreUi({
+      context: "bass",
+      page: 1,
+      mode: "set",
+      sampleLatched: true,
+      randomizeLatched: true,
+      face: "deck",
+      deckLayer: "tone",
+    });
+    assert.equal(deck.context, "bass");
+    assert.equal(deck.page, 1);
+    assert.equal(deck.mode, "set");
+    assert.equal(deck.sampleLatched, true);
+    assert.equal(deck.face, "deck");
+    assert.equal(deck.faceLatch, "deck");
+    assert.equal(deck.deckLayer, "tone");
+    assert.equal(deck.randomizeLatched, false);
+    assert.equal(deck.randomizeParked, true);
+    const pads = restoreUi({
+      context: "kick",
+      page: 0,
+      mode: "journal",
+      sampleLatched: false,
+      randomizeLatched: true,
+      face: null,
+      deckLayer: "group",
+    });
+    assert.equal(pads.randomizeLatched, true);
+    assert.equal(pads.randomizeParked, null);
+    assert.equal(pads.face, null);
+    assert.equal(pads.faceLatch, null);
   });
 
   it("puts the deck knobs back to the factory when Delete is pressed", () => {
@@ -2332,7 +2378,7 @@ describe("surface", () => {
     assert.deepEqual(held.project.bookmarks[1], { context: "aux", page: mixer });
     assert.equal(held.ui.context, "aux");
     assert.equal(held.ui.heldContext, "aux");
-    const saved = parseStored(serializeStored(held.project, { context: held.ui.context, page: held.ui.page, mode: held.ui.mode, playing: false, sampleLatched: false }));
+    const saved = parseStored(serializeStored(held.project, { context: held.ui.context, page: held.ui.page, mode: held.ui.mode, playing: false, sampleLatched: false, randomizeLatched: false, face: null, deckLayer: "group" }));
     assert.deepEqual(saved?.project.bookmarks[1], { context: "aux", page: mixer });
     held = reduce(held, { kind: "note", data1: 31, data2: 0 });
     assert.equal(held.ui.context, "aux");
