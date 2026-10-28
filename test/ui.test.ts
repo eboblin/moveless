@@ -177,8 +177,9 @@ describe("pages and leds", () => {
     assert.equal(lanePages("kick")[2].title, "COUNT / RATE");
     assert.equal(lanePages("bass")[0].title, "GENERATOR 1");
     assert.equal(lanePages("bass")[1].title, "GENERATOR 2");
-    assert.equal(lanePages("bass")[2].bindings[0]?.label, "REPEAT V");
-    assert.equal(lanePages("bass")[2].groups[1], "STEP");
+    assert.equal(lanePages("bass")[2].title, "COUNT / SPAN");
+    assert.equal(lanePages("bass")[2].bindings[0]?.label, "COUNT V");
+    assert.equal(lanePages("bass")[2].groups[1], "SPAN");
     assert.equal(lanePages("bass")[3].bindings[0]?.label, "PITCH V");
     assert.equal(lanePages("bass")[3].bindings[4]?.label, "OCTAVE V");
     assert.equal(lanePages("bass")[4].bindings[4]?.label, "FOLLOW");
@@ -1018,13 +1019,13 @@ describe("surface", () => {
 
   it("collapses same-onset overlaps so stacked notes stay one event", () => {
     const project = defaultProject();
-    project.working.bass.gen1 = { ...project.working.bass.gen1, length: 16, hits: 16, rotate: 0 };
-    project.working.bass.gen2.hits = 0;
+    project.working.bass.gen1.hits = 0;
+    project.working.bass.gen2 = { ...project.working.bass.gen2, length: 16, hits: 1, rotate: 0, probability: 1 };
     project.working.bass.follow = 0;
     project.working.bass.length = modulated(0);
-    project.working.bass.repeat = modulated(unitForIndex(1, 8));
+    project.working.bass.repeat = modulated(1);
     project.working.bass.step = modulated(1);
-    project.working.bass.pitch = modulated(0.2);
+    project.working.bass.pitch = modulated(0.5);
     const ticks = new Map<number, number>();
     for (const event of generatePhrase(project).lanes.bass) {
       ticks.set(event.tick, (ticks.get(event.tick) ?? 0) + 1);
@@ -1495,6 +1496,22 @@ describe("surface", () => {
     assert.equal(header("ratchet.tone.value", 0.5), "FLAT");
     assert.equal(header("ratchet.tone.value", 0), "DOWN");
     assert.equal(header("ratchet.tone.value", 1), "UP");
+  });
+
+  it("names the run span in scale degrees while its value is held", () => {
+    const project = defaultProject();
+    const header = (value: number) => {
+      project.working.bass.step = modulated(value);
+      return renderScreen(project, {
+        ...defaultUi(),
+        context: "bass",
+        page: 2,
+        focus: { label: "SPAN V", path: "step.value", generator: "step", showPattern: false, held: true, untilTick: 0, untilMs: 0 },
+      }, 0).header;
+    };
+    assert.equal(header(0.5), "0");
+    assert.equal(header(1), "+7");
+    assert.equal(header(0), "-7");
   });
 
   it("keeps big digits for 0..99 and uses small 3+ digit text past that", () => {

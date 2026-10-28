@@ -3,7 +3,7 @@ import { laneHeard } from "../core/journal.ts";
 import { clamp01, SIXTEENTH_TICKS, countFromUnit, delayDivision, rateFromUnit, tickToSample } from "../core/clock.ts";
 import { phraseStepsOf } from "../core/events.ts";
 import { chordSymbol, degreeNumeral, pitchClassName, scaleShort, scaleTitle } from "../core/harmony.ts";
-import { chordFigure, generatePhrase, laneEnvelope, laneSteps, octaveNumber, restingChordToneLabel, restingPitchLabel, restingSliceLabel } from "../core/phrase.ts";
+import { chordFigure, generatePhrase, laneEnvelope, laneSteps, octaveNumber, restingChordToneLabel, restingPitchLabel, restingSliceLabel, spanDegrees } from "../core/phrase.ts";
 import { applyVoiceEnvelope, evalModulated, voiceLane } from "../core/modulate.ts";
 import { isPitched, isVoice, LANES, LANE_CODE, type RandomizeDepth, type RandomizeIntensity, type RandomizeScope, type ContextId, type HarmonicEvent, type LaneId, type Phrase, type Project, type TimedEvent } from "../core/types.ts";
 import { DIGIT_H, displayAmount, divisionCell, type BigAmount, type DisplayAmount } from "./digits.ts";
@@ -1070,6 +1070,10 @@ function figureHeader(project: Project, context: ContextId, binding: Binding): s
       return tiltWord(readControl(project, context, binding.path), "FALL", "RISE");
     case "rollTone":
       return tiltWord(readControl(project, context, binding.path), "DOWN", "UP");
+    case "span": {
+      const n = spanDegrees(readControl(project, context, binding.path));
+      return n > 0 ? `+${n}` : String(n);
+    }
     case "slice":
       if (context !== "chords") return null;
       return restingSliceLabel(project.working.chords, project.global);

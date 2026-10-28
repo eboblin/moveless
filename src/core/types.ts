@@ -150,7 +150,9 @@ export interface PitchedLane {
   pitch: Modulated;
   octave: Modulated;
   length: Modulated;
+  /** Notes gen2 fits inside this note. 0 is one note. Gen1 ignores it. */
   repeat: Modulated;
+  /** Scale degrees the run travels. 0.5 is none. Read once, on the source step. */
   step: Modulated;
   sound: Record<string, Modulated>;
   filter: LaneFilter;

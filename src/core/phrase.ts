@@ -116,8 +116,10 @@ function idleStamp(project: Project): [number, number] {
 
 const BASS_OCTAVE = 3;
 const LEAD_OCTAVE = 4;
-/** Pitch value walks the selected scale ± one octave (seven degrees). */
-const SCALE_REACH = 7;
+/** Pitch value walks the selected scale ± two octaves. */
+const SCALE_REACH = 14;
+/** Degrees the whole run travels. The centre is no travel. */
+const SPAN_REACH = 7;
 /**
  * Absolute tonic octave. 0 is C0 (MIDI 0). 9 is the piano's top C in this
  * numbering (MIDI 108). A0 sits in octave 1. Same ends on bass and lead.
@@ -136,9 +138,14 @@ export function unitForOctave(octave: number): number {
   return (n - OCTAVE_MIN) / span;
 }
 
-/** Scale degrees from the tonic. 0.5 is the tonic, the edges are one octave of the scale away. */
+/** Scale degrees from the tonic. 0.5 is the tonic, the edges are two octaves of the scale away. */
 export function scaleOffset(unit: number): number {
   return Math.round((clamp01(unit) - 0.5) * (SCALE_REACH * 2));
+}
+
+/** Scale degrees a generator-2 run travels. 0.5 is a flat run. */
+export function spanDegrees(unit: number): number {
+  return Math.round(bipolarFromUnit(unit, SPAN_REACH));
 }
 
 /** Absolute octave of the tonic, 0..9. */
@@ -608,6 +615,11 @@ function drumEvents(lane: DrumLane, id: DrumId, global: GlobalSettings, macros: 
   return out;
 }
 
+function noteTicks(length: PitchedLane["length"], step: number, macros: Record<string, number>, bar: number): number {
+  const unit = evalModulated(withMacro(length, macro(macros, "length")), step);
+  return Math.max(1, Math.round(unit * bar * SIXTEENTH_TICKS));
+}
+
 function pitchedEvents(
   lane: PitchedLane,
   id: "bass" | "lead",
@@ -620,28 +632,34 @@ function pitchedEvents(
   const scale = scaleOf(global.scale);
   const rootPc = mod(global.root + global.transpose, 12);
   const out: TimedEvent[] = [];
-  hits.forEach((hit) => {
-    const reps = countFromUnit(evalModulated(withMacro(lane.repeat, macro(macros, "repeat")), hit.step));
-    const shift = Math.round(bipolarFromUnit(evalModulated(withMacro(lane.step, macro(macros, "step")), hit.step), 7));
-    for (let r = 0; r < reps; r++) {
-      const step = hit.step + r;
-      const velocity = keptVelocity(lane.gen1, lane.gen2, hit.generators, global.seed, id, hit.step, r, macro(macros, "velocity"), macro(macros, "probability"), step);
+  for (const hit of hits) {
+    const runs = hit.generators.includes(2);
+    const count = runs ? countFromUnit(evalModulated(withMacro(lane.repeat, macro(macros, "repeat")), hit.step)) : 1;
+    const shaped = runs && count > 1;
+    const span = shaped ? spanDegrees(evalModulated(withMacro(lane.step, macro(macros, "step")), hit.step)) : 0;
+    const whole = noteTicks(lane.length, hit.step, macros, global.bar);
+    for (let r = 0; r < count; r++) {
+      const extra = shaped ? Math.round((r * whole) / count) : 0;
+      const at = hit.step + extra / SIXTEENTH_TICKS;
+      const velocity = keptVelocity(lane.gen1, lane.gen2, hit.generators, global.seed, id, hit.step, r, macro(macros, "velocity"), macro(macros, "probability"), at);
       if (velocity === null) continue;
-      const pitchU = evalModulated(withMacro(lane.pitch, macro(macros, "pitch")), step);
-      const octaveU = evalModulated(withMacro(lane.octave, macro(macros, "octave")), step);
-      const degree = scaleOffset(pitchU) + r * shift;
+      const pitchU = evalModulated(withMacro(lane.pitch, macro(macros, "pitch")), at);
+      const octaveU = evalModulated(withMacro(lane.octave, macro(macros, "octave")), at);
+      const along = shaped ? r / (count - 1) : 0;
+      const degree = scaleOffset(pitchU) + Math.round(span * along);
       const desiredMidi = degreeToMidi(degree, scale, rootPc, octaveNumber(octaveU));
-      const tick = swungStepTick(step, global.swing);
+      const tick = swungStepTick(hit.step, global.swing) + extra;
       const harm = harmonyAt(harmony, tick);
       const chordPcs = harm ? chordTonePitchClasses(harm, scale, rootPc) : [];
       const note = Math.max(0, Math.min(127, Math.round(applyFollowMidi(desiredMidi, lane.follow, chordPcs))));
-      const lengthTicks = Math.max(1, Math.round(evalModulated(withMacro(lane.length, macro(macros, "length")), step) * global.bar * SIXTEENTH_TICKS));
-      const sound = soundValues(lane.sound, step, macros);
-      const filter = filterValues(lane.filter, step, macros);
-      const send = sendValues(lane.send, step, macros);
-      out.push(place(hit.step, r * SIXTEENTH_TICKS, global, id, note, velocity, lengthTicks, sound, filter, send));
+      const heard = noteTicks(lane.length, at, macros, global.bar);
+      const lengthTicks = shaped ? Math.max(1, Math.round(heard / count)) : heard;
+      const sound = soundValues(lane.sound, at, macros);
+      const filter = filterValues(lane.filter, at, macros);
+      const send = sendValues(lane.send, at, macros);
+      out.push(place(hit.step, extra, global, id, note, velocity, lengthTicks, sound, filter, send));
     }
-  });
+  }
   return out;
 }
 

@@ -20,7 +20,7 @@ import {
 export type MorphKind = "lerp" | "switch";
 export type KnobStore = "lane" | "progression" | "global" | "mixer" | "macro" | "bus" | "deck";
 /** How the screen draws a knob. `number` is the plain 0..99 cell. */
-export type KnobDisplay = "number" | "pitch" | "octave" | "note" | "scale" | "division" | "chordTone" | "slice" | "count" | "time" | "fade" | "rollTone";
+export type KnobDisplay = "number" | "pitch" | "octave" | "note" | "scale" | "division" | "chordTone" | "slice" | "count" | "time" | "fade" | "rollTone" | "span";
 
 export interface Binding {
   path: string;
@@ -181,7 +181,8 @@ const FIELD = {
   material: spec("MATERIAL", 2),
   /** Eight repeats. One click is one repeat; the cell shows 1..8, not 0..100. */
   count: spec("COUNT", 8, { macro: ["count", "repeat"], display: "count", step: 1 / 8, max: 7 / 8 }),
-  repeat: spec("REPEAT", 8),
+  /** Notes inside a generator-2 run. One click is one note; the cell shows 1..8. */
+  repeat: spec("COUNT", 8, { display: "count", step: 1 / 8, max: 7 / 8 }),
   rate: spec("RATE", 8, { display: "division" }),
   /** Level slope along a roll. 50 is flat. Macros do not move it. */
   fade: spec("FADE", 2, { detent: [0.5], macro: [], display: "fade" }),
@@ -208,7 +209,8 @@ const FIELD = {
   sustain: spec("SUSTAIN", 1),
   env: spec("ENV", 1),
   wide: spec("WIDE", 1),
-  step: spec("STEP", 1),
+  /** Scale degrees the whole run travels. 50 sits still. */
+  step: spec("SPAN", 1, { detent: [0.5], display: "span" }),
   gate: spec("GATE", 1),
   size: spec("SIZE", 4, { display: "slice", macro: [] }),
   velocity: spec("VEL", 1),

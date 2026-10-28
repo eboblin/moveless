@@ -158,7 +158,7 @@ describe("euclid generator", () => {
     assert.equal(bass.octave.value, unitForOctave(3));
     assert.equal(bass.length.value, 0.04);
     assert.equal(bass.follow, 1);
-    assert.equal(bass.step.value, 0);
+    assert.equal(bass.step.value, 0.5);
     assert.equal(bass.sound.wave.value, 0.28);
     assert.equal(bass.sound.bend.value, 0);
     assert.equal(bass.sound.glide.value, 0);
@@ -177,7 +177,7 @@ describe("euclid generator", () => {
     assert.equal(lead.octave.value, unitForOctave(4));
     assert.equal(lead.length.value, 0.1);
     assert.equal(lead.follow, 1);
-    assert.equal(lead.step.value, 0);
+    assert.equal(lead.step.value, 0.5);
     assert.equal(lead.sound.wave.value, 0.84);
     assert.equal(lead.sound.bend.value, 0);
     assert.equal(lead.sound.glide.value, 0);
@@ -421,8 +421,8 @@ describe("euclid generator", () => {
     project.working.kick.gen2 = { ...project.working.kick.gen2, length: 16, hits: 1, rotate: 0, probability: 0.45 };
     project.working.kick.ratchet.count = modulated(1);
     project.working.kick.ratchet.rate = modulated(unitForIndex(1, 6));
-    project.working.bass.gen1 = { ...project.working.bass.gen1, length: 16, hits: 1, rotate: 0, probability: 0.45 };
-    project.working.bass.gen2.hits = 0;
+    project.working.bass.gen1.hits = 0;
+    project.working.bass.gen2 = { ...project.working.bass.gen2, length: 16, hits: 1, rotate: 0, probability: 0.45 };
     project.working.bass.repeat = modulated(1);
     let kickPartial = false;
     let bassPartial = false;
@@ -450,12 +450,13 @@ describe("euclid generator", () => {
     assert.deepEqual(kicks.map((event) => event.velocity), [0, 0.5, 1, 1.5].map(kickCurve));
     assert.notEqual(kicks[0].velocity, kicks[1].velocity);
 
-    project.working.bass.gen1 = { ...project.working.bass.gen1, length: 16, hits: 1, rotate: 0, probability: 1 };
-    project.working.bass.gen2.hits = 0;
+    project.working.bass.gen1.hits = 0;
+    project.working.bass.gen2 = { ...project.working.bass.gen2, length: 16, hits: 1, rotate: 0, probability: 1 };
     project.working.bass.repeat = modulated(0.4);
-    project.working.bass.gen1.velocity = modulated(0.5, 0, 16, 0.5);
+    project.working.bass.length = modulated(1);
+    project.working.bass.gen2.velocity = modulated(0.5, 0, 16, 0.5);
     const bass = generatePhrase(project).lanes.bass.filter((event) => event.step === 0);
-    const bassCurve = (step: number) => evalModulated(project.working.bass.gen1.velocity, step);
+    const bassCurve = (step: number) => evalModulated(project.working.bass.gen2.velocity, step);
     assert.equal(bass.length, 4);
     assert.deepEqual(bass.map((event) => event.velocity), [0, 1, 2, 3].map(bassCurve));
   });
@@ -1017,7 +1018,7 @@ describe("harmony", () => {
     const project = bar(defaultProject());
     project.working.bass.gen1 = { ...project.working.bass.gen1, length: 16, hits: 2, rotate: 0, probability: 1 };
     project.working.bass.gen2.hits = 0;
-    project.working.bass.pitch = modulated(0.5 + 1 / 14);
+    project.working.bass.pitch = modulated(0.5 + 1 / 28);
     project.working.bass.follow = 1;
     project.progression.mood = 0;
     project.progression.tension = 0;
@@ -1061,7 +1062,7 @@ describe("harmony", () => {
     project.progression.tension = 0;
     project.progression.count = 1;
     project.working.bass.follow = 1;
-    project.working.bass.pitch = modulated(0.5 + 1 / 7);
+    project.working.bass.pitch = modulated(0.5 + 1 / 14);
     project.working.bass.gen1 = { ...project.working.bass.gen1, length: 16, hits: 4, rotate: 0 };
     project.working.bass.gen2.hits = 0;
     project.working.chords.rate = modulated(0);
@@ -1415,17 +1416,73 @@ describe("harmony", () => {
     assert.deepEqual(roots("minor", 0, 2), roots("minor", 2));
   });
 
-  it("walks repeats along the scale", () => {
+  it("keeps generator 1 as one note when count is up", () => {
     const project = bar(defaultProject());
-    project.working.bass.gen1 = { ...project.working.bass.gen1, length: 16, hits: 2, rotate: 0, probability: 1 };
     project.working.bass.gen2.hits = 0;
+    project.working.bass.repeat = modulated(1);
+    project.working.bass.step = modulated(1);
+    project.working.bass.follow = 0;
+    project.working.bass.length = modulated(1);
+    const notes = generatePhrase(project).lanes.bass;
+    assert.equal(notes.length, 1);
+    assert.equal(notes[0].note, 36);
+    assert.equal(notes[0].tick, 0);
+    assert.equal(notes[0].lengthTicks, 4 * 48);
+  });
+
+  it("splits a generator 2 note across its length and walks the span once", () => {
+    const project = bar(defaultProject());
+    project.working.bass.gen1.hits = 0;
+    project.working.bass.gen2 = { ...project.working.bass.gen2, length: 16, hits: 1, rotate: 0, probability: 1, velocity: modulated(1) };
     project.working.bass.repeat = modulated(0.4);
     project.working.bass.step = modulated(1);
     project.working.bass.follow = 0;
     project.working.bass.pitch = modulated(0.5);
-    const notes = generatePhrase(project).lanes.bass.filter((event) => event.step === 0).map((event) => event.note);
-    assert.equal(notes.length, 4);
-    assert.deepEqual(notes, [36, 48, 60, 72]);
+    project.working.bass.length = modulated(1);
+    const notes = generatePhrase(project).lanes.bass;
+    assert.deepEqual(notes.map((event) => event.tick), [0, 48, 96, 144]);
+    assert.deepEqual(notes.map((event) => event.lengthTicks), [48, 48, 48, 48]);
+    assert.deepEqual(notes.map((event) => event.note), [36, 39, 44, 48]);
+    assert.ok(notes.every((event) => event.step === 0));
+  });
+
+  it("runs the shared step and leaves generator 1 hits whole", () => {
+    const project = bar(defaultProject());
+    project.working.bass.gen1 = { ...project.working.bass.gen1, length: 16, hits: 4, rotate: 0, probability: 1 };
+    project.working.bass.gen2 = { ...project.working.bass.gen2, length: 16, hits: 1, rotate: 0, probability: 1 };
+    project.working.bass.repeat = modulated(0.4);
+    project.working.bass.step = modulated(0.5);
+    project.working.bass.follow = 0;
+    project.working.bass.length = modulated(1);
+    const bass = generatePhrase(project).lanes.bass;
+    assert.equal(bass.filter((event) => event.step === 0).length, 4);
+    assert.deepEqual(bass.filter((event) => event.step !== 0).map((event) => event.step), [4, 8, 12]);
+  });
+
+  it("ignores span when the run count is one", () => {
+    const project = bar(defaultProject());
+    project.working.bass.gen1.hits = 0;
+    project.working.bass.gen2 = { ...project.working.bass.gen2, length: 16, hits: 1, rotate: 0, probability: 1 };
+    project.working.bass.repeat = modulated(0);
+    project.working.bass.step = modulated(1);
+    project.working.bass.follow = 0;
+    const notes = generatePhrase(project).lanes.bass;
+    assert.equal(notes.length, 1);
+    assert.equal(notes[0].note, 36);
+  });
+
+  it("opens pitch across two scale octaves around the octave offset", () => {
+    const project = bar(defaultProject());
+    project.working.bass.gen2.hits = 0;
+    project.working.bass.follow = 0;
+    const noteAt = (pitch: number) => {
+      project.working.bass.pitch = modulated(pitch);
+      return generatePhrase(project).lanes.bass[0].note;
+    };
+    const mid = noteAt(0.5);
+    assert.equal(mid, 36);
+    assert.equal(noteAt(0), mid - 24);
+    assert.equal(noteAt(1), mid + 24);
   });
 
   it("plays one latched chord for the whole phrase when count is 0", () => {
@@ -1507,7 +1564,7 @@ describe("harmony", () => {
     project.working.chords.rate = modulated(0);
     project.working.bass.gen1 = { ...project.working.bass.gen1, length: 16, hits: 4, rotate: 0, probability: 1 };
     project.working.bass.gen2.hits = 0;
-    project.working.bass.pitch = modulated(0.5 + 1 / 7);
+    project.working.bass.pitch = modulated(0.5 + 1 / 14);
     project.working.bass.follow = 0;
     const free = generatePhrase(project).lanes.bass[0].note;
     project.working.bass.follow = 1;

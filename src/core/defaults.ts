@@ -177,7 +177,7 @@ function pitched(lane: "bass" | "lead"): PitchedLane {
     octave: home(unitForOctave(homeOctave(lane))),
     length: home(bass ? 0.04 : 0.1),
     repeat: home(0),
-    step: home(0),
+    step: home(0.5),
     sound: sound(lane),
     filter: laneFilter(),
     send: laneSend(),
