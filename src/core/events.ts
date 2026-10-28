@@ -63,6 +63,22 @@ export function generateHits(gen1: EuclidGen, gen2: EuclidGen, steps: number): H
   return hits;
 }
 
+/** 1 when either Euclidean ring places this step. Probability and velocity stay out of it. */
+export function patternAt(gen1: EuclidGen, gen2: EuclidGen | null, steps: number, step: number): number {
+  const span = Math.max(1, Math.round(steps));
+  const at = ((Math.floor(step) % span) + span) % span;
+  for (const gen of gen2 ? [gen1, gen2] : [gen1]) {
+    const length = Math.max(0, Math.round(gen.length));
+    if (length <= 0) continue;
+    const count = Math.max(0, Math.min(length, Math.round(gen.hits)));
+    if (count <= 0) continue;
+    const local = ((at % length) + length) % length;
+    const pattern = rotatePattern(euclidPattern(count, length), gen.rotate);
+    if (pattern[local]) return 1;
+  }
+  return 0;
+}
+
 /**
  * Probability is the last gate: each ratchet and each repeat rolls on its own,
  * keyed by the source step. The velocity curve is read after count/rate,

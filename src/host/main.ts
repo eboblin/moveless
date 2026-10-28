@@ -1,16 +1,16 @@
-import { SAMPLE_RATE } from "../core/clock.ts";
+import { SAMPLE_RATE, SIXTEENTH_TICKS } from "../core/clock.ts";
 import { defaultProject } from "../core/defaults.ts";
 import { holdNote, latchStamp, releaseChannel, resetLatch, settleLatch } from "../core/latch.ts";
 import { advance, clampJournalPage, heardFx, journalPageCount, sameHeard, wanderCandidates } from "../core/performance.ts";
-import { generatePhrase } from "../core/phrase.ts";
+import { generatePhrase, lanePattern } from "../core/phrase.ts";
 import { loadStoredProject, saveStoredProject, type HostFiles, type StoredUi } from "../core/persist.ts";
 import { phraseLoop, soundMotions } from "../dsp/schedule.ts";
 import { formatFx } from "../dsp/fx.ts";
 import { assembleDeck, behaviorOf, formatDeckCommand, isDeckGroup } from "../core/deck.ts";
 import { formatBus, packPhraseBody, parseMeterPage } from "../dsp/voice.ts";
 import { midiMessage, reduce, settleTrackPeek, type Session } from "../ui/input.ts";
-import { CAPTURE_CC, DOWN_CC, MENU_CC, MUTE_CC, PLAY_CC, SAMPLE_CC, UP_CC } from "../core/types.ts";
-import { advancePulseClock, blinkHalfMs, directionLit, dropLed, faceButtonLed, ledColorAt, menuLed, modeButtonLed, offerLed, padLeds, padPackets, playLed, PULSE_CLOCK_IDLE, sceneShadeStep, stepLeds, takeLeds, trackLeds, type PulseClock } from "../ui/leds.ts";
+import { CAPTURE_CC, DOWN_CC, LANES, MENU_CC, MUTE_CC, PLAY_CC, SAMPLE_CC, UP_CC } from "../core/types.ts";
+import { advancePulseClock, blinkHalfMs, directionLit, dropLed, faceButtonLed, ledColorAt, menuLed, modeButtonLed, offerLed, padLeds, padPackets, playLed, PULSE_CLOCK_IDLE, sceneShadeStep, stepLampKey, stepLeds, takeLeds, trackLeds, type PulseClock } from "../ui/leds.ts";
 import { plotAmount, plotMinus } from "../ui/digits.ts";
 import {
   CHAR_W,
@@ -284,6 +284,7 @@ let paintDeckFrame = -1;
 let paintTitleKey = -1;
 let ledPhase = -1;
 let ledShade = -1;
+let ledLamps = "";
 let ledProject: Project | null = null;
 let ledUi: UiState | null = null;
 let ledPlaying = false;
@@ -354,13 +355,20 @@ function screenDelta(): "same" | "full" | "head" {
   return "full";
 }
 
-function ledsChanged(): boolean {
+function laneGates(): readonly number[] {
+  const step = session.playing ? Math.max(0, session.tick) / SIXTEENTH_TICKS : -1;
+  return LANES.map((lane) => (step < 0 ? 0 : lanePattern(session.project, lane, step)));
+}
+
+function ledsChanged(gates: readonly number[]): boolean {
   const phase = Math.floor(Date.now() / blinkHalfMs(session.project.global.tempo));
   const peek = peekKind(session.ui);
   const shade = sceneShadeStep(session.project, session.tick);
-  if (ledPhase === phase && ledShade === shade && ledProject === session.project && ledUi === session.ui && ledPlaying === session.playing && ledPeek === peek) return false;
+  const lamps = stepLampKey(session.ui.context, gates);
+  if (ledPhase === phase && ledShade === shade && ledLamps === lamps && ledProject === session.project && ledUi === session.ui && ledPlaying === session.playing && ledPeek === peek) return false;
   ledPhase = phase;
   ledShade = shade;
+  ledLamps = lamps;
   ledProject = session.project;
   ledUi = session.ui;
   ledPlaying = session.playing;
@@ -563,13 +571,13 @@ function arrowBrightness(): { up: number; down: number } {
   return directionLit(clampJournalPage(session.ui.journalPage, session.project.journal.length), count);
 }
 
-function paintLeds(): void {
+function paintLeds(levels?: readonly number[]): void {
   const host = globalThis as HostGlobals;
   if (!host.move_midi_internal_send) return;
   const now = Date.now();
   const tempo = session.project.global.tempo;
   const tick = session.tick;
-  stepLeds(session.project, session.ui.context).forEach((led, index) => {
+  stepLeds(session.project, session.ui.context, levels).forEach((led, index) => {
     const note = 16 + index;
     const packets = padPackets(note, led);
     const key = packets.map((packet) => packet.join(",")).join(";");
@@ -689,7 +697,8 @@ function paint(): void {
       else if (moved.kind === "moved") blitColumns(frame, moved.xs, moved.y0, moved.y1);
     }
   }
-  if (ledsChanged()) paintLeds();
+  const gates = laneGates();
+  if (ledsChanged(gates)) paintLeds(gates);
 }
 
 function advanceClock(): void {
@@ -759,6 +768,7 @@ export function init(): void {
   resetWaveform();
   ledPhase = -1;
   ledShade = -1;
+  ledLamps = "";
   deckFastLatched = false;
   mixerFastLatched = false;
   mixerMeterText = null;

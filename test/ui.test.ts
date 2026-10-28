@@ -8,9 +8,9 @@ import { modulated } from "../src/core/modulate.ts";
 import { applyMorph } from "../src/core/morph.ts";
 import { parseStored, serializeStored } from "../src/core/persist.ts";
 import { createSet, journalPadIds, journalPageCount, launchScene, record } from "../src/core/performance.ts";
-import { generatePhrase } from "../src/core/phrase.ts";
+import { generatePhrase, lanePattern } from "../src/core/phrase.ts";
 import { bindingFor, deckPage, lanePages, mixerPage, pageCount, pageGroup, pageGroupColor, pagesFor, scopeIncludesPage } from "../src/core/pages.ts";
-import { LED, advancePulseClock, blinkHalfMs, directionLit, dropLed, faceButtonLed, ledColorAt, menuLed, modeButtonLed, offColor, offerLed, padLeds, padPackets, PLAY_LED_ON, playLed, PULSE_CLOCK_IDLE, sceneShadeStep, shadeColor, stepLed, stepLeds, takeLeds, trackLeds } from "../src/ui/leds.ts";
+import { LED, advancePulseClock, blinkHalfMs, directionLit, dropLed, faceButtonLed, ledColorAt, menuLed, modeButtonLed, offColor, offerLed, padLeds, padPackets, PLAY_LED_ON, playLed, PULSE_CLOCK_IDLE, sceneShadeStep, shadeColor, stepLampKey, stepLed, stepLeds, takeLeds, trackLeds } from "../src/ui/leds.ts";
 import { DIGIT_H, displayAmount, fractionFromLabel, plotAmount } from "../src/ui/digits.ts";
 import { lettersWidth, plotLetters } from "../src/ui/letters.ts";
 import { CAPTION_GAP, CAPTION_LANE_Y, CAPTION_OUTLINE, CAPTION_PAGE_Y, CAPTION_SINGLE_Y, CHAR_W, DIGIT_Y, FONT_H, HEADER_H, HEIGHT, MIX_METER_BOTTOM, MIX_METER_TOP, MIX_METER_X, NAME_Y, PAGER_Y, PARAM_COL_W, PARAM_H, SEP_Y, TITLE_Y, VALUE_Y, VIZ_H, WIDTH, loadWidth, pageTitlePaintKey, pageTitleTravel, pixel, renderScreen, type Screen } from "../src/ui/screen.ts";
@@ -284,6 +284,10 @@ describe("pages and leds", () => {
     assert.equal(stepLeds(project, "fx")[7].blink, true);
     assert.equal(stepLeds(project, "kick")[7].family, "green");
     assert.equal(stepLeds(project, "kick")[7].blink, false);
+    assert.equal(stepLeds(project, "kick")[7].color, shadeColor(9, 0.5));
+    assert.equal(stepLeds(project, "kick")[15].family, "purple");
+    assert.equal(stepLeds(project, "kick")[15].blink, false);
+    assert.equal(stepLeds(project, "kick")[15].color, shadeColor(LED.purple, 0.5));
     assert.equal(stepLeds(project, "aux")[8].family, "off");
     assert.equal(stepLeds(project, "aux")[15].family, "purple");
     assert.equal(stepLeds(project, "aux")[15].blink, true);
@@ -321,6 +325,48 @@ describe("pages and leds", () => {
     assert.equal(stepLed(project, "kick", "bass").family, "off");
   });
 
+  it("rides lane buttons on the pattern gate instead of the slow pulse", () => {
+    const project = defaultProject();
+    const quiet = stepLed(project, "kick", "kick", 0);
+    assert.equal(quiet.blink, false);
+    assert.equal(quiet.color, shadeColor(1, 0.5));
+    const loud = stepLed(project, "kick", "kick", 1);
+    assert.equal(loud.blink, false);
+    assert.equal(loud.color, 1);
+    assert.equal(stepLed(project, "kick", "snare", 0).blink, false);
+    assert.equal(stepLed(project, "kick", "snare", 0).color, offColor(1));
+    assert.equal(stepLed(project, "kick", "snare", 1).color, shadeColor(1, 0.5));
+    assert.equal(stepLed(project, "bass", "bass", 0).blink, false);
+    assert.equal(stepLed(project, "bass", "bass", 0).color, shadeColor(LED.yellow, 0.5));
+    assert.equal(stepLed(project, "bass", "bass", 1).color, LED.yellow);
+    assert.equal(stepLed(project, "kick", "bass", 0).color, offColor(LED.yellow));
+    assert.equal(stepLed(project, "kick", "bass", 1).color, shadeColor(LED.yellow, 0.5));
+    project.mute.snare = true;
+    assert.equal(stepLed(project, "kick", "snare", 1).family, "off");
+    project.mute.kick = true;
+    assert.equal(stepLed(project, "kick", "kick", 0).color, shadeColor(1, 0.5));
+    assert.equal(stepLed(project, "kick", "kick", 0).blink, false);
+    project.lock.lead = true;
+    assert.equal(stepLed(project, "lead", "lead", 0).color, shadeColor(20, 0.5));
+    assert.equal(stepLed(project, "lead", "lead", 1).color, 20);
+    assert.equal(stepLed(project, "kick", "lead", 1).color, shadeColor(20, 0.5));
+    assert.equal(stepLed(project, "fx", "fx", 1).blink, true);
+    const gates = [1, 0, 0, 0, 0, 0, 1];
+    const row = stepLeds(defaultProject(), "kick", gates);
+    assert.equal(row[0].color, 1);
+    assert.equal(row[0].blink, false);
+    assert.equal(row[1].color, offColor(1));
+    assert.equal(row[6].color, shadeColor(LED.yellow, 0.5));
+    assert.equal(row[7].blink, false);
+    assert.equal(stepLampKey("kick", gates), "4111112");
+    assert.equal(stepLampKey("chords", [0, 0, 0, 0, 0, 0, 0]), "1111113");
+    project.working.kick.gen1.hits = 4;
+    project.working.kick.gen1.probability = 0;
+    project.working.kick.gen2.hits = 0;
+    assert.equal(lanePattern(project, "kick", 0), 1);
+    assert.equal(lanePattern(project, "kick", 1), 0);
+  });
+
   it("lights mixer pads in the track colour, and leaves a row dark until it is on", () => {
     const project = defaultProject();
     const face = () => padLeds(project, "journal", { face: "mixer" });
@@ -332,7 +378,7 @@ describe("pages and leds", () => {
       assert.equal(heard[16 + col].color, LED.off);
       assert.equal(heard[8 + col].color, LED.off);
     });
-    assert.equal(heard[31].color, stepLed(project, "kick", "fx").color);
+    assert.equal(heard[31].color, 9);
     assert.equal(heard[23].color, LED.off);
     assert.equal(heard[15].color, LED.off);
 

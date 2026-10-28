@@ -9,7 +9,7 @@ import {
   swungStepTick,
   tickToSample,
 } from "./clock.ts";
-import { euclidPattern, generateHits, keptVelocity, phraseStepsOf, rotatePattern } from "./events.ts";
+import { euclidPattern, generateHits, keptVelocity, patternAt, phraseStepsOf, rotatePattern } from "./events.ts";
 import { mixFieldValues } from "./fields.ts";
 import { hash01 } from "./hash.ts";
 import { applyFollowMidi, chordTonePitchClasses, degreeToMidi, generateHarmony, harmonyAt, pitchClassName, scaleOf } from "./harmony.ts";
@@ -424,6 +424,13 @@ function shapeParams(sound: Record<string, number>): { id: string; value: number
     params.push({ id: SHAPE_IDS[i] ?? "", value });
   }
   return params;
+}
+
+/** Pattern gate at this step, 0 or 1. The voice, its envelope, and probability do not count. */
+export function lanePattern(project: Project, lane: LaneId, step: number): number {
+  const box = project.working[lane];
+  const gen2 = "gen2" in box ? box.gen2 : null;
+  return patternAt(box.gen1, gen2, laneSteps(project.working, lane, project.global), step);
 }
 
 export function laneSteps(lanes: Lanes, lane: LaneId, global: GlobalSettings): number {

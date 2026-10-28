@@ -5,6 +5,7 @@ import {
   RANDOMIZE_SCOPES,
   isDrum,
   isLane,
+  isVoice,
   LANES,
   STEP_COUNT,
   contextAtStep,
@@ -38,6 +39,12 @@ const DIM_RED = 66;
 /** Dark navy partner of lock blue. The 1–26 table and red do not cover 125. */
 const DIM_LOCK = 104;
 
+/** Table red. Its dark step is {@link DIM_RED}; pure red 127 has no third step. */
+const LAMP_RED = 1;
+
+/** Table blue. Its dark step is {@link DIM_LOCK}; pure blue 125 has no third step. */
+const LAMP_LOCK = 20;
+
 /**
  * Near-black palette index. Channel 0 with velocity 0 clears the LED and
  * stops a pulse, so a blink cannot latch black itself.
@@ -67,27 +74,81 @@ export function laneFamily(lane: LaneId): "red" | "yellow" {
   return isDrum(lane) ? "red" : "yellow";
 }
 
-export function stepLed(project: Project, context: ContextId, lane: PatternId): Led {
+/**
+ * Brightness for a pattern gate of 0 or 1.
+ * The lane on screen is 50% at rest and full on a hit.
+ * An unmuted neighbour is 10% at rest and 30% on a hit.
+ */
+export function laneLampAmount(selected: boolean, gate: number): number {
+  const hit = gate >= 0.5;
+  if (selected) return hit ? 1 : 0.5;
+  return hit ? 0.3 : 0.1;
+}
+
+/** Band of {@link laneLampAmount}: 10%, 30%, 50%, then full. */
+export function stepLampKey(context: ContextId, gates: readonly number[]): string {
+  return gates.map((gate, index) => {
+    const amount = laneLampAmount(context === LANES[index], gate);
+    if (amount < 0.2) return "1";
+    if (amount < 0.4) return "2";
+    if (amount < 0.75) return "3";
+    return "4";
+  }).join("");
+}
+
+/** A lane lamp uses a 1–26 hue, so dark, dim and bright all exist. */
+function lampHue(family: LedFamily): number {
+  if (family === "red") return LAMP_RED;
+  if (family === "lock") return LAMP_LOCK;
+  return COLOR[family];
+}
+
+/**
+ * Three shades of a 1–26 colour.
+ * Below 20% is dark, below 75% is dim, and the rest is bright.
+ * An unselected lane therefore sits on dark and dim, and the lane on screen on dim and bright.
+ */
+function lampColor(color: number, amount: number): number {
+  if (amount <= 0) return LED.off;
+  if (color < 1 || color > 26) return amount >= 0.75 ? color : LED.off;
+  if (amount < 0.2) return offColor(color);
+  if (amount < 0.75) return 63 + 2 * color;
+  return color;
+}
+
+export function stepLed(project: Project, context: ContextId, lane: PatternId, gate?: number): Led {
   const current = context === lane;
   const family = project.lock[lane] ? "lock" : lane === "fx" ? "green" : laneFamily(lane);
-  // The selected step blinks in every mute, solo and lock state, so the lane you are on stays visible.
+  // A pattern hit replaces the slow hardware pulse. Mute hides a neighbour; the lane on screen stays lit.
+  if (gate !== undefined && lane !== "fx") {
+    if (!current && project.mute[lane]) return led("off", false);
+    const color = lampColor(lampHue(family), laneLampAmount(current, gate));
+    if (color === LED.off) return led("off", false);
+    return { family, color, blink: false };
+  }
   if (current) return led(family, true);
-  if (lane === "fx") return led(project.mute.fx ? "off" : family, false);
+  if (lane === "fx") {
+    if (project.mute.fx || family !== "green") return led(project.mute.fx ? "off" : family, false);
+    return { family, color: lampColor(COLOR.green, 0.5), blink: false };
+  }
   if (!laneHeard(project, lane)) return led("off", false);
   return led(family, false);
 }
 
 export function auxLed(current: boolean): Led {
-  return led("purple", current);
+  if (current) return led("purple", true);
+  return { family: "purple", color: lampColor(LED.purple, 0.5), blink: false };
 }
 
-export function stepLeds(project: Project, context: ContextId): Led[] {
+export function stepLeds(project: Project, context: ContextId, levels?: readonly number[]): Led[] {
   const out: Led[] = [];
   for (let index = 0; index < STEP_COUNT; index++) {
     const id = contextAtStep(index);
     if (!id) out.push(led("off", false));
-    else if (isLane(id)) out.push(stepLed(project, context, id));
-    else out.push(auxLed(context === id));
+    else if (isLane(id)) {
+      const level = levels && isVoice(id) ? levels[LANES.indexOf(id)] ?? 0 : undefined;
+      out.push(stepLed(project, context, id, level));
+    } else out.push(auxLed(context === id));
   }
   return out;
 }
