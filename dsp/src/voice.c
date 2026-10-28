@@ -154,6 +154,8 @@ typedef struct {
     float pump_env, glue_gain, tilt_l, tilt_r;
     Plate plate;
     Echo echo;
+    /* Delay throw. Knobs stay latched after the pad so the tail keeps its time. */
+    Echo throw_echo;
     char block[TEXT_CAP];
     int has_block;
     char *phrase_text;
@@ -1769,6 +1771,28 @@ static float sized_delay(float base, float scale) {
     return base * paper_scale() * scale;
 }
 
+/* Matches THROW_DELAY in src/core/deck.ts. Rows are SOFT, EVEN, TAIL, HOT. */
+static void throw_preset(Echo *e, int row) {
+    static const float table[4][8] = {
+        { 0.2f, 0.25f, 0.28f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f },
+        { 0.6f, 0.5f, 0.5f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f },
+        { 0.8f, 0.78f, 0.22f, 0.0f, 0.0f, 0.0f, 0.15f, 1.0f },
+        { 0.4f, 0.55f, 0.78f, 0.0f, 1.0f, 0.7f, 0.0f, 1.0f },
+    };
+    const float *p;
+    if (row < 0) row = 0;
+    if (row > 3) row = 3;
+    p = table[row];
+    e->time = p[0];
+    e->feed = p[1];
+    e->tone = p[2];
+    e->duck = p[3];
+    e->ping = p[4];
+    e->taps = p[5];
+    e->wow = p[6];
+    e->level = p[7];
+}
+
 static int fx_init(Engine *engine) {
     Plate *p = &engine->plate;
     Echo *e = &engine->echo;
@@ -1793,6 +1817,9 @@ static int fx_init(Engine *engine) {
     ok = line_make(&p->shimLine, 2048 + 8) && ok;
     ok = line_make(&e->l, (int)ceilf(SR * 2.0f) + 8) && ok;
     ok = line_make(&e->r, (int)ceilf(SR * 2.0f) + 8) && ok;
+    ok = line_make(&engine->throw_echo.l, (int)ceilf(SR * 2.0f) + 8) && ok;
+    ok = line_make(&engine->throw_echo.r, (int)ceilf(SR * 2.0f) + 8) && ok;
+    throw_preset(&engine->throw_echo, 0);
     p->size = 0.42f;
     p->decay = 0.42f;
     p->air = 0.5f;
@@ -1866,6 +1893,8 @@ static void fx_free(Engine *engine) {
     line_free(&p->shimLine);
     line_free(&engine->echo.l);
     line_free(&engine->echo.r);
+    line_free(&engine->throw_echo.l);
+    line_free(&engine->throw_echo.r);
 }
 
 static void pan_gains(float pos, float *gl, float *gr) {
@@ -2010,6 +2039,17 @@ static void apply_bus(Engine *engine, const char *text) {
     engine->tilt = t;
 }
 
+static void echo_clear(Echo *e) {
+    line_clear(&e->l);
+    line_clear(&e->r);
+    e->lpL = 0;
+    e->lpR = 0;
+    e->phase = 0;
+    e->hold = 0;
+    e->follow = 0;
+    e->quiet = 0;
+}
+
 static void fx_clear(Engine *engine) {
     Plate *p = &engine->plate;
     line_clear(&p->preL);
@@ -2040,14 +2080,8 @@ static void fx_clear(Engine *engine) {
     p->shimPhase = 0;
     p->shimLp = 0;
     p->quiet = 0;
-    line_clear(&engine->echo.l);
-    line_clear(&engine->echo.r);
-    engine->echo.lpL = 0;
-    engine->echo.lpR = 0;
-    engine->echo.phase = 0;
-    engine->echo.hold = 0;
-    engine->echo.follow = 0;
-    engine->echo.quiet = 0;
+    echo_clear(&engine->echo);
+    echo_clear(&engine->throw_echo);
     bus_clear(engine);
 }
 
@@ -2289,8 +2323,7 @@ static float follow_delay(float current, float target) {
     return target;
 }
 
-static void echo_sample(Engine *engine, float inL, float inR, float *outL, float *outR) {
-    Echo *e = &engine->echo;
+static void echo_sample(Engine *engine, Echo *e, float inL, float inR, float *outL, float *outR) {
     float energy = fabsf(inL) + fabsf(inR);
     float bar, clock, seconds, base, wow, driftL, driftR, rate, depth, step;
     float timeL, timeR, delL, delR, bounce, mono, srcL, srcR, fbL, fbR, feed;
@@ -3227,13 +3260,17 @@ static DeckRead deck_read(Engine *engine) {
     return wet;
 }
 
+/* Send into the throw line. Depth scales the return, not this send. */
 static float deck_throw(Engine *engine) {
     if (engine->deck_gesture < 0) return 0.0f;
-    DeckRead read = deck_read(engine);
-    float depth = engine->deck_k[2];
-    if (depth < 0.0f) depth = 0.0f;
-    if (depth > 1.0f) depth = 1.0f;
-    return read.throw_amt * depth;
+    return deck_read(engine).throw_amt;
+}
+
+/* thrw is the legacy name and uses EVEN. Group thr is 16 + 7 * 4 + row. */
+static int throw_row(int gesture) {
+    if (gesture == 15) return 1;
+    if (gesture >= 44 && gesture <= 47) return gesture - 44;
+    return -1;
 }
 
 static void deck_peak_note(Engine *engine, int now, float left, float right) {
@@ -3561,16 +3598,24 @@ static void render(Engine *engine, int16_t *out, int frames) {
             dlyL += nl * engine->notes[n].delay;
             dlyR += nr * engine->notes[n].delay;
         }
-        float wetL = 0, wetR = 0, delL = 0, delR = 0;
-        if (engine->phrase_on && engine->deck_gesture >= 0) {
-            float thrown = deck_throw(engine);
-            dlyL += left * thrown;
-            dlyR += right * thrown;
+        float wetL = 0, wetR = 0, delL = 0, delR = 0, thrL = 0, thrR = 0;
+        {
+            int row = throw_row(engine->deck_gesture);
+            float send = 0.0f;
+            float depth = engine->deck_k[2];
+            if (row >= 0) throw_preset(&engine->throw_echo, row);
+            if (engine->deck_warm) send = deck_throw(engine);
+            echo_sample(engine, &engine->throw_echo, left * send, right * send, &thrL, &thrR);
+            if (!engine->deck_warm) depth = 0.0f;
+            if (depth < 0.0f) depth = 0.0f;
+            if (depth > 1.0f) depth = 1.0f;
+            thrL *= depth;
+            thrR *= depth;
         }
         plate_sample(engine, revL, revR, &wetL, &wetR);
-        echo_sample(engine, dlyL, dlyR, &delL, &delR);
-        float l = left + wetL + delL;
-        float r = right + wetR + delR;
+        echo_sample(engine, &engine->echo, dlyL, dlyR, &delL, &delR);
+        float l = left + wetL + delL + thrL;
+        float r = right + wetR + delR + thrR;
         tilt_mix(engine, &l, &r);
         glue_mix(engine, &l, &r);
         if (engine->phrase_on) deck_hear(engine, &l, &r);

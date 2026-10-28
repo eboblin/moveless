@@ -1,5 +1,5 @@
 import { clamp01, SAMPLE_RATE, SIXTEENTH_TICKS, tickToSample } from "../core/clock.ts";
-import { formatDeckCommand, type DeckCommand } from "../core/deck.ts";
+import { formatDeckCommand, THROW_DELAY, throwPreset, type DeckCommand, type ThrowDelay } from "../core/deck.ts";
 import { defaultBus, defaultFx } from "../core/defaults.ts";
 import { applyVoiceEnvelope, evalModulated, voiceLane } from "../core/modulate.ts";
 import { isDrum, LANES, type Bus, type Fx, type LaneId } from "../core/types.ts";
@@ -96,6 +96,9 @@ export interface Engine {
   tone: DeckToneState;
   tank: Tank;
   echo: Echo;
+  /** Delay throw. Its knobs stay latched after the pad so the tail does not jump. */
+  throwEcho: Echo;
+  throwKnobs: ThrowDelay;
   /** Pitched-note timing of the phrase last loaded. Same grid must not re-attack. */
   holdSig: string;
   lanes: LaneBox[];
@@ -285,6 +288,8 @@ export function createEngine(): Engine {
     tone: emptyTone(),
     tank: createTank(),
     echo: createEcho(),
+    throwEcho: createEcho(),
+    throwKnobs: THROW_DELAY[0],
     holdSig: "",
     lanes: emptyLanes(),
     deck: createDeckRuntime(),
@@ -319,6 +324,7 @@ export function loadPhrase(engine: Engine, events: LoopEvent[], tempo: number, r
     engine.deck.up = null;
     clearTank(engine.tank);
     clearEcho(engine.echo);
+    clearEcho(engine.throwEcho);
     clearBusState(engine);
     return;
   }
@@ -419,6 +425,7 @@ export function placeClock(engine: Engine, sample: number): void {
   engine.clock = at - 1;
   clearTank(engine.tank);
   clearEcho(engine.echo);
+  clearEcho(engine.throwEcho);
   clearBusState(engine);
 }
 
@@ -487,14 +494,23 @@ function renderFrames(engine: Engine, frames: number, at: (frame: number) => voi
       dlyL += pair[0] * note.delay;
       dlyR += pair[1] * note.delay;
     }
-    const thrown = ahead ? 0 : deckThrow(engine.deck, engine.clock, engine.tempo);
-    if (thrown > 0) {
-      dlyL += left * thrown;
-      dlyR += right * thrown;
+    let throwL = 0;
+    let throwR = 0;
+    if (!ahead) {
+      const preset = throwPreset(engine.deck.gesture);
+      if (preset) engine.throwKnobs = preset;
+      const open = engine.deck.warm;
+      const send = open ? deckThrow(engine.deck, engine.clock, engine.tempo) : 0;
+      const wetT = echoSample(engine.throwEcho, engine.throwKnobs, engine.beats, engine.tempo, left * send, right * send);
+      if (open) {
+        const depth = clamp01(engine.deck.knobs.depth);
+        throwL = wetT[0] * depth;
+        throwR = wetT[1] * depth;
+      }
     }
     const wetR = tankSample(engine.tank, engine.fx.reverb, revL, revR);
     const wetD = echoSample(engine.echo, engine.fx.delay, engine.beats, engine.tempo, dlyL, dlyR);
-    const mixed = glueMix(engine, tiltMix(engine, left + wetR[0] + wetD[0], right + wetR[1] + wetD[1]));
+    const mixed = glueMix(engine, tiltMix(engine, left + wetR[0] + wetD[0] + throwL, right + wetR[1] + wetD[1] + throwR));
     const heard = ahead ? mixed : hearDeck(engine.deck, engine.clock, engine.tempo, mixed[0], mixed[1]);
     const colored = ahead ? heard : applyDeckTone(engine, heard[0], heard[1]);
     out[i * 2] = ahead ? colored[0] : soft(colored[0]);

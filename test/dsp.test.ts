@@ -259,7 +259,7 @@ describe("dsp adapter", () => {
     assert.ok(jump.at < jump.before * 4, `time jump stepped ${jump.at} against ${jump.before}`);
   });
 
-  it("throws the dry master into the delay and keeps a long repeat", () => {
+  it("throws into its own line when the main delay is off", () => {
     const tempo = 120;
     const kick = {
       sample: 0,
@@ -270,41 +270,57 @@ describe("dsp adapter", () => {
       lengthTicks: SIXTEENTH_TICKS,
       params: mapKick({ pitch: 0.4, decay: 0.4, bend: 0.4, bendTime: 0.3, body: 0.2, click: 0.4, noise: 0.1, dist: 0.1 }),
     };
-    const play = (time: number, thr: boolean) => {
+    const play = (row: "thr0" | "thr2" | null, depth = 1, releaseAt = -1) => {
       const engine = createEngine();
-      engine.fx.delay = { ...engine.fx.delay, time, feed: 0, tone: 0.5, duck: 0, ping: 0, taps: 0, wow: 0, level: 1 };
+      engine.fx.delay = { ...engine.fx.delay, level: 0 };
       loadPhrase(engine, [kick], tempo, true);
-      if (thr) {
-        applyDeckCommand(engine, {
-          gesture: "thr0",
-          press: 1,
-          knobs: assembleDeck(defaultDeck(), "thr", 4),
-          warm: true,
-          seed: 1,
-          barBeats: 4,
-        });
+      const knobs = assembleDeck(defaultDeck(), "thr", 4);
+      knobs.depth = depth;
+      if (row) {
+        applyDeckCommand(engine, { gesture: row, press: 1, knobs, warm: true, seed: 1, barBeats: 4 });
       }
-      const frames = Math.round(SAMPLE_RATE * (time >= 1 ? 2.15 : 0.4));
+      const frames = Math.round(SAMPLE_RATE * 1.25);
       const out = new Float32Array(frames * 2);
       let at = 0;
+      let released = false;
       while (at < frames) {
+        if (row && releaseAt >= 0 && !released && at >= releaseAt) {
+          applyDeckCommand(engine, { gesture: null, press: 0, knobs, warm: true, seed: 1, barBeats: 4 });
+          released = true;
+        }
         const block = renderClock(engine, Math.min(128, frames - at));
         out.set(block, at * 2);
         at += block.length / 2;
       }
       return out;
     };
-    const echoOf = (time: number) => Math.round((time >= 1 ? 2 : 0.25) * SAMPLE_RATE);
-    for (const time of [0.4, 1]) {
-      const dry = play(time, false);
-      const thrown = play(time, true);
-      const at = echoOf(time);
-      let extra = 0;
-      for (let i = at - 100; i < at + 2500 && i < dry.length / 2; i++) {
-        extra += (thrown[i * 2] - dry[i * 2]) ** 2 + (thrown[i * 2 + 1] - dry[i * 2 + 1]) ** 2;
+    const apart = (a: Float32Array, b: Float32Array, from: number, to: number) => {
+      let sum = 0;
+      const end = Math.min(to, a.length / 2, b.length / 2);
+      for (let i = Math.max(0, from); i < end; i++) {
+        sum += (a[i * 2] - b[i * 2]) ** 2 + (a[i * 2 + 1] - b[i * 2 + 1]) ** 2;
       }
-      assert.ok(extra > 1, `throw at time ${time} added ${extra}`);
-    }
+      return sum;
+    };
+    const dry = play(null);
+    const soft = play("thr0");
+    const tail = play("thr2");
+    const muted = play("thr0", 0);
+    const early = Math.round(0.125 * SAMPLE_RATE);
+    const late = SAMPLE_RATE;
+    const softEarly = apart(soft, dry, early - 200, early + 4000);
+    const tailEarly = apart(tail, dry, early - 200, early + 4000);
+    const softLate = apart(soft, dry, late - 200, late + 5000);
+    const tailLate = apart(tail, dry, late - 200, late + 5000);
+    assert.ok(softEarly > 1, `soft slap ${softEarly}`);
+    assert.ok(softEarly > tailEarly * 8, `soft ${softEarly} against tail ${tailEarly}`);
+    assert.ok(tailLate > 1, `tail repeat ${tailLate}`);
+    assert.ok(tailLate > softLate * 4, `tail ${tailLate} against soft ${softLate}`);
+    assert.ok(apart(muted, dry, 0, dry.length / 2) < 1e-8, "depth 0 still threw");
+    const held = Math.round(0.2 * SAMPLE_RATE);
+    const after = play("thr2", 1, held);
+    const ring = apart(after, dry, late - 200, late + 5000);
+    assert.ok(ring > 1, `tail after release ${ring}`);
   });
 
   it("sits the first repeat back and lets the tail return", () => {

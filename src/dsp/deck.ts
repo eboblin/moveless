@@ -126,9 +126,10 @@ function momentAt(deck: DeckRuntime, now: number, tempo: number): DeckMoment {
   };
 }
 
+/** Send into the throw line. Depth scales the return in the voice, not this send. */
 export function deckThrow(deck: DeckRuntime, now: number, tempo: number): number {
   if (deck.bypass || !deck.gesture) return 0;
-  return deckRead(momentAt(deck, now, tempo)).throw * Math.max(0, Math.min(1, deck.knobs.depth));
+  return Math.max(0, deckRead(momentAt(deck, now, tempo)).throw);
 }
 
 /** Hear the platter. `left`/`right` are the master just rendered, before the soft clip. */

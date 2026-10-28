@@ -230,6 +230,38 @@ const ROW_WORD: Record<DeckGroup, readonly string[]> = {
   thr: ["SOFT", "EVEN", "TAIL", "HOT"],
 };
 
+/**
+ * Throw line, one preset per row: SOFT, EVEN, TAIL, HOT.
+ * Time is the delay clock. In 4/4, 0.2 is a sixteenth, 0.4 an eighth,
+ * 0.6 a quarter and 0.8 a half. Level stays open. Depth is the return.
+ */
+export interface ThrowDelay {
+  time: number;
+  feed: number;
+  tone: number;
+  duck: number;
+  ping: number;
+  taps: number;
+  wow: number;
+  level: number;
+}
+
+export const THROW_DELAY: readonly [ThrowDelay, ThrowDelay, ThrowDelay, ThrowDelay] = [
+  { time: 0.2, feed: 0.25, tone: 0.28, duck: 0, ping: 0, taps: 0, wow: 0, level: 1 },
+  { time: 0.6, feed: 0.5, tone: 0.5, duck: 0, ping: 0, taps: 0, wow: 0, level: 1 },
+  { time: 0.8, feed: 0.78, tone: 0.22, duck: 0, ping: 0, taps: 0, wow: 0.15, level: 1 },
+  { time: 0.4, feed: 0.55, tone: 0.78, duck: 0, ping: 1, taps: 0.7, wow: 0, level: 1 },
+];
+
+/** Preset while a throw pad is down. The legacy `thrw` name uses EVEN. */
+export function throwPreset(gesture: DeckGesture | null): ThrowDelay | null {
+  if (gesture === "thrw") return THROW_DELAY[1];
+  if (!gesture) return null;
+  const grouped = parseGroupGesture(gesture);
+  if (!grouped || grouped.group !== "thr") return null;
+  return THROW_DELAY[grouped.y] ?? null;
+}
+
 /** Tape speed of the pitch column. Middle step is ×1. */
 export const RATE_LABEL = ["1/2", "3/4", "x1", "3/2", "x2", "x4"] as const;
 
