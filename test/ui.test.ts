@@ -469,6 +469,7 @@ describe("pages and leds", () => {
   });
 
   it("lights saved scene pads; active and morph target share beat blink, target shades", () => {
+    // The first brick lands bottom-left, so an empty journal marks that pad as the working scene.
     const empty = padLeds(defaultProject(), "journal");
     assert.equal(empty.length, 32);
     assert.equal(empty[0].color, 8);
@@ -480,35 +481,37 @@ describe("pages and leds", () => {
     let project = record(defaultProject());
     project = record(project);
     assert.equal(project.activeSceneId, "002");
+    // 001 on the bottom-left pad, 002 to its right.
     const journal = padLeds(project, "journal");
-    assert.notEqual(journal[0].color, 0);
     assert.notEqual(journal[1].color, 0);
-    assert.notEqual(journal[0].color, journal[1].color);
-    assert.equal(journal[0].blink, true);
-    assert.equal(journal[1].blink, false);
-    assert.equal(journal[0].blinkTo, LED.white);
-    assert.equal(ledColorAt(journal[0], 0, 120), journal[0].color);
-    assert.equal(ledColorAt(journal[0], blinkHalfMs(120), 120), LED.white);
+    assert.notEqual(journal[0].color, 0);
+    assert.notEqual(journal[1].color, journal[0].color);
+    assert.equal(journal[1].blink, true);
+    assert.equal(journal[0].blink, false);
+    assert.equal(journal[1].blinkTo, LED.white);
+    assert.equal(ledColorAt(journal[1], 0, 120), journal[1].color);
+    assert.equal(ledColorAt(journal[1], blinkHalfMs(120), 120), LED.white);
     assert.equal(empty[0].blinkTo, LED.white);
     assert.equal(journal[2].color, 0);
-    const targetColor = journal[1].color;
+    assert.equal(journal[8].color, 0);
+    const targetColor = journal[0].color;
     project = { ...project, transition: "fast" };
     project = launchScene(project, "001", 0);
     const start = padLeds(project, "journal", undefined, 0);
-    assert.equal(start[1].blink, true);
-    assert.equal(start[1].color, shadeColor(targetColor, 1 / 6));
     assert.equal(start[0].blink, true);
-    assert.equal(start[0].blinkTo, LED.white);
-    assert.equal(start[1].blinkTo, undefined);
+    assert.equal(start[0].color, shadeColor(targetColor, 1 / 6));
+    assert.equal(start[1].blink, true);
+    assert.equal(start[1].blinkTo, LED.white);
+    assert.equal(start[0].blinkTo, undefined);
     const halfTick = (project.morph?.originTick ?? 0) + (project.morph?.durationTicks ?? 0) / 2;
     const mid = padLeds(project, "journal", undefined, halfTick);
-    assert.equal(mid[1].color, shadeColor(targetColor, 0.5));
-    assert.equal(mid[1].blink, true);
+    assert.equal(mid[0].color, shadeColor(targetColor, 0.5));
     assert.equal(mid[0].blink, true);
+    assert.equal(mid[1].blink, true);
     const endTick = (project.morph?.originTick ?? 0) + (project.morph?.durationTicks ?? 0);
     const end = padLeds(project, "journal", undefined, endTick);
-    assert.equal(end[1].color, targetColor);
-    assert.equal(end[1].blink, true);
+    assert.equal(end[0].color, targetColor);
+    assert.equal(end[0].blink, true);
     assert.equal(shadeColor(3, 0), 0);
     assert.equal(shadeColor(3, 0.2), 70);
     assert.equal(shadeColor(3, 0.5), 69);
@@ -518,7 +521,7 @@ describe("pages and leds", () => {
     assert.equal(sceneShadeStep({ ...project, morph: null }, halfTick), 0);
     project = { ...project, sets: [{ id: "set-1", name: "A", sceneIds: ["002"] }], activeSetId: "set-1", morph: null };
     const bank = padLeds(project, "set");
-    assert.equal(bank[0].color, journal[0].color);
+    assert.equal(bank[0].color, journal[1].color);
     assert.equal(bank[0].blink, true);
     assert.equal(bank[1].color, 0);
     const wheel = padLeds(project, "journal", { ...defaultUi(), wheelTouch: true });
@@ -612,6 +615,7 @@ describe("pages and leds", () => {
     assert.equal(capture[4].color, offColor(LED.purple));
     assert.equal(capture[5].color, LED.purple);
     assert.equal(capture[6].color, offColor(LED.purple));
+    // Sample lifts the scene rows up one; the working pad moves from the bottom-left to the row above.
     assert.deepEqual(capture[8], padLeds(project, "journal")[0]);
     assert.equal(capture[24].color, 0);
     assert.equal(wheel[0].blink, false);
@@ -2777,25 +2781,25 @@ describe("surface", () => {
     project = record(project);
     let current: Session = { project, ui: defaultUi(), tick: 0, playing: false };
     current = reduce(current, { kind: "cc", data1: 60, data2: 127 });
-    current = reduce(current, { kind: "note", data1: 68, data2: 127 });
     current = reduce(current, { kind: "note", data1: 69, data2: 127 });
-    const marked = padLeds(current.project, "journal", current.ui)[0];
+    current = reduce(current, { kind: "note", data1: 68, data2: 127 });
+    const marked = padLeds(current.project, "journal", current.ui)[1];
     assert.equal(marked.color, 126);
     assert.equal(marked.blink, true);
     assert.equal(marked.blinkTo, current.project.journal[1].color);
     current = reduce(current, { kind: "cc", data1: 60, data2: 0 });
     assert.deepEqual(current.project.clipboardSceneIds, ["002", "001"]);
-    assert.equal(padLeds(current.project, "journal", current.ui)[0].color, current.project.journal[1].color);
+    assert.equal(padLeds(current.project, "journal", current.ui)[1].color, current.project.journal[1].color);
     current = { ...current, ui: openSetMode(current.ui) };
     current = reduce(current, { kind: "cc", data1: 60, data2: 127 });
     current = reduce(current, { kind: "cc", data1: 60, data2: 0 });
     assert.deepEqual(current.project.sets[0].sceneIds, ["002", "001"]);
     assert.deepEqual(current.project.sets.at(-1)?.sceneIds, []);
     assert.deepEqual(current.project.clipboardSceneIds, []);
-    assert.equal(padLeds(current.project, "set", current.ui)[0].color, current.project.journal[0].color);
+    assert.equal(padLeds(current.project, "set", current.ui)[1].color, current.project.journal[0].color);
     current = { ...current, ui: { ...current.ui, mode: "journal" } };
     current = reduce(current, { kind: "cc", data1: 60, data2: 127 });
-    current = reduce(current, { kind: "note", data1: 68, data2: 127 });
+    current = reduce(current, { kind: "note", data1: 69, data2: 127 });
     current = reduce({ ...current, tick: HOLD_TICKS }, { kind: "cc", data1: 60, data2: 0 });
     assert.deepEqual(current.project.clipboardSceneIds, ["002"]);
     current = reduce(current, { kind: "cc", data1: 60, data2: 127 });
@@ -2819,16 +2823,22 @@ describe("surface", () => {
     let project = defaultProject();
     for (let n = 0; n < 33; n++) project = record(project);
     state = { project, ui: defaultUi(), tick: 0, playing: false };
-    assert.equal(directionLit(0, journalPageCount(project.journal.length)).up, PLAY_LED_ON);
-    assert.equal(directionLit(0, journalPageCount(project.journal.length)).down, 0);
-    state = reduce(state, { kind: "cc", data1: 54, data2: 127 });
-    assert.equal(state.ui.journalPage, 0);
-    assert.equal(journalPadIds(state.project, 0)[0], "033");
+    // Page 0 is the newest: only Minus (older) lights. Plus on the newest page does nothing.
+    const pages = journalPageCount(project.journal.length);
+    assert.equal(directionLit(pages - 1 - 0, pages).down, PLAY_LED_ON);
+    assert.equal(directionLit(pages - 1 - 0, pages).up, 0);
     state = reduce(state, { kind: "cc", data1: 55, data2: 127 });
+    assert.equal(state.ui.journalPage, 0);
+    assert.equal(journalPadIds(state.project, 0)[24], "033");
+    state = reduce(state, { kind: "cc", data1: 54, data2: 127 });
     assert.equal(state.ui.journalPage, 1);
     assert.equal(journalPadIds(state.project, state.ui.journalPage)[0], "001");
-    assert.equal(directionLit(1, journalPageCount(33)).down, PLAY_LED_ON);
-    assert.equal(directionLit(1, journalPageCount(33)).up, 0);
+    assert.equal(directionLit(pages - 1 - 1, pages).up, PLAY_LED_ON);
+    assert.equal(directionLit(pages - 1 - 1, pages).down, 0);
+    state = reduce(state, { kind: "cc", data1: 54, data2: 127 });
+    assert.equal(state.ui.journalPage, 1);
+    state = reduce(state, { kind: "cc", data1: 55, data2: 127 });
+    assert.equal(state.ui.journalPage, 0);
   });
 
   it("restores a lane to factory defaults with Delete and its step", () => {
@@ -2982,7 +2992,7 @@ describe("surface", () => {
     state = { project, ui: defaultUi(), tick: 0, playing: false };
     assert.equal(menuLed(state.ui.mode), PLAY_LED_ON);
     assert.equal(renderScreen(state.project, state.ui, 0).header.includes("JRN"), false);
-    state = reduce(state, { kind: "note", data1: 69, data2: 127 });
+    state = reduce(state, { kind: "note", data1: 68, data2: 127 });
     assert.equal(state.project.morph?.targetId, "001");
     state = reduce(state, { kind: "cc", data1: 50, data2: 127 });
     assert.equal(state.ui.mode, "set");
@@ -3026,12 +3036,12 @@ describe("surface", () => {
     project = { ...project, sets: [{ id: "set-1", name: "A", sceneIds: ["001", "002"] }], activeSetId: "set-1" };
     let state: Session = { project, ui: { ...defaultUi(), mode: "set" }, tick: 0, playing: false };
     state = reduce(state, { kind: "cc", data1: 119, data2: 127 });
-    state = reduce(state, { kind: "note", data1: 68, data2: 127 });
+    state = reduce(state, { kind: "note", data1: 69, data2: 127 });
     assert.deepEqual(state.project.sets[0].sceneIds, ["001"]);
     assert.equal(state.project.journal.length, 2);
 
     state = { ...state, ui: { ...state.ui, mode: "journal", deleteHeld: true } };
-    state = reduce(state, { kind: "note", data1: 69, data2: 127 });
+    state = reduce(state, { kind: "note", data1: 68, data2: 127 });
     assert.equal(state.project.journal.length, 1);
     assert.equal(state.project.journal[0].id, "002");
     assert.deepEqual(state.project.sets[0].sceneIds, []);

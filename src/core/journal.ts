@@ -55,21 +55,41 @@ function emptyPads(): (string | null)[] {
   return Array.from({ length: SET_CAPACITY }, () => null);
 }
 
+/** Pads in a row, and rows on the surface. */
+export const PAD_ROW = 8;
+export const PAD_ROWS = SET_CAPACITY / PAD_ROW;
+
 /**
- * Newest id on pad 0, the bottom-left. Each older id sits one pad further:
- * right along the row, then up to the next row.
+ * Bricks. Row r holds ids 8r..8r+7, oldest at the left. The first brick is the
+ * bottom-left pad; rows stack upward from there. Row `bottom` lies on the
+ * bottom pads and the three rows after it fill the pads above.
  */
-function placeNewestFirst(ids: readonly string[]): (string | null)[] {
+function placeRows(ids: readonly string[], bottom: number): (string | null)[] {
   const slots = emptyPads();
-  for (let index = 0; index < ids.length && index < slots.length; index++) {
-    slots[index] = ids[ids.length - 1 - index];
+  for (let line = 0; line < PAD_ROWS; line++) {
+    const row = bottom + line;
+    for (let col = 0; col < PAD_ROW; col++) slots[line * PAD_ROW + col] = ids[row * PAD_ROW + col] ?? null;
   }
   return slots;
 }
 
-/** Page 0 is the newest window of 32. Higher pages are older. */
+/** The row the next scene lands on. A full row opens a new, empty one. */
+export function openRow(count: number): number {
+  return Math.floor(count / PAD_ROW);
+}
+
+/**
+ * Bottom row of page 0. While the journal is under four rows, row 0 sits on
+ * the bottom pads. After that the window slides up so the open row is always
+ * the top row on screen.
+ */
+function newestBottomRow(count: number): number {
+  return Math.max(0, openRow(count) - (PAD_ROWS - 1));
+}
+
+/** Page 0 shows the open row. Each higher page is four rows older; the oldest page is pinned to row 0. */
 export function journalPageCount(sceneCount: number): number {
-  return Math.max(1, Math.ceil(sceneCount / SET_CAPACITY));
+  return Math.ceil(newestBottomRow(sceneCount) / PAD_ROWS) + 1;
 }
 
 export function clampJournalPage(page: number, sceneCount: number): number {
@@ -78,14 +98,14 @@ export function clampJournalPage(page: number, sceneCount: number): number {
 
 export function journalPadIds(project: Project, page = 0): (string | null)[] {
   const clamped = clampJournalPage(page, project.journal.length);
-  const end = project.journal.length - clamped * SET_CAPACITY;
-  const start = Math.max(0, end - SET_CAPACITY);
-  return placeNewestFirst(project.journal.slice(start, end).map((scene) => scene.id));
+  const bottom = Math.max(0, newestBottomRow(project.journal.length) - clamped * PAD_ROWS);
+  return placeRows(project.journal.map((scene) => scene.id), bottom);
 }
 
+/** A set never outgrows the surface, so its row 0 is always on the bottom pads. */
 export function setPadIds(project: Project): (string | null)[] {
   const active = project.sets.find((set) => set.id === project.activeSetId);
-  return placeNewestFirst((active?.sceneIds ?? []).slice(0, SET_CAPACITY));
+  return placeRows((active?.sceneIds ?? []).slice(0, SET_CAPACITY), 0);
 }
 
 /** Wander reads the active set when it has scenes, and the journal otherwise. */

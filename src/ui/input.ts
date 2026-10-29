@@ -655,14 +655,17 @@ function rerollLane(project: Project, lane: PatternId, page: number): Project {
   return randomizeLane(project, lane, group);
 }
 
-/** Plus moves toward older journal pages and the next set. Minus moves back. Delete and minus drops the set. */
+/**
+ * Plus moves toward the newer end: up the journal wall to page 0, and on to the next set.
+ * Minus moves toward older pages and the previous set. Delete and minus drops the set.
+ */
 function onArrow(session: Session, direction: -1 | 1): Session {
   if (session.ui.mode === "set") {
     if (direction < 0 && session.ui.deleteHeld) return deleteActiveSet(session);
     return { ...session, project: cycleSet(session.project, direction) };
   }
   const count = journalPageCount(session.project.journal.length);
-  const page = Math.max(0, Math.min(count - 1, session.ui.journalPage + direction));
+  const page = Math.max(0, Math.min(count - 1, session.ui.journalPage - direction));
   return { ...session, ui: { ...session.ui, journalPage: page } };
 }
 

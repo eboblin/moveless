@@ -570,8 +570,10 @@ function arrowBrightness(): { up: number; down: number } {
     const index = session.project.sets.findIndex((set) => set.id === session.project.activeSetId);
     return directionLit(Math.max(0, index), session.project.sets.length);
   }
+  // Journal pages count down toward the newest, so Plus lights while a newer page exists.
   const count = journalPageCount(session.project.journal.length);
-  return directionLit(clampJournalPage(session.ui.journalPage, session.project.journal.length), count);
+  const page = clampJournalPage(session.ui.journalPage, session.project.journal.length);
+  return directionLit(count - 1 - page, count);
 }
 
 function paintLeds(levels?: readonly number[]): void {

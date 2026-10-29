@@ -2088,7 +2088,7 @@ describe("randomize, wander, sets", () => {
     project = { ...project, clipboardSceneIds: ["001", "002", "001", "003"] };
     project = pasteClipboard(project);
     assert.deepEqual(project.sets[0].sceneIds, ["001", "002", "003"]);
-    assert.deepEqual(setPadIds(project).slice(0, 4), ["003", "002", "001", null]);
+    assert.deepEqual(setPadIds(project).slice(0, 4), ["001", "002", "003", null]);
     assert.deepEqual(project.sets.at(-1)?.sceneIds, []);
   });
 
@@ -2099,16 +2099,48 @@ describe("randomize, wander, sets", () => {
     project = addSceneToSet(project, project.activeSetId!, "001");
     assert.deepEqual(wanderCandidates(project, "set").filter(Boolean), ["001"]);
     assert.equal(journalPageCount(project.journal.length), 2);
-    assert.equal(journalPadIds(project, 0)[0], "033");
-    assert.equal(journalPadIds(project, 0)[31], "002");
+    // The open row is on top: one brick, then seven dark pads. The three rows under it are the ones before.
+    assert.equal(journalPadIds(project, 0)[24], "033");
+    assert.equal(journalPadIds(project, 0)[25], null);
+    assert.equal(journalPadIds(project, 0)[23], "032");
+    assert.equal(journalPadIds(project, 0)[16], "025");
+    assert.equal(journalPadIds(project, 0)[0], "009");
+    assert.equal(journalPadIds(project, 0)[7], "016");
+    // The oldest page is pinned to row 0 on the bottom pads, so it overlaps page 0 by three rows.
     assert.equal(journalPadIds(project, 1)[0], "001");
+    assert.equal(journalPadIds(project, 1)[7], "008");
+    assert.equal(journalPadIds(project, 1)[24], "025");
+    assert.equal(journalPadIds(project, 1)[31], "032");
+    // Rows grow upward from the bottom-left. Eight bricks fill the bottom row and open an empty one above.
+    let eight = defaultProject();
+    for (let n = 0; n < 8; n++) eight = record(eight);
+    assert.equal(journalPageCount(8), 1);
+    assert.equal(journalPadIds(eight)[0], "001");
+    assert.equal(journalPadIds(eight)[7], "008");
+    assert.ok(journalPadIds(eight).slice(8).every((id) => id === null));
+    assert.equal(journalPageCount(31), 1);
+    assert.equal(journalPageCount(32), 2);
+    assert.equal(journalPageCount(63), 2);
+    assert.equal(journalPageCount(64), 3);
+    // A full set fills all four rows from the bottom.
+    let full = eight;
+    full = createSet(full, "B");
+    for (let n = 0; n < 32; n++) {
+      const id = String(300 + n);
+      full.journal.push({ id, lanes: clone(full.working) });
+      full = addSceneToSet(full, full.activeSetId!, id);
+    }
+    assert.equal(setPadIds(full)[24], "324");
+    assert.equal(setPadIds(full)[31], "331");
+    assert.equal(setPadIds(full)[0], "300");
+    assert.equal(setPadIds(full).filter(Boolean).length, 32);
   });
 
   it("fills pads from the journal until a set has scenes, and stops at 32", () => {
     let project = defaultProject();
     project = record(project);
     project = record(punch(project, "kick.gen1.velocity.value", 0.4));
-    assert.deepEqual(sceneIdsForPads(project), ["002", "001", ...Array(30).fill(null)]);
+    assert.deepEqual(sceneIdsForPads(project), ["001", "002", ...Array(30).fill(null)]);
     project = createSet(project, "A");
     for (let n = 0; n < 40; n++) {
       const id = String(200 + n);

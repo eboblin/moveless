@@ -240,9 +240,9 @@ export interface PadSurface {
 
 /**
  * Playing and morph-target pads share one pulse. Target also shades
- * dark→dim→bright by morph progress. An empty journal/set still shows pad 0 as the
- * current working scene. Where those pads are showing, Sample lifts the first 24 patterns
- * one row and puts Transition and Wander on the bottom row.
+ * dark→dim→bright by morph progress. An empty journal/set still shows the bottom-left pad as the
+ * current working scene. Where those pads are showing, Sample lifts the bottom three rows of
+ * scenes up one row and puts Transition and Wander on the bottom row.
  * Jog touch or a latched jog click shows randomize instead, so the Sample row stays hidden.
  * A finger already down on a lane points the page buttons at that lane, including its lit page.
  * Mixer and DJ FX take every pad. On the purple lane the same latch draws the page row
@@ -329,7 +329,7 @@ function mutePeekLeds(project: Project): Led[] {
   return out;
 }
 
-/** First 24 patterns move up one row. The bottom row is transition, then wander with Off first. */
+/** The bottom three rows of scenes move up one row. The bottom row is transition, then wander with Off first. */
 function liftPatterns(scenes: Led[], project: Project): Led[] {
   const out = Array.from({ length: 32 }, () => led("off", false));
   for (let index = 0; index < 24; index++) out[8 + index] = scenes[index] ?? led("off", false);
@@ -414,11 +414,14 @@ export function offColor(color: number): number {
 /** Pure green. Scene colors never use this index. */
 const SELECTED = 126;
 
+/** Bottom-left pad: where the first brick of an empty journal or set will land. */
+const WORKING_PAD = 0;
+
 function scenePadLeds(project: Project, mode: "journal" | "set", tick: number, journalPage: number, copyHeld: boolean): Led[] {
   const ids = mode === "set" ? setPadIds(project) : journalPadIds(project, journalPage);
   const selected = copyHeld ? new Set(project.clipboardSceneIds) : null;
   if (ids.every((id) => id === null)) {
-    return ids.map((_, index) => (index === 0 ? currentSceneLed(LED.working) : led("off", false)));
+    return ids.map((_, index) => (index === WORKING_PAD ? currentSceneLed(LED.working) : led("off", false)));
   }
   const morph = project.morph;
   const targetId = morph?.targetId ?? null;
