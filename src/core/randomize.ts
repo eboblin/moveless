@@ -76,7 +76,10 @@ function knobSpec(path: string): KnobSpec | null {
   const binding = bindingFor(path);
   if (!binding) return null;
   // Pattern below zero names a voice. A roll stays in motif ids.
-  const min = path.endsWith(".pattern") ? Math.max(0, binding.min) : binding.min;
+  let min = path.endsWith(".pattern") ? Math.max(0, binding.min) : binding.min;
+  // Chord count 0 hands the harmony to external MIDI and silences the lane without a keyboard.
+  // A roll stays in the generated progression; only the hand switches to MIDI.
+  if (binding.store === "progression" && path === "count") min = Math.max(1, min);
   return { min, max: binding.max, step: binding.step, integer: binding.integer, weight: binding.weight };
 }
 

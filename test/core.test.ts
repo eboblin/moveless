@@ -1919,6 +1919,23 @@ describe("randomize, wander, sets", () => {
     assert.equal(cleared.mixer.snare, 1);
   });
 
+  it("keeps a rolled progression out of external MIDI and climbs back from it", () => {
+    const paths = ["start", "count", "length", "motion", "variation", "mood", "tension", "way"];
+    for (const intensity of ["soft", "medium", "hard"] as const) {
+      let project = setRandomizeIntensity(defaultProject(), intensity);
+      for (let i = 0; i < 300; i++) {
+        project = randomizeSurface(project, "progression", paths);
+        assert.ok(project.progression.count >= 1, `${intensity} roll ${i} dropped count to ${project.progression.count}`);
+      }
+    }
+    const midi = setRandomizeIntensity(defaultProject(), "hard");
+    midi.progression = { ...midi.progression, count: 0 };
+    const back = randomizeSurface(midi, "progression", ["count"]);
+    assert.ok(back.progression.count >= 1);
+    const cleared = randomizeSurface(setRandomizeIntensity(midi, "clear"), "progression", ["count"]);
+    assert.equal(cleared.progression.count, defaultProject().progression.count);
+  });
+
   it("captures the bus when the page is in scope and restores it to zero on delete", () => {
     const project = setRandomizeIntensity(defaultProject(), "hard");
     const paths = ["bus.glue", "bus.pump", "bus.wide", "bus.tilt"];
