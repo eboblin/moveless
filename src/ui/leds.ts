@@ -241,8 +241,8 @@ export interface PadSurface {
 /**
  * Playing and morph-target pads share one pulse. Target also shades
  * dark→dim→bright by morph progress. An empty journal/set still shows the bottom-left pad as the
- * current working scene. Where those pads are showing, Sample lifts the bottom three rows of
- * scenes up one row and puts Transition and Wander on the bottom row.
+ * current working scene. Where those pads are showing, Sample replaces the bottom row
+ * with Transition and Wander. The pads above stay where they were.
  * Jog touch or a latched jog click shows randomize instead, so the Sample row stays hidden.
  * A finger already down on a lane points the page buttons at that lane, including its lit page.
  * Mixer and DJ FX take every pad. On the purple lane the same latch draws the page row
@@ -272,10 +272,10 @@ export function padLeds(project: Project, mode: "journal" | "set", surface?: Pad
     leds = auxPages ? pageOverlay(scenes, "aux", page, 1) : scenes;
   }
   if (peekKind(surface ?? {}) === "sample" && patternPadsVisible({ ...surface, context, page })) {
-    const lifted = liftPatterns(scenes, project);
-    if (surface?.heldContext) return pageOverlay(lifted, menu.context, menu.page, surface.heldContext === "aux" ? 1 : 2);
-    if (auxPages) return pageOverlay(lifted, "aux", page, 1);
-    return lifted;
+    const covered = captureRow(scenes, project);
+    if (surface?.heldContext) return pageOverlay(covered, menu.context, menu.page, surface.heldContext === "aux" ? 1 : 2);
+    if (auxPages) return pageOverlay(covered, "aux", page, 1);
+    return covered;
   }
   return leds;
 }
@@ -329,10 +329,9 @@ function mutePeekLeds(project: Project): Led[] {
   return out;
 }
 
-/** The bottom three rows of scenes move up one row. The bottom row is transition, then wander with Off first. */
-function liftPatterns(scenes: Led[], project: Project): Led[] {
-  const out = Array.from({ length: 32 }, () => led("off", false));
-  for (let index = 0; index < 24; index++) out[8 + index] = scenes[index] ?? led("off", false);
+/** Transition, then wander with Off first, in place of the bottom row. Scenes above stay on their own pads. */
+function captureRow(scenes: Led[], project: Project): Led[] {
+  const out = scenes.slice();
   TRANSITIONS.forEach((id, col) => {
     out[col] = choiceLed("yellow", LED.yellow, project.transition === id);
   });

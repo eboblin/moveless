@@ -168,7 +168,7 @@ function onPad(session: Session, index: number, press: boolean): Session {
   }
   if ((session.ui.sampleHeld || session.ui.sampleLatched) && patternPadsVisible(session.ui)) {
     if (row === 0) return onCaptureStrip(session, col);
-    return onScenePad(session, index - 8);
+    return onScenePad(session, index);
   }
   return onScenePad(session, index);
 }
@@ -256,7 +256,7 @@ function onScenePad(session: Session, index: number): Session {
   return { ...session, project: launchScene(session.project, sceneId, session.tick) };
 }
 
-/** Wander and transition on the bottom row. Pattern pads above are the row that used to sit under them. */
+/** Wander and transition replace the bottom row. Pattern pads above keep their own scenes. */
 function onCaptureStrip(session: Session, col: number): Session {
   if (col < TRANSITIONS.length) {
     const transition = TRANSITIONS[col];

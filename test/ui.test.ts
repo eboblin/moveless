@@ -591,12 +591,12 @@ describe("pages and leds", () => {
       [0x09, 0x99, 16, LED.red],
     ]);
     const project = { ...defaultProject(), wander: "fast" as const };
+    const scenes = padLeds(project, "journal");
     const wheel = padLeds(project, "journal", { wheelTouch: true, context: "kick", page: 0 });
     const capture = padLeds(project, "journal", { sampleHeld: true });
     const pads = [
-      [68, padLeds(project, "journal")[0]],
+      [68, scenes[0]],
       [92, wheel[24]],
-      [76, capture[8]],
     ] as const;
     for (const [note, lit] of pads) {
       assert.equal(lit.blink, true);
@@ -615,9 +615,10 @@ describe("pages and leds", () => {
     assert.equal(capture[4].color, offColor(LED.purple));
     assert.equal(capture[5].color, LED.purple);
     assert.equal(capture[6].color, offColor(LED.purple));
-    // Sample lifts the scene rows up one; the working pad moves from the bottom-left to the row above.
-    assert.deepEqual(capture[8], padLeds(project, "journal")[0]);
-    assert.equal(capture[24].color, 0);
+    // Sample replaces the bottom row. Pads above stay on the scenes that were already there.
+    assert.deepEqual(capture.slice(8), scenes.slice(8));
+    assert.equal(capture[0].blink, false);
+    assert.notEqual(capture[0].color, scenes[0].color);
     assert.equal(wheel[0].blink, false);
     assert.equal(wheel[0].color, shadeColor(LED.yellow, 0.2));
     assert.equal(wheel[1].blink, false);
@@ -2294,6 +2295,19 @@ describe("surface", () => {
     assert.equal(screen.labels.some((label) => label.text === "WANDER" || label.text === "OFF"), false);
     assertOutline(screen, bare, [captionAt("WANDER", CAPTION_LANE_Y), captionAt("OFF", CAPTION_PAGE_Y)]);
     assert.equal(screen.header.includes("T:"), false);
+  });
+
+  it("launches the scene under the pad when Sample covers the bottom row", () => {
+    let state = session();
+    for (let n = 0; n < 9; n++) state = { ...state, project: record(state.project) };
+    const pads = journalPadIds(state.project, 0);
+    const scenes = padLeds(state.project, "journal", state.ui);
+    state = reduce(state, { kind: "cc", data1: 118, data2: 127 });
+    const covered = padLeds(state.project, "journal", state.ui);
+    assert.deepEqual(covered.slice(8), scenes.slice(8));
+    state = reduce(state, { kind: "note", data1: 76, data2: 127 });
+    assert.equal(state.project.morph?.targetId, pads[8]);
+    assert.notEqual(pads[8], pads[0]);
   });
 
   it("records, mutes, captures, and stores a track bookmark", () => {
