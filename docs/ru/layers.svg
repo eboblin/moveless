@@ -1,0 +1,115 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="760" height="400" viewBox="0 0 760 400" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="13">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#bdbdbd"/>
+    </marker>
+    <marker id="arrow-morph" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#f2c94c"/>
+    </marker>
+  </defs>
+
+  <rect width="760" height="400" rx="12" fill="#1b1b1b"/>
+
+  <rect x="16" y="16" width="728" height="368" rx="14" fill="none" stroke="#5a5a5a" stroke-width="1.5" stroke-dasharray="6 4"/>
+  <text x="32" y="38" fill="#e6e6e6" font-size="15" font-weight="600">проект</text>
+  <text x="92" y="38" fill="#8f8f8f">один файл, сохраняется сам</text>
+
+  <g transform="translate(36,78)">
+    <rect width="150" height="118" rx="10" fill="#262626" stroke="#3d3d3d"/>
+    <text x="12" y="24" fill="#e6e6e6" font-weight="600">дорожки</text>
+    <text x="12" y="42" fill="#9a9a9a" font-size="12">один инструмент каждая</text>
+    <g transform="translate(12,58)">
+      <circle cx="8"   cy="8" r="7" fill="none" stroke="#e03b3b" stroke-width="2"/>
+      <circle cx="26"  cy="8" r="7" fill="none" stroke="#e03b3b" stroke-width="2"/>
+      <circle cx="44"  cy="8" r="7" fill="none" stroke="#e03b3b" stroke-width="2"/>
+      <circle cx="62"  cy="8" r="7" fill="none" stroke="#e03b3b" stroke-width="2"/>
+      <circle cx="80"  cy="8" r="7" fill="none" stroke="#e8b830" stroke-width="2"/>
+      <circle cx="98"  cy="8" r="7" fill="none" stroke="#e8b830" stroke-width="2"/>
+      <circle cx="116" cy="8" r="7" fill="none" stroke="#e8b830" stroke-width="2"/>
+      <circle cx="134" cy="8" r="7" fill="none" stroke="#9be22b" stroke-width="2"/>
+    </g>
+    <text x="12" y="92" fill="#9a9a9a" font-size="11">4 ударных · 3 мелодических · fx</text>
+    <text x="12" y="108" fill="#9a9a9a" font-size="11">у каждой свои страницы ручек</text>
+  </g>
+
+  <line x1="190" y1="137" x2="222" y2="137" stroke="#bdbdbd" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <g transform="translate(226,78)">
+    <rect width="150" height="118" rx="10" fill="#262626" stroke="#3d3d3d"/>
+    <text x="12" y="24" fill="#e6e6e6" font-weight="600">паттерн</text>
+    <text x="12" y="42" fill="#9a9a9a" font-size="12">все восемь вместе</text>
+    <g transform="translate(12,56)" fill="#dcdcdc">
+      <rect x="0"   y="18" width="6" height="14"/>
+      <rect x="22"  y="24" width="6" height="8"/>
+      <rect x="44"  y="12" width="6" height="20"/>
+      <rect x="66"  y="26" width="6" height="6"/>
+      <rect x="88"  y="16" width="6" height="16"/>
+      <rect x="110" y="22" width="6" height="10"/>
+      <line x1="0" y1="34" x2="126" y2="34" stroke="#5a5a5a" stroke-width="1"/>
+    </g>
+    <text x="12" y="108" fill="#9a9a9a" font-size="11">то, что звучит и что вы крутите</text>
+  </g>
+
+  <line x1="380" y1="124" x2="412" y2="124" stroke="#bdbdbd" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <text x="396" y="113" fill="#bdbdbd" font-size="11" text-anchor="middle">record</text>
+
+  <line x1="412" y1="156" x2="380" y2="156" stroke="#f2c94c" stroke-width="1.5" marker-end="url(#arrow-morph)"/>
+  <text x="396" y="172" fill="#f2c94c" font-size="11" text-anchor="middle">морф</text>
+
+  <g transform="translate(416,78)">
+    <rect width="150" height="118" rx="10" fill="#262626" stroke="#3d3d3d"/>
+    <text x="12" y="24" fill="#e6e6e6" font-weight="600">сцена</text>
+    <text x="12" y="42" fill="#9a9a9a" font-size="12">замороженный паттерн</text>
+    <rect x="12" y="56" width="34" height="34" rx="5" fill="#2f80ed"/>
+    <text x="56" y="70" fill="#9a9a9a" font-size="11">свой цвет пэда</text>
+    <text x="56" y="86" fill="#9a9a9a" font-size="11">не меняется, только</text>
+    <text x="56" y="100" fill="#9a9a9a" font-size="11">удаляется</text>
+  </g>
+
+  <line x1="491" y1="200" x2="491" y2="228" stroke="#bdbdbd" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <g transform="translate(416,232)">
+    <rect width="150" height="118" rx="10" fill="#262626" stroke="#3d3d3d"/>
+    <text x="12" y="24" fill="#e6e6e6" font-weight="600">журнал</text>
+    <text x="12" y="42" fill="#9a9a9a" font-size="12">все сцены подряд</text>
+    <g transform="translate(12,56)">
+      <rect x="0"   y="0" width="22" height="22" rx="4" fill="#2f80ed"/>
+      <rect x="28"  y="0" width="22" height="22" rx="4" fill="#27ae60"/>
+      <rect x="56"  y="0" width="22" height="22" rx="4" fill="#eb5757"/>
+      <rect x="84"  y="0" width="22" height="22" rx="4" fill="#f2c94c"/>
+      <rect x="112" y="0" width="14" height="22" rx="4" fill="#9b51e0"/>
+    </g>
+    <text x="12" y="104" fill="#9a9a9a" font-size="11">только дописывается</text>
+  </g>
+
+  <line x1="568" y1="279" x2="584" y2="279" stroke="#bdbdbd" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <g transform="translate(586,232)">
+    <rect width="140" height="118" rx="10" fill="#262626" stroke="#3d3d3d"/>
+    <text x="12" y="24" fill="#e6e6e6" font-weight="600">сет</text>
+    <text x="12" y="42" fill="#9a9a9a" font-size="12">ссылки на сцены</text>
+    <g transform="translate(12,56)">
+      <rect x="0"  y="0" width="22" height="22" rx="4" fill="none" stroke="#27ae60" stroke-width="2" stroke-dasharray="3 2"/>
+      <rect x="28" y="0" width="22" height="22" rx="4" fill="none" stroke="#f2c94c" stroke-width="2" stroke-dasharray="3 2"/>
+      <rect x="56" y="0" width="22" height="22" rx="4" fill="none" stroke="#2f80ed" stroke-width="2" stroke-dasharray="3 2"/>
+    </g>
+    <text x="12" y="100" fill="#9a9a9a" font-size="11">сетов много,</text>
+    <text x="12" y="113" fill="#9a9a9a" font-size="11">по ним ходит wander</text>
+  </g>
+
+  <g transform="translate(36,232)">
+    <rect width="340" height="118" rx="10" fill="#202020" stroke="#3d3d3d" stroke-dasharray="4 3"/>
+    <text x="12" y="24" fill="#e6e6e6" font-weight="600">поверх любой сцены</text>
+    <text x="12" y="42" fill="#9a9a9a" font-size="12">живёт в проекте, в сцену не пишется, не морфится</text>
+    <g fill="#cfcfcf" font-size="12">
+      <text x="12"  y="70">микшер</text>
+      <text x="12"  y="90">макросы</text>
+      <text x="12"  y="110">закладки</text>
+      <text x="130" y="70">dj fx</text>
+      <text x="130" y="90">шина mix</text>
+      <text x="130" y="110">переход и wander</text>
+      <text x="250" y="70">прогрессия</text>
+      <text x="250" y="90">глобальные</text>
+    </g>
+  </g>
+</svg>
