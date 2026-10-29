@@ -4,7 +4,7 @@ Generative performance sequencer for Ableton Move. Seven lanes play together. Yo
 
 ptnmove is a Schwung overtake module. It starts in Play.
 
-[User guide](docs/README.md)
+[English guide](docs/en/README.md) · [Руководство на русском](docs/ru/README.md)
 
 ## Develop
 
