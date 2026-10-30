@@ -1,5 +1,7 @@
 # moveless
 
+![Biker on a chopper, moveless, enjoy the ride](docs/images/logo.png)
+
 Generative performance sequencer for Ableton Move. Seven lanes play together. You edit the live pattern, save immutable scenes, and morph between them.
 
 moveless is a Schwung overtake module. It starts in Play.

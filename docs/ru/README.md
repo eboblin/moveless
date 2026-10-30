@@ -1,5 +1,7 @@
 # Руководство moveless
 
+![Байкер на чоппере, под ним moveless и enjoy the ride](../images/logo.png)
+
 как играть на модуле moveless на Ableton Move.
 
 [English](../en/README.md)
