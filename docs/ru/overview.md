@@ -61,9 +61,9 @@ ptnmove - генеративный перформанс-секвенсер дл�
 
 экран - 128×64. сверху имя дорожки и страницы, под ним тонкая линия, дальше картинка петли, внизу восемь колонок с цифрами.
 
-слева - <img src="../icons/menu.png" width="20" alt="menu"> menu (журнал/сет), четыре <img src="../icons/track-one.png" width="12" alt="track"> track (закладки), <img src="../icons/play.png" width="20" alt="play"> play, <img src="../icons/record.png" width="20" alt="record"> record.
+слева - <img src="../icons/menu.png" width="20" alt="menu"> [menu](scenes.md) ([журнал/сет](scenes.md)), четыре <img src="../icons/track-one.png" width="12" alt="track"> [track](bookmarks.md) ([закладки](bookmarks.md)), <img src="../icons/play.png" width="20" alt="play"> [play](basic-concepts.md), <img src="../icons/record.png" width="20" alt="record"> [record](scenes.md).
 
-справа - <img src="../icons/capture.png" width="20" alt="capture"> capture (dj fx), <img src="../icons/sample.png" width="20" alt="sample"> sample (переход и wander), <img src="../icons/loop.png" width="20" alt="loop"> loop (рандомизация), <img src="../icons/mute.png" width="20" alt="mute"> mute (микшер), <img src="../icons/delete.png" width="20" alt="delete"> delete, <img src="../icons/copy.png" width="20" alt="copy"> copy, <img src="../icons/shift.png" width="20" alt="shift"> shift.
+справа - <img src="../icons/capture.png" width="20" alt="capture"> [capture](dj-fx.md) ([dj fx](dj-fx.md)), <img src="../icons/sample.png" width="20" alt="sample"> [sample](transition.md) ([переход и wander](transition.md)), <img src="../icons/loop.png" width="20" alt="loop"> [loop](randomize.md) ([рандомизация](randomize.md)), <img src="../icons/mute.png" width="20" alt="mute"> [mute](mixer.md) ([микшер](mixer.md)), <img src="../icons/delete.png" width="20" alt="delete"> [delete](scenes.md), <img src="../icons/copy.png" width="20" alt="copy"> [copy](scenes.md), <img src="../icons/shift.png" width="20" alt="shift"> [shift](basic-concepts.md).
 
 джог - колесо: касание показывает страницы, поворот листает, клик защёлкивает рандомизатор.
 
