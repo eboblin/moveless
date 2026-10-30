@@ -1,4 +1,4 @@
-# ptnmove guide
+# moveless guide
 
 How to play the module on Ableton Move.
 

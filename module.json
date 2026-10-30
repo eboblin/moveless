@@ -1,8 +1,8 @@
 {
-  "id": "ptnmove",
-  "name": "ptnmove",
+  "id": "moveless",
+  "name": "moveless",
   "version": "0.1.0",
-  "author": "ptnmove",
+  "author": "moveless",
   "description": "Generative performance sequencer for Ableton Move",
   "component_type": "overtake",
   "ui": "ui.js",

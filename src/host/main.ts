@@ -60,7 +60,7 @@ interface HostGlobals {
 }
 
 /** Schwung 4×5 param-page face — shorter than the host’s default 5×7. */
-const MODULE_FONT = "/data/UserData/schwung/modules/overtake/ptnmove/font.png";
+const MODULE_FONT = "/data/UserData/schwung/modules/overtake/moveless/font.png";
 const AUTOSAVE_MS = 2000;
 
 function hostFiles(): HostFiles {

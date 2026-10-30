@@ -1,5 +1,5 @@
 /*
- * ptnmove voice. One drum voice per lane and one shared note pool for
+ * moveless voice. One drum voice per lane and one shared note pool for
  * bass, lead and chords. Parameter ids match src/dsp/map.ts.
  * Own synth — libpo32 / Surge are not vendored; keys stay compatible with map.ts.
  * Melody is a unison wavetable (frame, detune around the pitch, phase per voice).
@@ -3726,7 +3726,7 @@ static void set_param(void *instance, const char *key, const char *val) {
     engine->has_block = 1;
 }
 
-#ifndef PTNMOVE_TEST
+#ifndef MOVELESS_TEST
 static void destroy_instance(void *instance) {
     Engine *engine = instance;
     if (!engine) return;
@@ -3941,7 +3941,7 @@ plugin_api_v2_t *move_plugin_init_v2(void *host) {
 }
 #endif
 
-#ifdef PTNMOVE_TEST
+#ifdef MOVELESS_TEST
 static int fail(const char *message) {
     fprintf(stderr, "%s\n", message);
     return 1;

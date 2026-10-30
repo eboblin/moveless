@@ -26,8 +26,10 @@ import {
 import { pageCount } from "./pages.ts";
 
 export const STORE_VERSION = 1;
-export const PROJECT_DIR = "/data/UserData/schwung/ptnmove";
+export const PROJECT_DIR = "/data/UserData/schwung/moveless";
 export const PROJECT_PATH = `${PROJECT_DIR}/project.json`;
+/** Shipped inside the module. Copied to PROJECT_PATH only when that file is absent. */
+export const FACTORY_PATH = "/data/UserData/schwung/modules/overtake/moveless/factory.json";
 
 export type StoredFace = "mixer" | "deck";
 export type StoredDeckLayer = "group" | "tone";
@@ -122,9 +124,15 @@ export function parseStored(raw: string): StoredBundle | null {
 
 export function loadStoredProject(files: HostFiles): StoredBundle | null {
   if (!files.read_file) return null;
-  const raw = files.read_file(PROJECT_PATH);
-  if (raw == null || raw === "") return null;
-  return parseStored(raw);
+  const own = files.read_file(PROJECT_PATH);
+  if (own != null && own !== "") return parseStored(own);
+  const seed = files.read_file(FACTORY_PATH);
+  if (seed == null || seed === "") return null;
+  const seeded = parseStored(seed);
+  if (!seeded || !files.write_file) return null;
+  files.ensure_dir?.(PROJECT_DIR);
+  if (files.write_file(PROJECT_PATH, seed) !== true) return null;
+  return seeded;
 }
 
 export function saveStoredProject(project: Project, ui: StoredUi, files: HostFiles): boolean {

@@ -4,12 +4,14 @@ import { defaultDeck } from "../src/core/deck.ts";
 import { defaultFx, defaultProject } from "../src/core/defaults.ts";
 import { record, setRandomizeDepth, setRandomizeIntensity, setRandomizeScope } from "../src/core/performance.ts";
 import {
+  FACTORY_PATH,
   PROJECT_PATH,
   loadStoredProject,
   parseStored,
   saveStoredProject,
   serializeStored,
   type HostFiles,
+  type StoredUi,
 } from "../src/core/persist.ts";
 
 function memoryFiles(seed: Record<string, string> = {}): HostFiles & { store: Record<string, string> } {
@@ -392,5 +394,57 @@ describe("project persist", () => {
     assert.equal(loaded.ui.context, "hat");
     assert.equal(loaded.ui.page, 1);
     assert.equal(loadStoredProject({}), null);
+  });
+
+  const storedUi: StoredUi = {
+    context: "hat",
+    page: 1,
+    mode: "journal",
+    playing: true,
+    sampleLatched: false,
+    randomizeLatched: false,
+    face: null,
+    deckLayer: "group",
+  };
+
+  it("keeps an existing project and ignores the factory seed", () => {
+    const own = serializeStored(setRandomizeIntensity(defaultProject(), "clear"), storedUi);
+    const seed = serializeStored(setRandomizeIntensity(defaultProject(), "hard"), storedUi);
+    const files = memoryFiles({ [PROJECT_PATH]: own, [FACTORY_PATH]: seed });
+    const loaded = loadStoredProject(files);
+    assert.ok(loaded);
+    assert.equal(loaded.project.randomizeIntensity, "clear");
+    assert.equal(files.store[PROJECT_PATH], own);
+  });
+
+  it("copies the factory seed once when the user project is absent", () => {
+    const first = serializeStored(setRandomizeIntensity(defaultProject(), "hard"), storedUi);
+    const files = memoryFiles({ [FACTORY_PATH]: first });
+    const loaded = loadStoredProject(files);
+    assert.ok(loaded);
+    assert.equal(loaded.project.randomizeIntensity, "hard");
+    assert.equal(files.store[PROJECT_PATH], first);
+    files.store[FACTORY_PATH] = serializeStored(setRandomizeIntensity(defaultProject(), "clear"), storedUi);
+    const again = loadStoredProject(files);
+    assert.ok(again);
+    assert.equal(again.project.randomizeIntensity, "hard");
+    assert.equal(files.store[PROJECT_PATH], first);
+  });
+
+  it("returns null when neither project file is present", () => {
+    assert.equal(loadStoredProject(memoryFiles()), null);
+  });
+
+  it("does not write a factory seed that fails to parse", () => {
+    const files = memoryFiles({ [FACTORY_PATH]: "{not json" });
+    assert.equal(loadStoredProject(files), null);
+    assert.equal(PROJECT_PATH in files.store, false);
+  });
+
+  it("does not replace an unreadable user project with the factory seed", () => {
+    const seed = serializeStored(setRandomizeIntensity(defaultProject(), "hard"), storedUi);
+    const files = memoryFiles({ [PROJECT_PATH]: "{broken", [FACTORY_PATH]: seed });
+    assert.equal(loadStoredProject(files), null);
+    assert.equal(files.store[PROJECT_PATH], "{broken");
   });
 });

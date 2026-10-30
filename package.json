@@ -1,5 +1,5 @@
 {
-  "name": "ptnmove",
+  "name": "moveless",
   "private": true,
   "version": "0.1.0",
   "type": "module",
@@ -8,7 +8,8 @@
     "typecheck": "tsc --noEmit",
     "bench": "node scripts/bench.ts",
     "build": "esbuild src/host/main.ts --bundle --format=esm --platform=neutral --target=es2022 --outfile=ui.js",
-    "deploy": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/deploy.ps1"
+    "deploy": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/deploy.ps1",
+    "pull-project": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/pull-project.ps1"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
