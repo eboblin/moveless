@@ -1,8 +1,7 @@
-import { PPQN, SIXTEENTH_TICKS, sixteenthSteps, ticksPerBar } from "./clock.ts";
+import { PPQN, ticksPerBar } from "./clock.ts";
 import { clone, copy } from "./clone.ts";
-import { phraseStepsOf } from "./events.ts";
 import { fieldsOf, getPath, setPath } from "./fields.ts";
-import { isDrum, isPitched, PATTERN_LANES, TRANSITION_BARS, type GlobalSettings, type Lanes, type MorphState, type PatternId, type Project, type Scene, type TransitionId } from "./types.ts";
+import { isDrum, isPitched, PATTERN_LANES, TRANSITION_BARS, type EuclidGen, type GlobalSettings, type Lanes, type MorphState, type PatternId, type Project, type Scene, type TransitionId } from "./types.ts";
 
 export function quantizeStart(tick: number, transition: TransitionId, beatsPerBar: number): number {
   const grid = transition === "now" ? ticksPerBar(1) / 4 : ticksPerBar(beatsPerBar);
@@ -19,10 +18,39 @@ export function morphProgress(morph: MorphState, tick: number): number {
   return t;
 }
 
+/** How a lane crosses its slot. A dip hides the pattern swap. In and out are one-sided. */
+export type HandoffKind = "dip" | "in" | "out";
+
+export interface LaneHandoff {
+  lane: PatternId;
+  kind: HandoffKind;
+  startTick: number;
+  commitTick: number;
+  endTick: number;
+}
+
+interface LaneCommit {
+  lane: PatternId;
+  tick: number;
+}
+
+interface MorphPlan {
+  lock: Project["lock"];
+  target: Lanes;
+  bar: number;
+  transition: TransitionId;
+  punched: string;
+  commits: readonly LaneCommit[];
+  handoffs: readonly LaneHandoff[];
+}
+
 const fieldMemo = new WeakMap<Lanes, ReturnType<typeof fieldsOf>>();
-/** Next tick at which this morph can change a lane. Idle ticks return the same project. */
+/** Next tick at which this morph writes a lane or lands. Idle ticks return the same project. */
 const nextApply = new WeakMap<MorphState, number>();
-const LERP_STEPS = 4;
+const plans = new WeakMap<MorphState, MorphPlan>();
+
+const COLOR: readonly PatternId[] = ["fx", "hat", "perc", "snare"];
+const SLOW_ORDER: readonly PatternId[] = ["fx", "hat", "perc", "snare", "chords", "lead"];
 
 function memoFields(lanes: Lanes) {
   const hit = fieldMemo.get(lanes);
@@ -32,305 +60,242 @@ function memoFields(lanes: Lanes) {
   return fields;
 }
 
-/** Generator ring. Bass and lead keep their own cycle; the chord phrase is not the grid. */
-function generatorCycleTicks(start: Lanes, lane: PatternId, global: GlobalSettings): number {
-  if (lane === "fx") return ticksPerBar(global.bar);
-  if (lane === "chords") return sixteenthSteps(global.phrase, global.bar) * SIXTEENTH_TICKS;
-  return Math.max(1, phraseStepsOf(start[lane].gen1, start[lane].gen2)) * SIXTEENTH_TICKS;
+/** A generator places a hit only when the ring has hits and probability is open. Length 0 is no hits. */
+function generatorSpeaks(gen: EuclidGen): boolean {
+  const length = Math.max(0, Math.round(gen.length));
+  const hits = length > 0 ? Math.min(length, Math.max(0, Math.round(gen.hits))) : 0;
+  return hits > 0 && gen.probability > 0;
 }
 
-/** Cycle, its half and double, the bar, and the beat. A cycle shorter than a beat keeps that cycle. */
-function gridQuanta(cycle: number, beat: number, bar: number): number[] {
-  const base = Math.max(1, Math.round(cycle));
-  const floor = base < beat ? base : beat;
-  const out = [base, base * 2, beat, Math.max(1, Math.round(bar))];
-  if (base >= 2) out.push(Math.max(1, Math.floor(base / 2)));
-  return out.filter((quantum) => quantum >= floor);
-}
-
-/** Transport-aligned boundaries inside the window, plus the landing. */
-function gridPoints(origin: number, end: number, quanta: readonly number[]): number[] {
-  const points = new Set<number>();
-  for (const quantum of quanta) {
-    const step = Math.max(1, Math.round(quantum));
-    const mod = ((origin % step) + step) % step;
-    let tick = mod === 0 ? origin + step : origin + (step - mod);
-    let guard = 0;
-    while (tick <= end && guard < 8192) {
-      if (tick > origin) points.add(tick);
-      tick += step;
-      guard += 1;
-    }
+/** Fx has no generators. A voice is silent when every generator is silent. */
+function laneSpeaks(lanes: Lanes, lane: PatternId): boolean {
+  if (lane === "fx") return true;
+  if (lane === "chords") return generatorSpeaks(lanes.chords.gen1);
+  if (isDrum(lane) || isPitched(lane)) {
+    const part = lanes[lane];
+    return generatorSpeaks(part.gen1) || generatorSpeaks(part.gen2);
   }
-  if (end > origin) points.add(end);
-  return [...points].sort((a, b) => a - b);
+  return false;
 }
 
-/** Earlier boundary wins a tie, so a slot does not slide toward the landing. */
-function snapTick(ideal: number, points: readonly number[]): number {
-  let best = points[0] ?? ideal;
-  let bestDist = Math.abs(best - ideal);
-  for (const point of points) {
-    const dist = Math.abs(point - ideal);
-    if (dist < bestDist) {
-      best = point;
-      bestDist = dist;
-    }
+function smoothstep(t: number): number {
+  const x = t < 0 ? 0 : t > 1 ? 1 : t;
+  return x * x * (3 - 2 * x);
+}
+
+/** Heard gain of one lane. The mixer is not involved: this rides on top and is 1 outside the slot. */
+export function handoffGain(handoff: LaneHandoff, tick: number): number {
+  const span = handoff.endTick - handoff.startTick;
+  if (span <= 0) return handoff.kind === "out" ? 0 : 1;
+  if (tick <= handoff.startTick) return handoff.kind === "in" ? 0 : 1;
+  if (tick >= handoff.endTick) return handoff.kind === "out" ? 0 : 1;
+  if (handoff.kind === "in") return smoothstep((tick - handoff.startTick) / span);
+  if (handoff.kind === "out") return 1 - smoothstep((tick - handoff.startTick) / span);
+  if (tick <= handoff.commitTick) {
+    const den = handoff.commitTick - handoff.startTick;
+    return den <= 0 ? 0 : 1 - smoothstep((tick - handoff.startTick) / den);
   }
-  return best;
+  const den = handoff.endTick - handoff.commitTick;
+  return den <= 0 ? 1 : smoothstep((tick - handoff.commitTick) / den);
 }
 
-function lerpMarks(origin: number, end: number, points: readonly number[]): number[] {
-  const span = end - origin;
-  const marks: number[] = [];
-  for (let step = 1; step <= LERP_STEPS; step += 1) {
-    marks.push(snapTick(origin + (span * step) / LERP_STEPS, points));
-  }
-  return marks;
+function punchedKey(punched: readonly string[]): string {
+  let key = "";
+  for (const path of punched) key += key ? `\0${path}` : path;
+  return key;
 }
 
-function lerpAt(from: number, to: number, tick: number, marks: readonly number[]): number {
-  let step = 0;
-  for (let i = 0; i < marks.length; i += 1) {
-    if (tick >= marks[i]) step = i + 1;
-  }
-  return from + (to - from) * (step / LERP_STEPS);
-}
-
-/** Pattern and cycle of one modulator share a moment. */
-function switchGroup(path: string): string {
-  if (path.endsWith(".pattern") || path.endsWith(".cycle")) return path.slice(0, path.lastIndexOf("."));
-  return path;
-}
-
-function cycleTicks(start: Lanes, path: string): number {
-  const cyclePath = path.endsWith(".cycle") ? path : `${path.slice(0, path.lastIndexOf("."))}.cycle`;
-  return Math.max(1, Math.round(getPath(start, cyclePath))) * SIXTEENTH_TICKS;
-}
-
-interface SwitchSlot {
-  cycle: number;
-  paths: string[];
-}
-
-/** Each changing switch takes an equal share of the window. Pattern and cycle of one modulator share one moment. */
-function switchTicks(
+function laneMoves(
   start: Lanes,
-  from: ReturnType<typeof fieldsOf>,
   targetFields: ReadonlyMap<string, number>,
-  origin: number,
-  end: number,
-  pointsOf: (cycle: number) => readonly number[],
-  cycleOf: (lane: PatternId) => number,
-  lock: Project["lock"],
-  mask: ReadonlySet<PatternId> | null,
+  lane: PatternId,
   punched: ReadonlySet<string>,
-): Map<string, number> {
-  const span = end - origin;
-  const slotsByLane = new Map<PatternId, SwitchSlot[]>();
-  const slotByKey = new Map<string, SwitchSlot>();
-  for (const field of from) {
-    if (field.kind !== "switch") continue;
-    const lane = field.path.split(".")[0] as PatternId;
-    if (lock[lane] || (mask && !mask.has(lane)) || punched.has(field.path)) continue;
+): boolean {
+  const prefix = `${lane}.`;
+  for (const field of memoFields(start)) {
+    if (!field.path.startsWith(prefix) || punched.has(field.path)) continue;
     const to = targetFields.get(field.path);
-    if (to === undefined || field.value === to) continue;
-    const group = switchGroup(field.path);
-    const id = `${lane}\0${group}`;
-    let slot = slotByKey.get(id);
-    if (!slot) {
-      slot = { cycle: group === field.path ? cycleOf(lane) : cycleTicks(start, field.path), paths: [] };
-      slotByKey.set(id, slot);
-      const list = slotsByLane.get(lane) ?? [];
-      list.push(slot);
-      slotsByLane.set(lane, list);
-    }
-    slot.paths.push(field.path);
+    if (to !== undefined && field.value !== to) return true;
   }
-  const when = new Map<string, number>();
-  for (const slots of slotsByLane.values()) {
-    const count = slots.length;
-    for (let i = 0; i < count; i += 1) {
-      const at = snapTick(origin + (span * (i + 0.5)) / count, pointsOf(slots[i].cycle));
-      for (const path of slots[i].paths) when.set(path, at);
-    }
+  return false;
+}
+
+/** Color, then chords, then lead, then kick and bass as one joint. Slow gives each lane its own slot. */
+function groupsFor(transition: TransitionId, moving: ReadonlySet<PatternId>): PatternId[][] {
+  const take = (lane: PatternId) => moving.has(lane);
+  const foundation = (["kick", "bass"] as const).filter(take);
+  if (transition === "fast") {
+    const first = [...COLOR.filter(take), ...((["chords"] as const).filter(take))];
+    const second = [...((["lead"] as const).filter(take)), ...foundation];
+    return [first, second].filter((group) => group.length > 0);
   }
-  return when;
+  if (transition === "slow") {
+    const slots: PatternId[][] = [];
+    for (const lane of SLOW_ORDER) if (take(lane)) slots.push([lane]);
+    if (foundation.length) slots.push([...foundation]);
+    return slots;
+  }
+  const slots: PatternId[][] = [];
+  const color = COLOR.filter(take);
+  if (color.length) slots.push(color);
+  if (take("chords")) slots.push(["chords"]);
+  if (take("lead")) slots.push(["lead"]);
+  if (foundation.length) slots.push([...foundation]);
+  return slots;
 }
 
-interface MorphWrite {
-  tick: number;
-  path: string;
-  value: number;
-  lane: PatternId;
+function allocate(origin: number, end: number, bar: number, beat: number, count: number, fast: boolean): Array<[number, number]> {
+  if (count <= 1) return [[origin, end]];
+  if (fast) {
+    const mid = origin + Math.round((end - origin) / 2 / beat) * beat;
+    const split = Math.min(end - beat, Math.max(origin + beat, mid));
+    return [[origin, split], [split, end]];
+  }
+  const bars = Math.max(1, Math.round((end - origin) / bar));
+  if (count > bars) {
+    const spans: Array<[number, number]> = [];
+    let cursor = origin;
+    const slice = Math.max(beat, Math.floor((end - origin) / count / beat) * beat);
+    for (let i = 0; i < count; i++) {
+      const slotEnd = i === count - 1 ? end : Math.min(end, cursor + slice);
+      spans.push([cursor, slotEnd]);
+      cursor = slotEnd;
+    }
+    return spans;
+  }
+  const base = Math.floor(bars / count);
+  const extra = bars % count;
+  const spans: Array<[number, number]> = [];
+  let cursor = origin;
+  for (let i = 0; i < count; i++) {
+    const n = base + (i >= count - extra ? 1 : 0);
+    const slotEnd = i === count - 1 ? end : cursor + n * bar;
+    spans.push([cursor, slotEnd]);
+    cursor = slotEnd;
+  }
+  return spans;
 }
 
-interface MorphSchedule {
-  target: Lanes;
-  lock: Project["lock"];
-  punched: string;
-  mask: string;
-  bar: number;
-  phrase: number;
-  origin: number;
-  duration: number;
-  writes: readonly MorphWrite[];
+function dipCommit(start: number, end: number, beat: number, origin: number, joint: boolean): number {
+  if (joint) {
+    const last = end - beat;
+    if (last > start && last < end) return last;
+  }
+  const mid = start + (end - start) / 2;
+  let snapped = origin + Math.round((mid - origin) / beat) * beat;
+  if (snapped <= start) snapped = start + beat;
+  if (snapped >= end) snapped = end - beat;
+  if (snapped <= start || snapped >= end) return mid;
+  return snapped;
 }
 
-/** One schedule per start snapshot. The morph object itself is replaced on every step. */
-const schedules = new WeakMap<Lanes, MorphSchedule>();
-
-function scheduleKey(punched: ReadonlySet<string>, morph: MorphState): { punched: string; mask: string } {
-  let punchedKey = "";
-  for (const path of punched) punchedKey += punchedKey ? `\0${path}` : path;
-  const mask = morph.lanes ? morph.lanes.join("\0") : "*";
-  return { punched: punchedKey, mask };
-}
-
-function buildSchedule(
-  start: Lanes,
-  target: Lanes,
+function buildPlan(
   morph: MorphState,
-  global: GlobalSettings,
-  punched: ReadonlySet<string>,
+  target: Lanes,
   lock: Project["lock"],
-): readonly MorphWrite[] {
-  const from = memoFields(start);
+  global: GlobalSettings,
+  transition: TransitionId,
+): MorphPlan {
+  const punched = new Set(morph.punched);
+  const mask = morph.lanes ? new Set(morph.lanes) : null;
   const targetFields = new Map(memoFields(target).map((field) => [field.path, field.value]));
+  const moving = new Set<PatternId>();
+  for (const lane of PATTERN_LANES) {
+    if (lock[lane] || (mask && !mask.has(lane))) continue;
+    if (laneMoves(morph.start, targetFields, lane, punched)) moving.add(lane);
+  }
   const origin = morph.originTick;
   const end = origin + Math.max(0, morph.durationTicks);
-  const mask = morph.lanes ? new Set(morph.lanes) : null;
-  const span = end - origin;
   const beat = PPQN;
   const bar = ticksPerBar(global.bar);
-  const laneCycle = new Map<PatternId, number>();
-  const grids = new Map<number, readonly number[]>();
-  const cycleOf = (lane: PatternId): number => {
-    let cycle = laneCycle.get(lane);
-    if (cycle === undefined) {
-      cycle = generatorCycleTicks(start, lane, global);
-      laneCycle.set(lane, cycle);
-    }
-    return cycle;
-  };
-  const pointsOf = (cycle: number): readonly number[] => {
-    const key = Math.max(1, Math.round(cycle));
-    let points = grids.get(key);
-    if (!points) {
-      points = span <= 0 ? [origin] : gridPoints(origin, end, gridQuanta(key, beat, bar));
-      grids.set(key, points);
-    }
-    return points;
-  };
-  const when = span <= 0 ? new Map<string, number>() : switchTicks(start, from, targetFields, origin, end, pointsOf, cycleOf, lock, mask, punched);
-  const marksByLane = new Map<PatternId, readonly number[]>();
-  const marksOf = (lane: PatternId): readonly number[] => {
-    let marks = marksByLane.get(lane);
-    if (!marks) {
-      marks = span <= 0 ? [origin, origin, origin, origin] : lerpMarks(origin, end, pointsOf(cycleOf(lane)));
-      marksByLane.set(lane, marks);
-    }
-    return marks;
-  };
-  const writes: MorphWrite[] = [];
-  for (const field of from) {
-    const lane = field.path.split(".")[0] as PatternId;
-    if (lock[lane] || (mask && !mask.has(lane)) || punched.has(field.path)) continue;
-    const to = targetFields.get(field.path);
-    if (to === undefined || field.value === to) continue;
-    if (span <= 0) {
-      writes.push({ tick: origin, path: field.path, value: to, lane });
-      continue;
-    }
-    if (field.kind === "lerp") {
-      const marks = marksOf(lane);
-      let prev = field.value;
-      let seen = Number.NaN;
-      for (const mark of marks) {
-        if (mark === seen) continue;
-        seen = mark;
-        const value = lerpAt(field.value, to, mark, marks);
-        if (value === prev) continue;
-        writes.push({ tick: mark, path: field.path, value, lane });
-        prev = value;
-      }
-      continue;
-    }
-    writes.push({ tick: when.get(field.path) ?? end, path: field.path, value: to, lane });
+  const commits: LaneCommit[] = [];
+  const handoffs: LaneHandoff[] = [];
+  if (end <= origin) {
+    for (const lane of moving) commits.push({ lane, tick: origin });
+    return { lock, target, bar: global.bar, transition, punched: punchedKey(morph.punched), commits, handoffs };
   }
-  writes.sort((a, b) => a.tick - b.tick);
-  return writes;
+  const groups = groupsFor(transition, moving);
+  const spans = allocate(origin, end, bar, beat, Math.max(1, groups.length), transition === "fast");
+  groups.forEach((group, index) => {
+    const [start, slotEnd] = spans[index] ?? [origin, end];
+    const joint = transition === "fast" && group.some((lane) => lane === "kick" || lane === "bass") && slotEnd === end && start > origin;
+    for (const lane of group) {
+      const from = laneSpeaks(morph.start, lane);
+      const to = laneSpeaks(target, lane);
+      if (from && to) {
+        const commitTick = dipCommit(start, slotEnd, beat, origin, joint);
+        commits.push({ lane, tick: commitTick });
+        handoffs.push({ lane, kind: "dip", startTick: start, commitTick, endTick: slotEnd });
+      } else if (!from && to) {
+        commits.push({ lane, tick: start });
+        handoffs.push({ lane, kind: "in", startTick: start, commitTick: start, endTick: slotEnd });
+      } else if (from && !to) {
+        commits.push({ lane, tick: slotEnd });
+        handoffs.push({ lane, kind: "out", startTick: start, commitTick: slotEnd, endTick: slotEnd });
+      } else {
+        commits.push({ lane, tick: start });
+      }
+    }
+  });
+  commits.sort((a, b) => a.tick - b.tick);
+  return { lock, target, bar: global.bar, transition, punched: punchedKey(morph.punched), commits, handoffs };
 }
 
-function scheduleFor(
-  start: Lanes,
-  target: Lanes,
-  morph: MorphState,
-  global: GlobalSettings,
-  punched: ReadonlySet<string>,
-  lock: Project["lock"],
-): MorphSchedule {
-  const key = scheduleKey(punched, morph);
-  const cached = schedules.get(start);
+function planFor(project: Project, morph: MorphState, target: Lanes): MorphPlan {
+  const cached = plans.get(morph);
+  const punched = punchedKey(morph.punched);
   if (
     cached
+    && cached.lock === project.lock
     && cached.target === target
-    && cached.lock === lock
-    && cached.punched === key.punched
-    && cached.mask === key.mask
-    && cached.bar === global.bar
-    && cached.phrase === global.phrase
-    && cached.origin === morph.originTick
-    && cached.duration === morph.durationTicks
+    && cached.bar === project.global.bar
+    && cached.transition === project.transition
+    && cached.punched === punched
   ) return cached;
-  const schedule: MorphSchedule = {
-    target,
-    lock,
-    punched: key.punched,
-    mask: key.mask,
-    bar: global.bar,
-    phrase: global.phrase,
-    origin: morph.originTick,
-    duration: morph.durationTicks,
-    writes: buildSchedule(start, target, morph, global, punched, lock),
-  };
-  schedules.set(start, schedule);
-  return schedule;
+  const plan = buildPlan(morph, target, project.lock, project.global, project.transition);
+  plans.set(morph, plan);
+  return plan;
 }
 
-export function mergeLanes(
-  start: Lanes,
-  target: Lanes,
-  current: Lanes,
-  tick: number,
-  morph: MorphState,
-  global: GlobalSettings,
-  punched: ReadonlySet<string>,
-  lock: Project["lock"],
-): Lanes {
-  const end = morph.originTick + Math.max(0, morph.durationTicks);
-  const writes = scheduleFor(start, target, morph, global, punched, lock).writes;
-  morphNextTick = end;
-  const due: MorphWrite[] = [];
-  const dirty = new Set<PatternId>();
-  for (const write of writes) {
-    if (write.tick > tick) {
-      morphNextTick = write.tick;
-      break;
-    }
-    if (getPath(current, write.path) === write.value) continue;
-    dirty.add(write.lane);
-    due.push(write);
-  }
-  if (dirty.size === 0) return current;
+/** Fade curves for the voice. Empty when nothing is crossing, including a zero-length cut. */
+export function morphHandoffs(project: Project): readonly LaneHandoff[] {
+  const morph = project.morph;
+  if (!morph || morph.durationTicks <= 0) return [];
+  const target = project.journal.find((scene) => scene.id === morph.targetId);
+  if (!target) return [];
+  return planFor(project, morph, target.lanes).handoffs;
+}
+
+function commitLanes(current: Lanes, target: Lanes, lanes: readonly PatternId[], punched: readonly string[]): Lanes {
+  if (!lanes.length) return current;
   const next: Lanes = { ...current };
-  for (const lane of dirty) copyLane(next, current, lane);
-  for (const write of due) setPath(next, write.path, write.value);
+  const keep = new Set(punched);
+  for (const lane of lanes) {
+    copyLane(next, target, lane);
+    const prefix = `${lane}.`;
+    for (const path of keep) {
+      if (!path.startsWith(prefix)) continue;
+      setPath(next, path, getPath(current, path));
+    }
+  }
   return next;
 }
 
-/** Filled by the last `mergeLanes` call. Idle morph ticks sleep until here. */
-let morphNextTick = 0;
+function dueLanes(commits: readonly LaneCommit[], tick: number): PatternId[] {
+  const lanes: PatternId[] = [];
+  const seen = new Set<PatternId>();
+  for (const commit of commits) {
+    if (commit.tick > tick || seen.has(commit.lane)) continue;
+    seen.add(commit.lane);
+    lanes.push(commit.lane);
+  }
+  return lanes;
+}
+
+function nextCommit(commits: readonly LaneCommit[], tick: number, end: number): number {
+  for (const commit of commits) if (commit.tick > tick) return commit.tick;
+  return end;
+}
 
 export function applyMorph(project: Project, tick: number): Project {
   const morph = project.morph;
@@ -343,27 +308,30 @@ export function applyMorph(project: Project, tick: number): Project {
     nextApply.delete(morph);
     return { ...project, morph: null };
   }
-  const t = morphProgress(morph, tick);
-  const punched = new Set(morph.punched);
-  const working = mergeLanes(morph.start, target.lanes, project.working, tick, morph, project.global, punched, project.lock);
-  const done = tick >= morph.originTick && t >= 1;
-  if (!done) {
-    if (working === project.working) {
-      nextApply.set(morph, morphNextTick);
-      return project;
-    }
-    const stepped = { ...morph, t };
-    nextApply.set(stepped, morphNextTick);
-    return { ...project, working, morph: stepped };
+  if (tick < morph.originTick) {
+    nextApply.set(morph, morph.originTick);
+    return project;
   }
-  nextApply.delete(morph);
-  return {
-    ...project,
-    working,
-    morph: null,
-    activeSceneId: target.id,
-    wanderPreviousTarget: target.id,
-  };
+  const plan = planFor(project, morph, target.lanes);
+  const lanes = dueLanes(plan.commits, tick);
+  const working = commitLanes(project.working, target.lanes, lanes, morph.punched);
+  if (tick >= end) {
+    nextApply.delete(morph);
+    return {
+      ...project,
+      working,
+      morph: null,
+      activeSceneId: target.id,
+      wanderPreviousTarget: target.id,
+    };
+  }
+  if (working === project.working) {
+    nextApply.set(morph, nextCommit(plan.commits, tick, end));
+    return project;
+  }
+  const stepped = { ...morph, t: morphProgress(morph, tick) };
+  nextApply.set(stepped, nextCommit(plan.commits, tick, end));
+  return { ...project, working, morph: stepped };
 }
 
 export function retarget(project: Project, scene: Scene, tick: number, lanes: PatternId[] | null = null): Project {

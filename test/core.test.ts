@@ -4,7 +4,7 @@ import { clone } from "../src/core/clone.ts";
 import { sampleOffset, SIXTEENTH_TICKS, unitForIndex } from "../src/core/clock.ts";
 import { defaultProject } from "../src/core/defaults.ts";
 import { euclidPattern, phraseStepsOf } from "../src/core/events.ts";
-import { applyMorph } from "../src/core/morph.ts";
+import { applyMorph, handoffGain, morphHandoffs } from "../src/core/morph.ts";
 import { motif, MOTIF_COUNT } from "../src/core/motif.ts";
 import { evalModulated, modulated, voiceLane } from "../src/core/modulate.ts";
 import {
@@ -550,8 +550,10 @@ describe("morph, journal, macros", () => {
     assert.equal(applyMorph(project, 1), project);
   });
 
-  it("spreads switch knobs across the window and keeps a modulator's pattern with its cycle", () => {
+  it("commits a lane in one dip and keeps a modulator's pattern with its cycle", () => {
     let project = defaultProject();
+    project.working.kick.gen1.hits = 1;
+    project.working.kick.gen2.hits = 0;
     project = punch(project, "kick.gen1.velocity.value", 0);
     project = punch(project, "kick.ratchet.count.pattern", 2);
     project = punch(project, "kick.sound.decay.pattern", 1);
@@ -570,39 +572,79 @@ describe("morph, journal, macros", () => {
     project = launchScene(project, "002", 0);
     const duration = 4 * 192;
     assert.equal(project.morph?.durationTicks, duration);
-    const before = applyMorph(project, SIXTEENTH_TICKS - 1);
-    assert.equal(before.working.kick.ratchet.count.pattern, 2);
-    assert.equal(before.working.kick.ratchet.count.cycle, 1);
+    const fade = morphHandoffs(project).find((item) => item.lane === "kick");
+    assert.ok(fade);
+    assert.equal(fade.kind, "dip");
+    assert.ok(Math.abs(handoffGain(fade, fade.startTick) - 1) < 1e-9);
+    assert.ok(handoffGain(fade, fade.commitTick) < 1e-6);
+    assert.ok(Math.abs(handoffGain(fade, fade.endTick) - 1) < 1e-9);
+    const before = applyMorph(project, fade.commitTick - 1);
+    assert.equal(before, project);
     assert.equal(before.working.kick.gen1.velocity.value, 0);
-    const held = applyMorph(project, 191);
-    assert.equal(held.working.kick.gen1.velocity.value, 0);
-    assert.equal(held.working.kick.ratchet.count.pattern, 2);
-    const atBeat = applyMorph(held, 192);
-    assert.equal(atBeat.working.kick.gen1.velocity.value, 1);
-    assert.equal(atBeat.working.kick.ratchet.count.pattern, 2);
-    assert.equal(atBeat.working.kick.sound.decay.value, 0.25);
-    const quarter = applyMorph(project, duration / 4);
-    assert.equal(quarter.working.kick.sound.decay.value, 0.25);
-    const half = applyMorph(project, duration / 2);
-    assert.equal(half.working.kick.sound.decay.value, 0.5);
-    assert.equal(half.working.kick.gen1.velocity.value, 1);
-    assert.equal(half.working.kick.ratchet.count.pattern, 10);
-    assert.equal(half.working.kick.ratchet.count.cycle, 4);
-    assert.equal(half.working.kick.sound.decay.pattern, 1);
-    assert.equal(half.working.kick.sound.decay.cycle, 64);
-    assert.deepEqual(kickSig(generatePhrase(half)), kickSig(generatePhrase({ ...half, morph: null })));
-    const pattern = applyMorph(project, 576);
-    assert.equal(pattern.working.kick.sound.decay.pattern, 8);
-    assert.equal(pattern.working.kick.sound.decay.cycle, 4);
-    assert.equal(pattern.working.kick.sound.decay.value, 0.75);
+    assert.equal(before.working.kick.ratchet.count.pattern, 2);
+    assert.equal(before.working.kick.sound.decay.value, 0);
+    assert.equal(before.working.kick.sound.decay.pattern, 1);
+    const committed = applyMorph(project, fade.commitTick);
+    assert.equal(committed.working.kick.gen1.velocity.value, 1);
+    assert.equal(committed.working.kick.ratchet.count.pattern, 10);
+    assert.equal(committed.working.kick.ratchet.count.cycle, 4);
+    assert.equal(committed.working.kick.sound.decay.pattern, 8);
+    assert.equal(committed.working.kick.sound.decay.cycle, 4);
+    assert.equal(committed.working.kick.sound.decay.value, 1);
+    assert.deepEqual(kickSig(generatePhrase(committed)), kickSig(generatePhrase({ ...committed, morph: null })));
     const done = applyMorph(project, duration);
     assert.equal(done.morph, null);
     assert.equal(done.activeSceneId, "002");
-    assert.equal(done.working.kick.gen1.velocity.value, 1);
-    assert.equal(done.working.kick.ratchet.count.pattern, 10);
-    assert.equal(done.working.kick.sound.decay.pattern, 8);
-    assert.equal(done.working.kick.sound.decay.cycle, 4);
     assert.equal(done.working.kick.sound.decay.value, 1);
+  });
+
+  it("fades a silent lane in and a leaving lane out, and gives slow lanes their own bars", () => {
+    let project = defaultProject();
+    project.working.hat.gen1.hits = 4;
+    project.working.kick.gen1.hits = 0;
+    project.working.kick.gen2.hits = 0;
+    project = record(project);
+    project.working.hat.gen1.hits = 0;
+    project.working.kick.gen1.hits = 4;
+    project = record(project);
+    project.working = clone(project.journal[0].lanes);
+    project.transition = "medium";
+    project = launchScene(project, "002", 0);
+    const hat = morphHandoffs(project).find((item) => item.lane === "hat");
+    const kick = morphHandoffs(project).find((item) => item.lane === "kick");
+    assert.ok(hat && kick);
+    assert.equal(hat.kind, "out");
+    assert.equal(kick.kind, "in");
+    assert.ok(hat.endTick <= kick.startTick);
+    assert.equal(handoffGain(hat, hat.startTick), 1);
+    assert.equal(handoffGain(hat, hat.endTick), 0);
+    assert.equal(handoffGain(kick, kick.startTick), 0);
+    assert.ok(Math.abs(handoffGain(kick, kick.endTick) - 1) < 1e-9);
+    const quiet = applyMorph(project, kick.commitTick);
+    assert.equal(quiet.working.kick.gen1.hits, 4);
+    assert.equal(handoffGain(kick, kick.commitTick), 0);
+    const gone = applyMorph(project, hat.commitTick);
+    assert.equal(gone.working.hat.gen1.hits, 0);
+
+    project = defaultProject();
+    project.working.hat.gen1.hits = 2;
+    project.working.lead.gen1.hits = 2;
+    project.working.bass.gen1.hits = 2;
+    project = record(project);
+    project.working.hat.gen1.hits = 5;
+    project.working.lead.gen1.hits = 5;
+    project.working.bass.gen1.hits = 5;
+    project = record(project);
+    project.working = clone(project.journal[0].lanes);
+    project.transition = "slow";
+    project = launchScene(project, "002", 0);
+    const fades = morphHandoffs(project);
+    const order = fades.map((item) => item.lane);
+    assert.deepEqual(order, ["hat", "lead", "bass"]);
+    assert.ok(fades[0].endTick <= fades[1].startTick);
+    assert.ok(fades[1].endTick <= fades[2].startTick);
+    const bar = 4 * 192;
+    assert.ok(fades[0].endTick - fades[0].startTick >= bar);
   });
 
   it("advance lands a saved scene once the clock reaches it", () => {
@@ -630,6 +672,10 @@ describe("morph, journal, macros", () => {
 
   it("retargets from the interpolated state and leaves locked lanes alone", () => {
     let project = defaultProject();
+    project.working.snare.gen1.hits = 1;
+    project.working.snare.gen2.hits = 0;
+    project.working.kick.gen1.hits = 1;
+    project.working.kick.gen2.hits = 0;
     project = punch(project, "snare.gen1.velocity.value", 0);
     project = punch(project, "snare.sound.bodyDecay.value", 0);
     project = record(project);
@@ -644,11 +690,14 @@ describe("morph, journal, macros", () => {
     project.working.kick.gen1.velocity.value = 0;
     project.transition = "slow";
     project = launchScene(project, "002", 0);
-    project = applyMorph(project, 2 * 4 * 192);
+    const snare = morphHandoffs(project).find((item) => item.lane === "snare");
+    assert.ok(snare);
+    project = applyMorph(project, snare.commitTick - 1);
     assert.equal(project.working.snare.gen1.velocity.value, 0);
-    assert.ok(Math.abs(project.working.snare.sound.bodyDecay.value - 0.25) < 1e-9);
+    assert.equal(project.working.snare.sound.bodyDecay.value, 0);
+    assert.equal(project.working.kick.gen1.velocity.value, 0);
     project.lock.kick = true;
-    project = launchScene(project, "003", 2 * 192);
+    project = launchScene(project, "003", snare.commitTick - 1);
     assert.equal(project.morph?.start.snare.gen1.velocity.value, project.working.snare.gen1.velocity.value);
     const finished = applyMorph(project, project.morph!.originTick + project.morph!.durationTicks);
     assert.equal(finished.working.kick.gen1.velocity.value, 0);
@@ -719,24 +768,23 @@ describe("morph, journal, macros", () => {
     project.transition = "medium";
     project = launchScene(project, "002", 0);
     const duration = project.morph?.durationTicks ?? 0;
-    const loop = phraseStepsOf(project.morph!.start.kick.gen1, project.morph!.start.kick.gen2) * SIXTEENTH_TICKS;
+    const kick = morphHandoffs(project).find((item) => item.lane === "kick");
+    assert.ok(kick);
     const start = generatePhrase({ ...project, morph: null, working: project.morph!.start });
     const goal = generatePhrase({ ...project, morph: null, working: project.journal[1].lanes });
     assert.notDeepEqual(kickSig(start), kickSig(goal));
-    const before = applyMorph(project, loop - 1);
+    const before = applyMorph(project, kick.commitTick - 1);
     assert.equal(before.working.kick.gen1.hits, 4);
+    assert.equal(before.working.kick.gen1.rotate, 0);
     assert.equal(before.working.kick.sound.decay.value, 0);
     assert.deepEqual(kickSig(generatePhrase(before)), kickSig(start));
     assert.deepEqual(generatePhrase(before).harmony.map((event) => event.root), start.harmony.map((event) => event.root));
-    const after = applyMorph(project, loop);
+    const after = applyMorph(project, kick.commitTick);
     assert.equal(after.working.kick.gen1.hits, 7);
-    assert.equal(after.working.kick.gen1.rotate, 0);
-    assert.equal(after.working.kick.sound.decay.value, 0.25);
+    assert.equal(after.working.kick.gen1.rotate, 3);
+    assert.equal(after.working.kick.sound.decay.value, 1);
+    assert.ok(after.morph);
     assert.deepEqual(kickSig(generatePhrase(after)), kickSig(generatePhrase({ ...after, morph: null })));
-    const later = applyMorph(project, loop * 3);
-    assert.equal(later.working.kick.gen1.hits, 7);
-    assert.equal(later.working.kick.gen1.rotate, 3);
-    assert.ok(later.morph);
     const done = applyMorph(project, duration);
     assert.equal(done.morph, null);
     assert.equal(done.progression.start, 3);
@@ -745,7 +793,7 @@ describe("morph, journal, macros", () => {
     assert.deepEqual(generatePhrase(done).harmony.map((event) => event.root), start.harmony.map((event) => event.root));
   });
 
-  it("steps decay in quarters and hands length before rotate", () => {
+  it("commits length, rotate and decay together once the lane has dipped", () => {
     let project = defaultProject();
     project.working.kick.gen1.length = 16;
     project.working.kick.gen1.hits = 1;
@@ -763,21 +811,19 @@ describe("morph, journal, macros", () => {
     project.working = clone(project.journal[0].lanes);
     project.transition = "medium";
     project = launchScene(project, "002", 0);
-    const loop = 16 * SIXTEENTH_TICKS;
-    const before = applyMorph(project, loop - 1);
+    const kick = morphHandoffs(project).find((item) => item.lane === "kick");
+    assert.ok(kick);
+    const before = applyMorph(project, kick.commitTick - 1);
     assert.equal(before.working.kick.gen1.length, 16);
+    assert.equal(before.working.kick.gen1.rotate, 0);
     assert.equal(generatePhrase(before).steps.kick, 16);
     assert.equal(generatePhrase(before).lanes.kick[0]?.sound.decay, 0);
-    const at = applyMorph(project, loop);
+    const at = applyMorph(project, kick.commitTick);
     assert.equal(at.working.kick.gen1.length, 12);
-    assert.equal(at.working.kick.gen1.rotate, 0);
+    assert.equal(at.working.kick.gen1.rotate, 4);
     assert.equal(generatePhrase(at).steps.kick, 12);
-    assert.ok(Math.abs((generatePhrase(at).lanes.kick[0]?.sound.decay ?? -1) - 0.25) < 1e-9);
-    const turned = applyMorph(project, loop * 3);
-    assert.equal(turned.working.kick.gen1.length, 12);
-    assert.equal(turned.working.kick.gen1.rotate, 4);
-    const half = applyMorph(project, (project.morph?.durationTicks ?? 0) / 2);
-    assert.ok(Math.abs(half.working.kick.sound.decay.value - 0.5) < 1e-9);
+    assert.ok(Math.abs((generatePhrase(at).lanes.kick[0]?.sound.decay ?? -1) - 1) < 1e-9);
+    assert.ok(handoffGain(kick, kick.commitTick) < 1e-6);
   });
 
   it("does not morph a locked lane or a punched sound", () => {
@@ -810,7 +856,7 @@ describe("morph, journal, macros", () => {
     assert.ok(punched.lanes.kick.every((event) => Math.abs(event.sound.decay - 0.2) < 1e-6));
   });
 
-  it("spreads bass hits, rotate and pitch across the morph", () => {
+  it("commits bass hits, rotate and pitch together", () => {
     let project = defaultProject();
     project.global.phrase = 1;
     project.working.bass.gen1 = { ...project.working.bass.gen1, length: 16, hits: 2, rotate: 0, probability: 1 };
@@ -826,28 +872,23 @@ describe("morph, journal, macros", () => {
     const start = generatePhrase({ ...project, morph: null, working: project.morph!.start });
     const goal = generatePhrase({ ...project, morph: null, working: project.journal[1].lanes });
     assert.notDeepEqual(noteSig(start, "bass"), noteSig(goal, "bass"));
-    const before = applyMorph(project, 575);
+    const bass = morphHandoffs(project).find((item) => item.lane === "bass");
+    assert.ok(bass);
+    const before = applyMorph(project, bass.commitTick - 1);
     assert.equal(before.working.bass.pitch.value, 0.2);
     assert.equal(before.working.bass.gen1.hits, 2);
     assert.equal(before.working.bass.gen1.rotate, 0);
     assert.deepEqual(noteSig(generatePhrase(before), "bass"), noteSig(start, "bass"));
-    const hits = applyMorph(project, 576);
-    assert.equal(hits.working.bass.gen1.hits, 8);
-    assert.equal(hits.working.bass.gen1.rotate, 0);
-    assert.equal(hits.working.bass.pitch.value, 0.2);
-    assert.deepEqual(noteSig(generatePhrase(hits), "bass"), noteSig(generatePhrase({ ...hits, morph: null }), "bass"));
-    assert.ok(hits.morph);
-    const turned = applyMorph(project, 1536);
-    assert.equal(turned.working.bass.gen1.rotate, 3);
-    assert.equal(turned.working.bass.pitch.value, 0.2);
-    const pitched = applyMorph(project, 2496);
-    assert.equal(pitched.working.bass.pitch.value, 0.9);
-    assert.equal(pitched.working.bass.gen1.hits, 8);
-    assert.deepEqual(noteSig(generatePhrase(pitched), "bass"), noteSig(goal, "bass"));
-    assert.ok(pitched.morph);
+    const handed = applyMorph(project, bass.commitTick);
+    assert.equal(handed.working.bass.gen1.hits, 8);
+    assert.equal(handed.working.bass.gen1.rotate, 3);
+    assert.equal(handed.working.bass.pitch.value, 0.9);
+    assert.deepEqual(noteSig(generatePhrase(handed), "bass"), noteSig(goal, "bass"));
+    assert.ok(handed.morph);
+    assert.ok(handoffGain(bass, bass.commitTick) < 1e-6);
   });
 
-  it("hands note velocity before pitch", () => {
+  it("commits note velocity and pitch together, while the lane is quiet", () => {
     let project = defaultProject();
     project.working.bass.gen1 = { ...project.working.bass.gen1, length: 16, hits: 1, rotate: 0, probability: 1 };
     project.working.bass.gen2.hits = 0;
@@ -871,23 +912,26 @@ describe("morph, journal, macros", () => {
     const destHit = goal.lanes.bass.find((event) => event.tick === 0);
     assert.ok(sourceHit && destHit && sourceHit.note !== destHit.note);
     assert.notEqual(sourceHit.velocity, destHit.velocity);
-    const early = applyMorph(project, duration * 0.25);
-    const late = applyMorph(project, duration * 0.95);
-    assert.equal(early.working.bass.gen1.velocity.value, 0.9);
+    const bass = morphHandoffs(project).find((item) => item.lane === "bass");
+    assert.ok(bass);
+    const early = applyMorph(project, bass.commitTick - 1);
+    const late = applyMorph(project, bass.commitTick);
+    assert.equal(early.working.bass.gen1.velocity.value, 0.4);
     assert.equal(early.working.bass.pitch.value, 0.2);
     assert.equal(late.working.bass.gen1.velocity.value, 0.9);
     assert.equal(late.working.bass.pitch.value, 0.9);
     assert.equal(generatePhrase(early).lanes.bass.find((event) => event.tick === 0)?.note, sourceHit.note);
-    assert.equal(generatePhrase(early).lanes.bass.find((event) => event.tick === 0)?.velocity, destHit.velocity);
+    assert.equal(generatePhrase(early).lanes.bass.find((event) => event.tick === 0)?.velocity, sourceHit.velocity);
     assert.equal(generatePhrase(late).lanes.bass.find((event) => event.tick === 0)?.note, destHit.note);
     assert.equal(generatePhrase(late).lanes.bass.find((event) => event.tick === 0)?.velocity, destHit.velocity);
+    assert.ok(handoffGain(bass, bass.commitTick) < 1e-6);
     const done = applyMorph(project, duration);
     assert.equal(done.working.bass.gen1.velocity.value, 0.9);
     assert.equal(generatePhrase(done).lanes.bass.find((event) => event.tick === 0)?.note, destHit.note);
     assert.equal(generatePhrase(done).lanes.bass.find((event) => event.tick === 0)?.velocity, destHit.velocity);
   });
 
-  it("steps timbre in quarters while pattern knobs arrive on their own beats", () => {
+  it("fades lead before kick and bass, and commits each lane in one step", () => {
     const project = morphPair(
       (item) => {
         item.working.bass.pitch.value = 0.2;
@@ -899,6 +943,10 @@ describe("morph, journal, macros", () => {
         item.working.bass.filter.cutoff.amount = 0;
         item.working.bass.sound.wide.value = 0;
         item.working.bass.sound.wide.amount = 0;
+        item.working.kick.gen1.hits = 1;
+        item.working.kick.gen2.hits = 0;
+        item.working.lead.gen1.hits = 1;
+        item.working.lead.gen2.hits = 0;
         item.working.kick.sound.pitch.value = 0.15;
         item.working.kick.sound.pitch.amount = 0;
         item.working.lead.pitch.value = 0.25;
@@ -915,6 +963,10 @@ describe("morph, journal, macros", () => {
         item.working.bass.filter.cutoff.amount = 0;
         item.working.bass.sound.wide.value = 1;
         item.working.bass.sound.wide.amount = 0;
+        item.working.kick.gen1.hits = 1;
+        item.working.kick.gen2.hits = 0;
+        item.working.lead.gen1.hits = 1;
+        item.working.lead.gen2.hits = 0;
         item.working.kick.sound.pitch.value = 0.85;
         item.working.kick.sound.pitch.amount = 0;
         item.working.lead.pitch.value = 0.85;
@@ -923,31 +975,36 @@ describe("morph, journal, macros", () => {
       },
     );
     const duration = project.morph?.durationTicks ?? 0;
+    const lead = morphHandoffs(project).find((item) => item.lane === "lead");
+    const bass = morphHandoffs(project).find((item) => item.lane === "bass");
+    const kick = morphHandoffs(project).find((item) => item.lane === "kick");
+    assert.ok(lead && bass && kick);
+    assert.ok(lead.commitTick < bass.commitTick);
+    assert.equal(bass.commitTick, kick.commitTick);
+    assert.ok(lead.endTick <= bass.startTick);
     const start = generatePhrase({ ...project, morph: null, working: project.morph!.start });
-    const riding = applyMorph(project, duration * 0.25);
-    assert.equal(riding.working.bass.gen1.hits, 6);
+    const riding = applyMorph(project, lead.commitTick);
+    assert.equal(riding.working.lead.pitch.value, 0.85);
+    assert.equal(riding.working.bass.gen1.hits, 3);
     assert.equal(riding.working.bass.pitch.value, 0.2);
-    assert.equal(riding.working.bass.octave.value, 0.2);
     assert.equal(riding.working.bass.follow, 0);
-    assert.equal(riding.working.bass.gen1.probability, 0.7);
-    assert.ok(Math.abs(riding.working.bass.sound.wide.value - 0.25) < 1e-9);
-    assert.ok(Math.abs(riding.working.kick.sound.pitch.value - 0.325) < 1e-9);
+    assert.equal(riding.working.bass.sound.wide.value, 0);
+    assert.equal(riding.working.kick.sound.pitch.value, 0.15);
     const early = generatePhrase(riding);
-    assert.deepEqual(noteSig(early, "bass"), noteSig(generatePhrase({ ...riding, morph: null }), "bass"));
-    assert.notDeepEqual(noteSig(early, "bass"), noteSig(start, "bass"));
-    assert.deepEqual(noteSig(early, "lead"), noteSig(start, "lead"));
-    assert.ok(early.lanes.bass.every((event) => Math.abs(event.filter.cutoff - 0.25) < 1e-6));
-    assert.ok(early.lanes.kick.every((event) => Math.abs(event.sound.pitch - 0.325) < 1e-6));
-    const late = applyMorph(project, duration * 0.75);
+    assert.deepEqual(noteSig(early, "bass"), noteSig(start, "bass"));
+    assert.notDeepEqual(noteSig(early, "lead"), noteSig(start, "lead"));
+    assert.ok(early.lanes.bass.every((event) => Math.abs(event.filter.cutoff) < 1e-6));
+    const late = applyMorph(project, bass.commitTick);
+    assert.equal(late.working.bass.gen1.hits, 6);
     assert.equal(late.working.bass.pitch.value, 0.9);
-    assert.equal(late.working.bass.follow, 0);
-    assert.ok(Math.abs(late.working.bass.sound.wide.value - 0.75) < 1e-9);
+    assert.equal(late.working.bass.follow, 1);
+    assert.equal(late.working.bass.sound.wide.value, 1);
+    assert.equal(late.working.kick.sound.pitch.value, 0.85);
+    assert.equal(late.progression.start, 4);
     const done = applyMorph(project, duration);
     assert.equal(done.morph, null);
     assert.equal(done.progression.start, 4);
     assert.equal(done.working.bass.pitch.value, 0.9);
-    assert.equal(done.working.bass.follow, 1);
-    assert.equal(done.working.bass.sound.wide.value, 1);
     assert.equal(done.working.kick.sound.pitch.value, 0.85);
   });
 
@@ -2487,8 +2544,14 @@ describe("randomize, wander, sets", () => {
     project.transition = "fast";
     project = launchScene(project, "002", 0);
     const duration = project.morph?.durationTicks ?? 0;
-    const mid = applyMorph(project, duration / 2);
-    assert.ok(Math.abs(mid.working.fx.reverb.size - 0.5) < 1e-6);
+    const fx = morphHandoffs(project).find((item) => item.lane === "fx");
+    assert.ok(fx && fx.kind === "dip");
+    const early = applyMorph(project, fx.commitTick - 1);
+    assert.equal(early.working.fx.reverb.size, 0);
+    assert.ok(handoffGain(fx, fx.startTick + (fx.commitTick - fx.startTick) * 0.75) < 0.5);
+    const mid = applyMorph(project, fx.commitTick);
+    assert.equal(mid.working.fx.reverb.size, 1);
+    assert.ok(handoffGain(fx, fx.commitTick) < 1e-6);
     const held = punch(mid, "fx.reverb.size", 0.2);
     const landed = applyMorph(held, duration);
     assert.ok(Math.abs(landed.working.fx.reverb.size - 0.2) < 1e-9);

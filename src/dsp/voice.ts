@@ -87,6 +87,8 @@ export interface Engine {
   notes: NoteVoice[];
   phrase: LoopEvent[];
   motions: Motion[];
+  /** Per-lane fade during a morph. Lane 7 is the fx return. Empty leaves every lane at unity. */
+  gains: GainSpan[];
   clock: number;
   tempo: number;
   beats: number;
@@ -287,6 +289,7 @@ export function createEngine(): Engine {
     notes: Array.from({ length: NOTE_COUNT }, emptyNote),
     phrase: [],
     motions: [],
+    gains: [],
     clock: 0,
     tempo: 120,
     beats: 4,
@@ -373,11 +376,12 @@ export function parseMeterPage(text: string | null): ChannelMeter[] | null {
 }
 
 /** Store a looping phrase. `reset` starts the audio clock at the downbeat. */
-export function loadPhrase(engine: Engine, events: LoopEvent[], tempo: number, reset: boolean, motions: Motion[] = []): void {
+export function loadPhrase(engine: Engine, events: LoopEvent[], tempo: number, reset: boolean, motions: Motion[] = [], gains: GainSpan[] = []): void {
   const sig = holdSig(events);
   const previous = engine.holdSig;
   engine.phrase = events;
   engine.motions = motions;
+  engine.gains = gains;
   engine.tempo = Math.max(1, tempo);
   engine.holdSig = sig;
   bucketMotions(engine, motions);
@@ -438,23 +442,64 @@ export function formatBus(bus: Bus): string {
   return [bus.glue, bus.pump, bus.wide, bus.tilt].map((n) => n.toFixed(4)).join(",");
 }
 
-export function packPhraseBody(events: LoopEvent[], motions: Motion[] = [], fx = "", bus = ""): string {
+/** One lane's fade, in samples on the voice clock. `d` dips through silence, `i` fades in, `o` fades out. */
+export interface GainSpan {
+  lane: number;
+  kind: "d" | "i" | "o";
+  start: number;
+  commit: number;
+  end: number;
+}
+
+export function formatGainSpans(spans: readonly GainSpan[]): string {
+  if (!spans.length) return "";
+  return spans.map((span) => `${span.lane},${span.kind},${span.start},${span.commit},${span.end}`).join(";");
+}
+
+function smoothGain(t: number): number {
+  const x = t < 0 ? 0 : t > 1 ? 1 : t;
+  return x * x * (3 - 2 * x);
+}
+
+function spanGain(span: GainSpan, sample: number): number {
+  const spanLength = span.end - span.start;
+  if (spanLength <= 0) return span.kind === "o" ? 0 : 1;
+  if (sample <= span.start) return span.kind === "i" ? 0 : 1;
+  if (sample >= span.end) return span.kind === "o" ? 0 : 1;
+  if (span.kind === "i") return smoothGain((sample - span.start) / spanLength);
+  if (span.kind === "o") return 1 - smoothGain((sample - span.start) / spanLength);
+  if (sample <= span.commit) {
+    const den = span.commit - span.start;
+    return den <= 0 ? 0 : 1 - smoothGain((sample - span.start) / den);
+  }
+  const den = span.end - span.commit;
+  return den <= 0 ? 1 : smoothGain((sample - span.commit) / den);
+}
+
+function laneGain(engine: Engine, lane: number, sample: number): number {
+  for (const span of engine.gains) if (span.lane === lane) return spanGain(span, sample);
+  return 1;
+}
+
+export function packPhraseBody(events: LoopEvent[], motions: Motion[] = [], fx = "", bus = "", gains = ""): string {
   const body = events.map((event) => {
     const lane = LANES.indexOf(event.lane);
     const params = event.params.map((param) => `${param.id}=${param.value.toFixed(4)}`).join(",");
     return `${event.sample}:${event.loop}:${lane}:${event.note}:${event.velocity}:${event.lengthTicks}:${params}`;
   }).join(";");
+  let packed: string;
   if (!motions.length) {
-    const packed = fx ? `${body}@${fx}` : body;
-    return bus ? `${packed}^${bus}` : packed;
+    packed = fx ? `${body}@${fx}` : body;
+  } else {
+    const tail = motions.map((motion) => {
+      const lane = LANES.indexOf(motion.lane);
+      const head = `${lane}:${motion.id}:${motion.value.toFixed(4)}:${Math.round(motion.pattern)}:${Math.round(motion.cycle)}:${motion.amount.toFixed(4)}:${motion.loop}`;
+      return head;
+    }).join(";");
+    packed = fx ? `${body}#${tail}@${fx}` : `${body}#${tail}`;
   }
-  const tail = motions.map((motion) => {
-    const lane = LANES.indexOf(motion.lane);
-    const head = `${lane}:${motion.id}:${motion.value.toFixed(4)}:${Math.round(motion.pattern)}:${Math.round(motion.cycle)}:${motion.amount.toFixed(4)}:${motion.loop}`;
-    return head;
-  }).join(";");
-  const packed = fx ? `${body}#${tail}@${fx}` : `${body}#${tail}`;
-  return bus ? `${packed}^${bus}` : packed;
+  if (bus) packed = `${packed}^${bus}`;
+  return gains ? `${packed}~${gains}` : packed;
 }
 
 /** Bass, Lead and Chords share these twelve notes. Drums keep one voice each. */
@@ -553,7 +598,9 @@ function renderFrames(engine: Engine, frames: number, at: (frame: number) => voi
     }
     for (const drum of engine.drums) {
       if (!drum.on) continue;
-      const pair = placeDrum(drum, drumSample(engine, drum), wide);
+      const gain = laneGain(engine, drum.lane, engine.clock);
+      const heard = drumSample(engine, drum);
+      const pair = placeDrum(drum, [heard[0] * gain, heard[1] * gain], wide);
       left += pair[0];
       right += pair[1];
       if (laneL && laneR && drum.lane >= 0 && drum.lane < laneL.length) {
@@ -567,7 +614,9 @@ function renderFrames(engine: Engine, frames: number, at: (frame: number) => voi
     }
     for (const note of engine.notes) {
       if (!note.on) continue;
-      let pair = placeNote(note, noteSample(engine, note), wide, chordLo, chordHi);
+      const gain = laneGain(engine, note.lane, engine.clock);
+      const heard = noteSample(engine, note);
+      let pair = placeNote(note, [heard[0] * gain, heard[1] * gain], wide, chordLo, chordHi);
       pair = pumpPair(engine, note.lane, pair);
       left += pair[0];
       right += pair[1];
@@ -600,8 +649,13 @@ function renderFrames(engine: Engine, frames: number, at: (frame: number) => voi
         throwR = wetT[1] * depth;
       }
     }
+    const fxGain = laneGain(engine, 7, engine.clock);
     const wetR = tankSample(engine.tank, engine.fx.reverb, revL, revR);
     const wetD = echoSample(engine.echo, engine.fx.delay, engine.beats, engine.tempo, dlyL, dlyR);
+    wetR[0] *= fxGain;
+    wetR[1] *= fxGain;
+    wetD[0] *= fxGain;
+    wetD[1] *= fxGain;
     const mixed = glueMix(engine, tiltMix(engine, left + wetR[0] + wetD[0] + throwL, right + wetR[1] + wetD[1] + throwR));
     const heard = ahead ? mixed : hearDeck(engine.deck, engine.clock, engine.tempo, mixed[0], mixed[1]);
     const colored = ahead ? heard : applyDeckTone(engine, heard[0], heard[1]);

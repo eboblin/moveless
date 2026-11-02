@@ -1,13 +1,14 @@
-import { SAMPLE_RATE, SIXTEENTH_TICKS } from "../core/clock.ts";
+import { SAMPLE_RATE, SIXTEENTH_TICKS, tickToSample } from "../core/clock.ts";
 import { defaultProject } from "../core/defaults.ts";
 import { holdNote, latchStamp, releaseChannel, resetLatch, settleLatch } from "../core/latch.ts";
 import { advance, clampJournalPage, heardFx, journalPageCount, sameHeard, wanderCandidates } from "../core/performance.ts";
+import { morphHandoffs } from "../core/morph.ts";
 import { generatePhrase } from "../core/phrase.ts";
 import { loadStoredProject, saveStoredProject, type HostFiles, type StoredUi } from "../core/persist.ts";
 import { phraseLoop, soundMotions } from "../dsp/schedule.ts";
 import { formatFx } from "../dsp/fx.ts";
 import { assembleDeck, behaviorOf, formatDeckCommand, isDeckGroup } from "../core/deck.ts";
-import { formatBus, packPhraseBody, parseMeterPage } from "../dsp/voice.ts";
+import { formatBus, formatGainSpans, packPhraseBody, parseMeterPage } from "../dsp/voice.ts";
 import { midiMessage, reduce, settleTrackPeek, type Session } from "../ui/input.ts";
 import { CAPTURE_CC, DOWN_CC, isVoice, LANES, MENU_CC, MUTE_CC, PLAY_CC, SAMPLE_CC, UP_CC } from "../core/types.ts";
 import { advancePulseClock, blinkHalfMs, directionLit, dropLed, faceButtonLed, ledColorAt, menuLed, modeButtonLed, offerLed, padLeds, padPackets, playLed, PULSE_CLOCK_IDLE, sceneShadeStep, STEP_ICON_CC, stepIconColors, stepLampKey, stepLeds, takeLeds, trackLeds, type PulseClock } from "../ui/leds.ts";
@@ -110,6 +111,7 @@ let sentMs = 0;
 let phraseProject: Project | null = null;
 let phraseBody = "";
 let phraseSent = "";
+let gainSent = "";
 let deckSent = "";
 let phraseLatch = "";
 let voiceStep = -1;
@@ -164,6 +166,18 @@ function maybeAutosave(): void {
   flushSave();
 }
 
+/** Fade schedule for the voice. Lane 7 is the fx return. The mixer stays where the hand left it. */
+function gainTrailer(project: Session["project"]): string {
+  const tempo = Math.max(1, project.global.tempo);
+  return formatGainSpans(morphHandoffs(project).map((handoff) => ({
+    lane: handoff.lane === "fx" ? 7 : LANES.indexOf(handoff.lane),
+    kind: handoff.kind === "in" ? "i" : handoff.kind === "out" ? "o" : "d",
+    start: tickToSample(handoff.startTick, tempo),
+    commit: tickToSample(handoff.commitTick, tempo),
+    end: tickToSample(handoff.endTick, tempo),
+  })));
+}
+
 function sendBlock(value: string): void {
   const host = globalThis as HostGlobals;
   if (host.host_module_set_param) host.host_module_set_param("block", value);
@@ -176,6 +190,7 @@ function syncVoice(reset: boolean): void {
     if (voiceOn) sendBlock(`S|${tempo}`);
     voiceOn = false;
     phraseSent = "";
+    gainSent = "";
     deckSent = "";
     return;
   }
@@ -185,14 +200,17 @@ function syncVoice(reset: boolean): void {
   const latch = Math.round(session.project.progression.count) <= 0 ? latchStamp() : "";
   const latchChanged = latch !== phraseLatch;
   const heardSame = phraseProject !== null && sameHeard(phraseProject, session.project);
-  if ((!heardSame && (!morphing || boundary || reset)) || latchChanged) {
+  const gains = gainTrailer(session.project);
+  if ((!heardSame && (!morphing || boundary || reset)) || latchChanged || gains !== gainSent) {
     const phrase = generatePhrase(session.project);
     phraseBody = packPhraseBody(
       phraseLoop(session.project, phrase),
       soundMotions(session.project, phrase),
       formatFx(heardFx(session.project), session.project.global.bar),
       formatBus(session.project.bus),
+      gains,
     );
+    gainSent = gains;
     phraseProject = session.project;
     phraseSent = "";
     phraseLatch = latch;
@@ -925,6 +943,7 @@ export function init(): void {
   phraseProject = null;
   phraseBody = "";
   phraseSent = "";
+  gainSent = "";
   deckSent = "";
   phraseLatch = "";
   paintLatch = "";

@@ -131,6 +131,15 @@ typedef struct {
     char params[320];
 } PhraseEv;
 
+/* Morph fade. kind 0 dips, 1 fades in, 2 fades out. Lane 7 is the fx return. */
+typedef struct {
+    int lane;
+    int kind;
+    int start;
+    int commit;
+    int end;
+} Handoff;
+
 typedef struct {
     float *buf;
     int n;
@@ -169,6 +178,8 @@ typedef struct {
     int phrase_count;
     int clock;
     unsigned phrase_sig;
+    Handoff handoff[8];
+    int handoff_n;
     LaneBox lanes[LANE_COUNT];
     PhraseEv phrase[PHRASE_CAP];
     /* Voice-pattern envelopes. Painted once per phrase, read in the callback. */
@@ -2412,6 +2423,52 @@ static void echo_sample(Engine *engine, Echo *e, float inL, float inR, float *ou
     e->quiet = energy + fabsf(*outL) + fabsf(*outR) < 1e-6f ? e->quiet + 1 : 0;
 }
 
+static float smooth_gain(float t) {
+    if (t < 0.0f) t = 0.0f;
+    if (t > 1.0f) t = 1.0f;
+    return t * t * (3.0f - 2.0f * t);
+}
+
+static float handoff_gain(const Engine *engine, int lane, int sample) {
+    for (int i = 0; i < engine->handoff_n; i++) {
+        const Handoff *h = &engine->handoff[i];
+        if (h->lane != lane) continue;
+        int span = h->end - h->start;
+        if (span <= 0) return h->kind == 2 ? 0.0f : 1.0f;
+        if (sample <= h->start) return h->kind == 1 ? 0.0f : 1.0f;
+        if (sample >= h->end) return h->kind == 2 ? 0.0f : 1.0f;
+        if (h->kind == 1) return smooth_gain((float)(sample - h->start) / (float)span);
+        if (h->kind == 2) return 1.0f - smooth_gain((float)(sample - h->start) / (float)span);
+        if (sample <= h->commit) {
+            int den = h->commit - h->start;
+            return den > 0 ? 1.0f - smooth_gain((float)(sample - h->start) / (float)den) : 0.0f;
+        }
+        int den = h->end - h->commit;
+        return den > 0 ? smooth_gain((float)(sample - h->commit) / (float)den) : 1.0f;
+    }
+    return 1.0f;
+}
+
+static void apply_handoff(Engine *engine, char *text) {
+    engine->handoff_n = 0;
+    char *cursor = text;
+    while (cursor && *cursor && engine->handoff_n < 8) {
+        char *semi = strchr(cursor, ';');
+        if (semi) *semi = 0;
+        int lane = 0, start = 0, commit = 0, end = 0;
+        char kind = 'd';
+        if (sscanf(cursor, "%d,%c,%d,%d,%d", &lane, &kind, &start, &commit, &end) == 5) {
+            Handoff *slot = &engine->handoff[engine->handoff_n++];
+            slot->lane = lane;
+            slot->kind = kind == 'i' ? 1 : kind == 'o' ? 2 : 0;
+            slot->start = start;
+            slot->commit = commit;
+            slot->end = end;
+        }
+        cursor = semi ? semi + 1 : NULL;
+    }
+}
+
 static void ingest_phrase(Engine *engine) {
     char *text = engine->phrase_text;
     engine->phrase_pending = 0;
@@ -2441,6 +2498,13 @@ static void ingest_phrase(Engine *engine) {
         engine->lanes[lane].still_count = 0;
     }
     char *cursor = body + 1;
+    char *hand = strchr(cursor, '~');
+    if (hand) {
+        *hand = 0;
+        apply_handoff(engine, hand + 1);
+    } else {
+        engine->handoff_n = 0;
+    }
     char *bus = strchr(cursor, '^');
     if (bus) {
         *bus = 0;
@@ -3593,6 +3657,9 @@ static void render(Engine *engine, int16_t *out, int frames) {
             if (!engine->drums[d].on) continue;
             float l = 0, r = 0;
             drum_sample(engine, &engine->drums[d], &l, &r);
+            float g = handoff_gain(engine, engine->drums[d].lane, engine->clock);
+            l *= g;
+            r *= g;
             if (wide > 0.0f && engine->drums[d].lane == LANE_HAT) open_hat(&l, &r, engine->drums[d].pos, wide);
             else if (wide > 0.0f && engine->drums[d].lane == LANE_PERC) haas(engine->drums[d].haas, &engine->drums[d].haas_i, &l, &r, wide);
             left += l;
@@ -3613,6 +3680,9 @@ static void render(Engine *engine, int16_t *out, int frames) {
             if (!engine->notes[n].on) continue;
             float nl = 0, nr = 0;
             note_sample(engine, &engine->notes[n], &nl, &nr);
+            float g = handoff_gain(engine, engine->notes[n].lane, engine->clock);
+            nl *= g;
+            nr *= g;
             if (wide > 0.0f && engine->notes[n].lane == LANE_CHORDS) pan_chord(&nl, &nr, engine->notes[n].pitch, chord_lo, chord_hi, wide);
             else if (wide > 0.0f && engine->notes[n].lane == LANE_LEAD) haas(engine->notes[n].haas, &engine->notes[n].haas_i, &nl, &nr, wide);
             pump_pair(engine, engine->notes[n].lane, &nl, &nr);
@@ -3652,6 +3722,13 @@ static void render(Engine *engine, int16_t *out, int frames) {
         }
         plate_sample(engine, revL, revR, &wetL, &wetR);
         echo_sample(engine, &engine->echo, dlyL, dlyR, &delL, &delR);
+        {
+            float g = handoff_gain(engine, 7, engine->clock);
+            wetL *= g;
+            wetR *= g;
+            delL *= g;
+            delR *= g;
+        }
         float l = left + wetL + delL + thrL;
         float r = right + wetR + delR + thrR;
         tilt_mix(engine, &l, &r);

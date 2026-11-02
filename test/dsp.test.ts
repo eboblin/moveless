@@ -4,13 +4,13 @@ import { clamp01, SAMPLE_RATE, SIXTEENTH_TICKS, tickToSample } from "../src/core
 import { assembleDeck, defaultDeck } from "../src/core/deck.ts";
 import { defaultProject } from "../src/core/defaults.ts";
 import { evalModulated } from "../src/core/modulate.ts";
-import { applyMorph } from "../src/core/morph.ts";
+import { applyMorph, handoffGain, morphHandoffs } from "../src/core/morph.ts";
 import { clone } from "../src/core/clone.ts";
 import { launchScene, record } from "../src/core/performance.ts";
 import { mapFilter, mapKick, mapSend, mapSound } from "../src/dsp/map.ts";
 import { eventsInBlock, phraseLoop, soundMotions } from "../src/dsp/schedule.ts";
 import { envelopeTable, laneEnvelopeAt, melodyContour, melodyLevel, readEnvelope } from "../src/dsp/envelope.ts";
-import { applyDeckCommand, applyDeckTone, createEngine, filterSample, formatBus, glideSeconds, loadPhrase, melodyCutoff, meterPage, packBlock, packPhrase, packPhraseBody, parseMeterPage, renderBlock, renderClock, renderDryBlock } from "../src/dsp/voice.ts";
+import { applyDeckCommand, applyDeckTone, createEngine, filterSample, formatBus, glideSeconds, loadPhrase, melodyCutoff, meterPage, packBlock, packPhrase, packPhraseBody, parseMeterPage, placeClock, renderBlock, renderClock, renderDryBlock } from "../src/dsp/voice.ts";
 import type { BlockEvent } from "../src/dsp/schedule.ts";
 import type { FxDelay, FxReverb, LaneId } from "../src/core/types.ts";
 import { createEcho, createTank, echoSample, tankSample } from "../src/dsp/fx.ts";
@@ -643,8 +643,10 @@ describe("dsp adapter", () => {
     }
   });
 
-  it("glides timbre during a morph and does not follow note pitch", () => {
+  it("swaps timbre at the bottom of a lane fade and does not follow note pitch", () => {
     let project = defaultProject();
+    project.working.bass.gen1.hits = 1;
+    project.working.bass.gen2.hits = 0;
     project.working.bass.filter.cutoff.value = 0;
     project.working.bass.filter.cutoff.amount = 0;
     project = record(project);
@@ -653,13 +655,18 @@ describe("dsp adapter", () => {
     project.working = clone(project.journal[0].lanes);
     project.transition = "fast";
     project = launchScene(project, "002", 0);
-    const midMotions = soundMotions(applyMorph(project, (project.morph?.durationTicks ?? 0) / 2));
+    const bassFade = morphHandoffs(project).find((item) => item.lane === "bass");
+    assert.ok(bassFade);
+    const midMotions = soundMotions(applyMorph(project, bassFade.commitTick));
     assert.equal(midMotions.some((motion) => motion.id.endsWith("freq")), false);
     const still = midMotions.find((motion) => motion.lane === "bass" && motion.id === "cutoff");
     assert.ok(still);
-    assert.ok(Math.abs((still?.value ?? 0) - 0.5) < 1e-9);
+    assert.ok(Math.abs((still?.value ?? 0) - 1) < 1e-9);
+    assert.ok(handoffGain(bassFade, bassFade.commitTick) < 1e-6);
 
     project = defaultProject();
+    project.working.bass.gen1.hits = 1;
+    project.working.bass.gen2.hits = 0;
     project.working.bass.filter.cutoff.value = 0.25;
     project.working.bass.filter.cutoff.amount = 0;
     project = record(project);
@@ -671,12 +678,45 @@ describe("dsp adapter", () => {
     project.working = clone(project.journal[0].lanes);
     project.transition = "fast";
     project = launchScene(project, "002", 0);
-    const live = soundMotions(applyMorph(project, (project.morph?.durationTicks ?? 0) / 2)).find((motion) => motion.lane === "bass" && motion.id === "cutoff");
+    const liveFade = morphHandoffs(project).find((item) => item.lane === "bass");
+    assert.ok(liveFade);
+    const waiting = soundMotions(applyMorph(project, liveFade.commitTick - 1)).find((motion) => motion.lane === "bass" && motion.id === "cutoff");
+    assert.equal(waiting?.pattern, 0);
+    assert.equal(waiting?.amount, 0);
+    const live = soundMotions(applyMorph(project, liveFade.commitTick)).find((motion) => motion.lane === "bass" && motion.id === "cutoff");
     assert.ok(live);
     assert.equal(live?.pattern, 4);
     assert.equal(live?.cycle, 4);
-    assert.ok(Math.abs((live?.value ?? 0) - 0.575) < 1e-9);
-    assert.ok(Math.abs((live?.amount ?? 0) - 0.5) < 1e-9);
+    assert.ok(Math.abs((live?.value ?? 0) - 0.9) < 1e-9);
+    assert.ok(Math.abs((live?.amount ?? 0) - 1) < 1e-9);
+  });
+
+  it("fades a held note through silence and back", () => {
+    const tempo = 120;
+    const engine = createEngine();
+    const loop = tickToSample(16 * SIXTEENTH_TICKS, tempo);
+    loadPhrase(engine, [{
+      sample: 0,
+      loop,
+      lane: "bass",
+      note: 40,
+      velocity: 110,
+      lengthTicks: 16 * SIXTEENTH_TICKS,
+      params: mapSound("bass", { attack: 0, release: 0.2 }),
+    }], tempo, true, [], [{ lane: 4, kind: "d", start: 0, commit: 4000, end: 8000 }]);
+    const energy = () => {
+      const block = renderClock(engine, 128);
+      let sum = 0;
+      for (let i = 0; i < block.length; i++) sum += (block[i] ?? 0) ** 2;
+      return sum;
+    };
+    const loud = energy();
+    placeClock(engine, 4000);
+    const quiet = energy();
+    placeClock(engine, 7600);
+    const back = energy();
+    assert.ok(loud > quiet * 4);
+    assert.ok(back > quiet * 2);
   });
 
   it("moves cutoff across a held note", () => {

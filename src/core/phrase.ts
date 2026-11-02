@@ -591,6 +591,66 @@ function liveReader(lane: ChordLane, macros: Record<string, number>): VoiceRead 
   };
 }
 
+interface LaneBuilt {
+  a: number;
+  b: number;
+  steps: number;
+  /** Events before a voice envelope rewrites them. Envelope tables read these. */
+  dry: TimedEvent[];
+  events: TimedEvent[];
+}
+
+let phraseMemo: {
+  harmonyA: number;
+  harmonyB: number;
+  harmony: HarmonicEvent[];
+  lanes: Record<LaneId, LaneBuilt>;
+  phrase: Phrase;
+} | null = null;
+
+function mixMusical(mix: (n: number) => void, text: (s: string) => void, global: Project["global"]): void {
+  mix(global.tempo);
+  mix(global.swing);
+  mix(global.root);
+  text(global.scale);
+  mix(global.transpose);
+  mix(global.bar);
+  mix(global.phrase);
+  mix(global.seed);
+}
+
+/** What this lane's notes depend on. A kick commit does not move the bass stamp. */
+function laneKey(project: Project, lane: LaneId, sources: ReadonlySet<LaneId>): [number, number] {
+  const { global, working } = project;
+  return hashPair((mix, text) => {
+    mixMusical(mix, text, global);
+    mixFieldValues(working, mix, lane);
+    mix(project.lock[lane] ? 1 : 0);
+    if (!project.lock[lane]) {
+      for (const id of Object.keys(project.macros).sort()) {
+        text(id);
+        mix(project.macros[id] ?? 0);
+      }
+    }
+    if (lane === "bass" || lane === "lead" || lane === "chords") {
+      for (const key of PROGRESSION_KEYS) mix(project.progression[key]);
+      mix(laneSteps(working, "bass", global));
+      mix(laneSteps(working, "lead", global));
+      mix(laneSteps(working, "chords", global));
+      if (Math.round(project.progression.count) <= 0) text(latchStamp());
+    }
+    if (laneUsesVoice(working, lane)) {
+      for (const source of sources) {
+        mixFieldValues(working, mix, source);
+        mix(project.mixer[source]);
+        mix(project.mute[source] ? 1 : 0);
+        mix(project.solo[source] ? 1 : 0);
+      }
+      mix(project.mixer.master);
+    }
+  });
+}
+
 export function generatePhrase(project: Project): Phrase {
   const [a, b] = idleStamp(project);
   if (a === idleA && b === idleB && idlePhrase) return idlePhrase;
@@ -607,30 +667,59 @@ function phraseOf(project: Project, working: Lanes): Phrase {
   const bassSteps = laneSteps(working, "bass", global);
   const leadSteps = laneSteps(working, "lead", global);
   const chordSteps = sixteenthSteps(global.phrase, global.bar);
-  const harmony = generateHarmony(project.progression, global, Math.max(bassSteps, leadSteps, chordSteps));
-  const lanes = {} as Phrase["lanes"];
-  const steps = {} as Phrase["steps"];
-  const voiced = new Set<LaneId>();
-  for (const lane of LANES) {
-    steps[lane] = laneSteps(working, lane, global);
-    if (laneUsesVoice(working, lane)) voiced.add(lane);
-    lanes[lane] = eventsFor(working, lane, global, lock[lane] ? {} : macros, harmony, steps[lane]);
-  }
-  const dry = { lanes, harmony, steps };
-  const sources = voiceSources(working);
-  if (sources.size === 0) return dry;
-  const tempo = Math.max(1, project.global.tempo);
-  const tables = dryTables(project, dry, sources, tempo);
-  const sixteenth = tickToSample(SIXTEENTH_TICKS, tempo);
-  const wetLanes = { ...lanes };
-  hearVoices((pattern, step) => voiceEnvAt(tables, pattern, step * sixteenth), () => {
-    for (const lane of voiced) {
-      wetLanes[lane] = eventsFor(working, lane, global, lock[lane] ? {} : macros, harmony, steps[lane]);
-    }
+  const harmKey = hashPair((mix, text) => {
+    mixMusical(mix, text, global);
+    for (const key of PROGRESSION_KEYS) mix(project.progression[key]);
+    mix(bassSteps);
+    mix(leadSteps);
+    mix(chordSteps);
+    if (Math.round(project.progression.count) <= 0) text(latchStamp());
   });
-  const wet = { lanes: wetLanes, harmony, steps };
-  tablesOn.set(wet, tables);
-  return wet;
+  const harmony = phraseMemo && phraseMemo.harmonyA === harmKey[0] && phraseMemo.harmonyB === harmKey[1]
+    ? phraseMemo.harmony
+    : generateHarmony(project.progression, global, Math.max(bassSteps, leadSteps, chordSteps));
+  const sources = voiceSources(working);
+  const built = {} as Record<LaneId, LaneBuilt>;
+  const fresh: LaneId[] = [];
+  let same = phraseMemo !== null && phraseMemo.harmony === harmony;
+  for (const lane of LANES) {
+    const key = laneKey(project, lane, sources);
+    const prev = phraseMemo?.lanes[lane];
+    if (prev && prev.a === key[0] && prev.b === key[1]) {
+      built[lane] = prev;
+      continue;
+    }
+    same = false;
+    fresh.push(lane);
+    const steps = laneSteps(working, lane, global);
+    const dry = eventsFor(working, lane, global, lock[lane] ? {} : macros, harmony, steps);
+    built[lane] = { a: key[0], b: key[1], steps, dry, events: dry };
+  }
+  if (same && phraseMemo) return phraseMemo.phrase;
+  const steps = {} as Phrase["steps"];
+  const lanes = {} as Phrase["lanes"];
+  for (const lane of LANES) {
+    steps[lane] = built[lane].steps;
+    lanes[lane] = built[lane].dry;
+  }
+  const voiced = fresh.filter((lane) => laneUsesVoice(working, lane));
+  let tables: ReturnType<typeof dryTables> | null = null;
+  if (sources.size > 0 && voiced.length > 0) {
+    const tempo = Math.max(1, project.global.tempo);
+    const baked = dryTables(project, { lanes, harmony, steps }, sources, tempo);
+    tables = baked;
+    const sixteenth = tickToSample(SIXTEENTH_TICKS, tempo);
+    hearVoices((pattern, step) => voiceEnvAt(baked, pattern, step * sixteenth), () => {
+      for (const lane of voiced) {
+        built[lane].events = eventsFor(working, lane, global, lock[lane] ? {} : macros, harmony, steps[lane]);
+      }
+    });
+  }
+  for (const lane of LANES) lanes[lane] = built[lane].events;
+  const phrase = { lanes, harmony, steps };
+  if (tables) tablesOn.set(phrase, tables);
+  phraseMemo = { harmonyA: harmKey[0], harmonyB: harmKey[1], harmony, lanes: built, phrase };
+  return phrase;
 }
 
 function voiceEnvAt(tables: ReadonlyMap<LaneId, EnvelopeTable>, pattern: number, sample: number): number {
