@@ -203,6 +203,8 @@ function chords(): ChordLane {
     gen1: euclid(0.85),
     tone: home(0),
     octave: home(unitForOctave(4)),
+    spread: home(0),
+    flow: home(0.5),
     // First step above a block: one root note per bar, about a sixteenth long.
     rate: home(0.01),
     gate: home(0.06),

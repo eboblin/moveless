@@ -166,6 +166,10 @@ export interface ChordLane {
   tone: Modulated;
   /** Absolute octave 0..9, same scale as bass and lead. */
   octave: Modulated;
+  /** 0 keeps the chord close. 1 lifts the top voice two octaves. */
+  spread: Modulated;
+  /** 0 planes every voice with the root. 1 sits each voice on the nearest chord tone. */
+  flow: Modulated;
   rate: Modulated;
   gate: Modulated;
   /** Fraction of the hole that sounds. 0 is one sixteenth, 1 is the whole hole. */

@@ -147,7 +147,7 @@ describe("pages and leds", () => {
     assert.equal(pageCount("kick"), 10);
     assert.equal(pageCount("bass"), 12);
     assert.equal(pageCount("lead"), 12);
-    assert.equal(pageCount("chords"), 11);
+    assert.equal(pageCount("chords"), 12);
     assert.equal(pageGroup("chords", 0), "pattern");
     assert.equal(pageGroup("chords", 1), "pattern");
     assert.equal(pageGroup("kick", 8), "fx");
@@ -169,9 +169,13 @@ describe("pages and leds", () => {
     assert.deepEqual(lanePages("chords")[2]?.groups, ["VEL", "PRB"]);
     assert.equal(lanePages("chords")[2]?.bindings[4]?.label, "PRB V");
     assert.equal(lanePages("chords")[3]?.groups[0], "TONE");
+    assert.equal(pageGroup("chords", 4), "notes");
+    assert.equal(pageGroupColor("chords", 4), 14);
+    assert.equal(lanePages("chords")[4]?.title, "SPREAD / FLOW");
     assert.equal(pageGroup("chords", 8), "sound");
-    assert.equal(pageGroup("chords", 9), "fx");
+    assert.equal(pageGroup("chords", 9), "sound");
     assert.equal(pageGroup("chords", 10), "fx");
+    assert.equal(pageGroup("chords", 11), "fx");
     assert.equal(pageGroupColor("kick", 8), 9);
     assert.equal(lanePages("bass").at(-1)?.groups[0], "REV");
     assert.equal(lanePages("bass").at(-1)?.groups[1], "DLY");
@@ -561,9 +565,9 @@ describe("pages and leds", () => {
     assert.equal(chords[24].color, 3);
     assert.equal(chords[26].color, 3);
     assert.equal(chords[27].color, offColor(14));
-    assert.equal(chords[28].color, offColor(20));
+    assert.equal(chords[28].color, offColor(14));
     assert.equal(chords[16].color, offColor(20));
-    assert.equal(chords[17].color, offColor(9));
+    assert.equal(chords[17].color, offColor(20));
     const fx = padLeds({ ...defaultProject(), randomizeDepth: "generators" }, "journal", { wheelTouch: true, context: "fx", page: 0 });
     assert.equal(fx[24].color, offColor(9));
     assert.equal(fx[24].blink, true);
@@ -1647,6 +1651,23 @@ describe("surface", () => {
       focus: { label: "OCTAVE V", path: "octave.value", generator: "octave.value", showPattern: false, held: true, untilTick: 0, untilMs: 0 },
     }, 0);
     assert.equal(octaveHeld.header, "OCT 4");
+    const spreadPage = renderScreen(project, { ...defaultUi(), context: "chords", page: 4 }, 0);
+    assert.match(spreadPage.header, /SPREAD/);
+    assert.match(spreadPage.header, /FLOW/);
+    const spreadHeld = renderScreen(project, {
+      ...defaultUi(),
+      context: "chords",
+      page: 4,
+      focus: { label: "SPREAD V", path: "spread.value", generator: "spread.value", showPattern: false, held: true, untilTick: 0, untilMs: 0 },
+    }, 0);
+    assert.equal(spreadHeld.header, "+0");
+    const flowHeld = renderScreen(project, {
+      ...defaultUi(),
+      context: "chords",
+      page: 4,
+      focus: { label: "FLOW V", path: "flow.value", generator: "flow.value", showPattern: false, held: true, untilTick: 0, untilMs: 0 },
+    }, 0);
+    assert.match(flowHeld.header, /^\d+$/);
     const zone = (rate: number) => renderScreen(
       { ...project, working: { ...project.working, chords: { ...project.working.chords, rate: modulated(rate) } } },
       { ...defaultUi(), context: "chords", page: 1, focus: { label: "RATE V", path: "rate.value", generator: "rate.value", showPattern: false, held: true, untilTick: 0, untilMs: 0 } },

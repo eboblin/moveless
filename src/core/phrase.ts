@@ -12,8 +12,8 @@ import {
 import { euclidPattern, generateHits, keptVelocity, phraseStepsOf, rotatePattern } from "./events.ts";
 import { mixFieldValues } from "./fields.ts";
 import { hash01 } from "./hash.ts";
-import { applyFollowMidi, chordTonePitchClasses, degreeToMidi, generateHarmony, harmonyAt, pitchClassName, scaleOf } from "./harmony.ts";
-import { latchStamp } from "./latch.ts";
+import { applyFollowMidi, chordTonePitchClasses, degreeToMidi, generateHarmony, harmonyAt, pitchClassName, pitchClassOfDegree, scaleOf } from "./harmony.ts";
+import { latchStamp, matchQuality } from "./latch.ts";
 import { bipolarFromUnit, evalModulated, hearVoices, soundMacro, voiceLane, withMacro } from "./modulate.ts";
 import { laneHeard } from "./journal.ts";
 import { macroOffset } from "./pages.ts";
@@ -174,37 +174,331 @@ export function chordToneIndex(unit: number, count: number): number {
   return Math.round(clamp01(unit) * (n - 1));
 }
 
-/** Resting note of the chord tone knob: first chord, value only, no pattern. */
-export function restingChordToneLabel(lane: ChordLane, progression: Progression, global: GlobalSettings): string {
+/** Resting note of the chord tone knob: the led function at this step, value only. */
+export function restingChordToneLabel(
+  lane: ChordLane,
+  progression: Progression,
+  global: GlobalSettings,
+  step = 0,
+): string {
+  const frame = valueVoiceAt(lane, progression, global, step);
+  if (!frame?.notes.length) return "—";
+  return noteLabel(frame.notes[chordToneIndex(lane.tone.value, frame.notes.length)] ?? frame.notes[0]);
+}
+
+/** Spread and flow captions for the value under the finger. Pattern and amount stay out. */
+export function chordVoiceCaption(
+  lane: ChordLane,
+  progression: Progression,
+  global: GlobalSettings,
+  step = 0,
+): { spread: string; flow: string } {
   const steps = sixteenthSteps(global.phrase, global.bar);
-  const harm = generateHarmony(progression, global, steps)[0];
-  if (!harm) return "—";
-  const scale = scaleOf(global.scale);
-  const rootPc = mod(global.root + global.transpose, 12);
-  return noteLabel(chordToneMidi(harm, scale, rootPc, lane.tone.value, lane.octave.value));
+  const harmony = generateHarmony(progression, global, steps);
+  const frames = voiceTimeline(harmony, steps, scaleOf(global.scale), mod(global.root + global.transpose, 12), valueReader(lane));
+  const index = Math.max(0, Math.min(frames.length - 1, Math.floor(step)));
+  const frame = frames[index];
+  if (!frame?.notes.length) return { spread: "+0", flow: "0" };
+  return { spread: `+${topLift(frame)}`, flow: harmony.length < 2 ? "0" : String(voiceLeap(harmony, frames, index)) };
 }
 
-/** Every chord of the phrase shares the selected octave, so a walking root does not drag the voicing. */
-function chordVoices(harm: HarmonicEvent, scale: readonly number[], rootPc: number, octaveUnit: number): number[] {
-  const base = octaveNumber(octaveUnit) * 12;
-  return chordTonePitchClasses(harm, scale, rootPc).map((pc) => base + pc);
+interface ChordFns {
+  rootPc: number;
+  semis: readonly number[];
+  pcs: readonly number[];
 }
 
-function chordToneMidi(
-  harm: HarmonicEvent,
-  scale: readonly number[],
-  rootPc: number,
-  toneUnit: number,
-  octaveUnit: number,
-): number {
+interface VoiceFrame {
+  /** Function order, after the octave shift and spread. */
+  notes: number[];
+  /** The same voices before spread. */
+  open: number[];
+}
+
+interface VoiceCarry {
+  notes: number[];
+  rootPc: number;
+}
+
+interface VoiceRead {
+  spread: (step: number) => number;
+  flow: (step: number) => number;
+  octave: (step: number) => number;
+}
+
+function valueReader(lane: ChordLane): VoiceRead {
+  return {
+    spread: () => clamp01(lane.spread.value),
+    flow: () => clamp01(lane.flow.value),
+    octave: () => lane.octave.value,
+  };
+}
+
+function valueVoiceAt(lane: ChordLane, progression: Progression, global: GlobalSettings, step: number): VoiceFrame | null {
+  const steps = sixteenthSteps(global.phrase, global.bar);
+  const frames = voiceTimeline(
+    generateHarmony(progression, global, steps),
+    steps,
+    scaleOf(global.scale),
+    mod(global.root + global.transpose, 12),
+    valueReader(lane),
+  );
+  if (!frames.length) return null;
+  return frames[Math.max(0, Math.min(frames.length - 1, Math.floor(step)))] ?? null;
+}
+
+function chordFns(harm: HarmonicEvent, scale: readonly number[], keyRoot: number): ChordFns {
   if (harm.pcs && harm.pcs.length > 0) {
-    const pc = harm.pcs[chordToneIndex(toneUnit, harm.pcs.length)] ?? harm.pcs[0];
-    return octaveNumber(octaveUnit) * 12 + mod(pc, 12);
+    const matched = matchQuality(harm.pcs, harm.pcs[0]);
+    const rootPc = matched?.rootPc ?? mod(harm.pcs[0], 12);
+    const semis = [...new Set(harm.pcs.map((pc) => mod(pc - rootPc, 12)))].sort((a, b) => a - b);
+    if (!semis.includes(0)) semis.unshift(0);
+    return { rootPc, semis, pcs: semis.map((semi) => mod(rootPc + semi, 12)) };
   }
-  const semis = QUALITY_SEMITONES[harm.quality] ?? QUALITY_SEMITONES[0];
-  const semi = semis[chordToneIndex(toneUnit, semis.length)] ?? 0;
-  const root = mod(degreeToMidi(harm.root, scale, rootPc, 0), 12);
-  return octaveNumber(octaveUnit) * 12 + mod(root + semi, 12);
+  const rootPc = pitchClassOfDegree(harm.root, scale, keyRoot);
+  const semis = [...(QUALITY_SEMITONES[harm.quality] ?? QUALITY_SEMITONES[0])];
+  return { rootPc, semis, pcs: semis.map((semi) => mod(rootPc + semi, 12)) };
+}
+
+function closeVoicing(fns: ChordFns, octaveUnit: number): number[] {
+  const rootMidi = octaveNumber(octaveUnit) * 12 + fns.rootPc;
+  return separate(fns.semis.map((semi) => clampMidi(rootMidi + semi)));
+}
+
+function clampMidi(note: number): number {
+  return Math.max(0, Math.min(127, Math.round(note)));
+}
+
+/** Shortest root motion, −6..+6. A tritone stays upward. */
+function signedPc(from: number, to: number): number {
+  let delta = mod(to - from, 12);
+  if (delta > 6) delta -= 12;
+  return delta;
+}
+
+function nearestOctave(target: number, pc: number): { midi: number; dist: number } {
+  const center = Math.round(target);
+  const origin = Math.floor(center / 12) * 12;
+  let midi = clampMidi(origin + pc);
+  let dist = Math.abs(midi - target);
+  for (let oct = -2; oct <= 2; oct++) {
+    const note = clampMidi(origin + oct * 12 + pc);
+    const gap = Math.abs(note - target);
+    if (gap < dist - 1e-6 || (Math.abs(gap - dist) <= 1e-6 && note < midi)) {
+      midi = note;
+      dist = gap;
+    }
+  }
+  return { midi, dist };
+}
+
+function sameNotes(a: readonly number[], b: readonly number[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+  return true;
+}
+
+function separate(notes: readonly number[]): number[] {
+  const out = notes.map((note) => clampMidi(note));
+  const order = out.map((midi, index) => ({ midi, index })).sort((a, b) => a.midi - b.midi || a.index - b.index);
+  const used = new Set<number>();
+  for (const slot of order) {
+    let midi = out[slot.index];
+    while (used.has(midi) && midi < 127) midi += 12;
+    out[slot.index] = clampMidi(midi);
+    used.add(out[slot.index]);
+  }
+  return out;
+}
+
+/**
+ * Give every function a pitch. Sources are attractors; a function left without
+ * one sits in close position above the root and does not add to the cost.
+ */
+function cover(sources: readonly number[], fns: ChordFns, preferLeap: boolean, from: readonly number[]): number[] {
+  const pcs = fns.pcs;
+  const m = pcs.length;
+  const n = sources.length;
+  if (m === 0) return [];
+  if (n === 0) return [];
+  const midis = new Array<number>(m).fill(0);
+  const used = new Array<boolean>(n).fill(false);
+  let bestKey = Number.POSITIVE_INFINITY;
+  let bestLeap = Number.POSITIVE_INFINITY;
+  let bestLow = Number.POSITIVE_INFINITY;
+  let best = midis.slice();
+
+  const finish = (cost: number, leap: number, low: number) => {
+    const better = cost < bestKey - 1e-6
+      || (Math.abs(cost - bestKey) <= 1e-6 && (preferLeap ? leap < bestLeap - 1e-6 : low < bestLow))
+      || (Math.abs(cost - bestKey) <= 1e-6 && preferLeap && Math.abs(leap - bestLeap) <= 1e-6 && low < bestLow);
+    if (!better) return;
+    bestKey = cost;
+    bestLeap = leap;
+    bestLow = low;
+    best = midis.slice();
+  };
+
+  const placeRest = (fi: number, rootMidi: number, cost: number, leap: number, low: number) => {
+    for (let i = fi; i < m; i++) {
+      const semi = mod(pcs[i] - fns.rootPc, 12);
+      midis[i] = clampMidi(rootMidi + semi);
+      low += midis[i];
+    }
+    finish(cost, leap, low);
+  };
+
+  const walk = (fi: number, cost: number, leap: number, low: number) => {
+    if (cost > bestKey + 1e-6) return;
+    if (fi === m) {
+      finish(cost, leap, low);
+      return;
+    }
+    let open = false;
+    for (let s = 0; s < n; s++) {
+      if (used[s]) continue;
+      open = true;
+      used[s] = true;
+      const hit = nearestOctave(sources[s], pcs[fi]);
+      const origin = from[s] ?? sources[s];
+      midis[fi] = hit.midi;
+      walk(fi + 1, cost + hit.dist, leap + Math.abs(hit.midi - origin), low + hit.midi);
+      used[s] = false;
+    }
+    if (!open) placeRest(fi, midis[0] ?? octaveNumber(0) * 12 + fns.rootPc, cost, leap, low);
+  };
+
+  walk(0, 0, 0, 0);
+  return separate(best);
+}
+
+function parallelVoicing(prev: VoiceCarry, fns: ChordFns): number[] {
+  const delta = signedPc(prev.rootPc, fns.rootPc);
+  return cover(prev.notes.map((note) => note + delta), fns, false, []);
+}
+
+function nearestVoicing(prev: VoiceCarry, fns: ChordFns): number[] {
+  return cover(prev.notes, fns, false, []);
+}
+
+/** Height order, then back into functions. A tie keeps the smaller leap from the previous pitch. */
+function blendVoices(parallel: readonly number[], nearest: readonly number[], flow: number, prev: readonly number[], fns: ChordFns): number[] {
+  const plane = [...parallel].sort((a, b) => a - b);
+  const still = [...nearest].sort((a, b) => a - b);
+  const was = [...prev].sort((a, b) => a - b);
+  const targets = plane.map((note, i) => (1 - flow) * note + flow * (still[i] ?? note));
+  const from = targets.map((note, i) => was[i] ?? note);
+  return cover(targets, fns, true, from);
+}
+
+function applySpread(open: readonly number[], spread: number): number[] {
+  if (open.length <= 1 || spread <= 0) return [...open];
+  const order = open.map((midi, index) => ({ midi, index })).sort((a, b) => a.midi - b.midi || a.index - b.index);
+  const out = [...open];
+  const span = order.length - 1;
+  for (let i = 1; i < order.length; i++) {
+    const slot = order[i];
+    const lift = spread * 24 * (i / span);
+    out[slot.index] = nearestOctave(slot.midi + lift, mod(slot.midi, 12)).midi;
+  }
+  return separate(out);
+}
+
+function topLift(frame: VoiceFrame): number {
+  if (!frame.open.length) return 0;
+  let index = 0;
+  for (let i = 1; i < frame.open.length; i++) {
+    if (frame.open[i] > frame.open[index] || (frame.open[i] === frame.open[index] && i > index)) index = i;
+  }
+  return (frame.notes[index] ?? frame.open[index]) - frame.open[index];
+}
+
+function voiceLeap(harmony: readonly HarmonicEvent[], frames: readonly VoiceFrame[], step: number): number {
+  let event = 0;
+  for (let i = 0; i < harmony.length; i++) {
+    const start = Math.floor(harmony[i].startTick / SIXTEENTH_TICKS);
+    if (start <= step) event = i;
+  }
+  const current = frames[step];
+  if (!current) return 0;
+  const previous = event === 0 ? harmony.length - 1 : event - 1;
+  const prevStart = Math.floor(harmony[previous].startTick / SIXTEENTH_TICKS);
+  const prevEnd = Math.min(frames.length - 1, prevStart + Math.max(1, Math.floor(harmony[previous].lengthTicks / SIXTEENTH_TICKS)) - 1);
+  const before = frames[Math.max(0, prevEnd)];
+  if (!before) return 0;
+  const a = [...before.notes].sort((x, y) => x - y);
+  const b = [...current.notes].sort((x, y) => x - y);
+  let leap = 0;
+  const count = Math.min(a.length, b.length);
+  for (let i = 0; i < count; i++) leap = Math.max(leap, Math.abs(a[i] - b[i]));
+  return leap;
+}
+
+function voiceTimeline(
+  harmony: readonly HarmonicEvent[],
+  steps: number,
+  scale: readonly number[],
+  keyRoot: number,
+  read: VoiceRead,
+): VoiceFrame[] {
+  const total = Math.max(0, Math.round(steps));
+  const empty = (): VoiceFrame => ({ notes: [], open: [] });
+  if (total === 0 || harmony.length === 0) return Array.from({ length: total }, empty);
+  let carry: VoiceCarry | null = null;
+  let frames = Array.from({ length: total }, empty);
+  for (let pass = 0; pass < 3; pass++) {
+    const walked = walkVoices(harmony, total, scale, keyRoot, read, carry);
+    frames = walked.frames;
+    if (carry && walked.end && sameNotes(walked.end.notes, carry.notes)) break;
+    if (walked.end) carry = walked.end;
+  }
+  return frames;
+}
+
+function walkVoices(
+  harmony: readonly HarmonicEvent[],
+  steps: number,
+  scale: readonly number[],
+  keyRoot: number,
+  read: VoiceRead,
+  carry: VoiceCarry | null,
+): { frames: VoiceFrame[]; end: VoiceCarry | null } {
+  const frames = Array.from({ length: steps }, () => ({ notes: [] as number[], open: [] as number[] }));
+  let prev = carry;
+  let end: VoiceCarry | null = carry;
+  for (const harm of harmony) {
+    const fns = chordFns(harm, scale, keyRoot);
+    const start = Math.max(0, Math.min(steps - 1, Math.floor(harm.startTick / SIXTEENTH_TICKS)));
+    const length = Math.max(1, Math.floor(harm.lengthTicks / SIXTEENTH_TICKS));
+    const stop = Math.min(steps, start + length);
+    const boundaryOct = read.octave(start);
+    const close = closeVoicing(fns, boundaryOct);
+    const parallel = prev ? parallelVoicing(prev, fns) : close;
+    const nearest = prev ? nearestVoicing(prev, fns) : close;
+    const memory = prev?.notes ?? parallel;
+    let lastOpen = close;
+    for (let step = start; step < stop; step++) {
+      const flow = clamp01(read.flow(step));
+      const blended = separate(blendVoices(parallel, nearest, flow, memory, fns));
+      const shift = (octaveNumber(read.octave(step)) - octaveNumber(boundaryOct)) * 12;
+      const open = separate(blended.map((note) => clampMidi(note + shift)));
+      const notes = applySpread(open, clamp01(read.spread(step)));
+      frames[step] = { notes, open };
+      lastOpen = open;
+    }
+    // Spread is applied again on the next chord, so the memory stays the led voices.
+    prev = { notes: lastOpen, rootPc: fns.rootPc };
+    end = prev;
+  }
+  return { frames, end };
+}
+
+function liveReader(lane: ChordLane, macros: Record<string, number>): VoiceRead {
+  return {
+    spread: (step) => clamp01(evalModulated(withMacro(lane.spread, macro(macros, "spread")), step)),
+    flow: (step) => clamp01(evalModulated(withMacro(lane.flow, macro(macros, "flow")), step)),
+    octave: (step) => evalModulated(withMacro(lane.octave, macro(macros, "octave")), step),
+  };
 }
 
 export function generatePhrase(project: Project): Phrase {
@@ -351,6 +645,8 @@ function takeLane(
     take(box.gen1.velocity);
     take(box.tone);
     take(box.octave);
+    take(box.spread);
+    take(box.flow);
     take(box.rate);
     take(box.gate);
     take(box.size);
@@ -743,6 +1039,7 @@ function chordAudio(
 ): TimedEvent[] {
   const scale = scaleOf(global.scale);
   const rootPc = mod(global.root + global.transpose, 12);
+  const voiced = voiceTimeline(harmony, steps, scale, rootPc, liveReader(lane, macros));
   const phraseTicks = steps * SIXTEENTH_TICKS;
   const placed = generateHits(lane.gen1, SILENT_GEN, steps);
   const { ring, onsets } = ringOnsets(lane.gen1);
@@ -765,7 +1062,7 @@ function chordAudio(
     const start = swungStepTick(hit.step, global.swing);
     const end = start + sliceLength(gap, sizeU) * SIXTEENTH_TICKS;
     const blockKept = rollChance(chanceAt(lane, macros, hit.step), global.seed, "block", hit.step);
-    fillSlice(out, lane, harmony, global, macros, sound, filter, send, scale, rootPc, start, end, phraseTicks, blockKept);
+    fillSlice(out, lane, harmony, global, macros, sound, filter, send, voiced, start, end, phraseTicks, blockKept);
   }
   return out;
 }
@@ -780,8 +1077,7 @@ function fillSlice(
   sound: ChordLaneSound,
   filter: LaneFilter,
   send: LaneSend,
-  scale: readonly number[],
-  rootPc: number,
+  voiced: readonly VoiceFrame[],
   start: number,
   end: number,
   phraseTicks: number,
@@ -805,12 +1101,13 @@ function fillSlice(
         const step = tick / SIXTEENTH_TICKS;
         const gateU = evalModulated(withMacro(lane.gate, macro(macros, "gate")), step);
         const toneU = evalModulated(withMacro(lane.tone, macro(macros, "tone")), step);
-        const octaveU = evalModulated(withMacro(lane.octave, macro(macros, "octave")), step);
+        const frame = voiced[Math.max(0, Math.min(voiced.length - 1, Math.floor(step)))] ?? { notes: [], open: [] };
+        const count = Math.max(1, frame.notes.length);
         return {
           ...rateAt(tick),
           gate: gateU,
-          note: chordToneMidi(harm, scale, rootPc, toneU, octaveU),
-          voices: chordVoices(harm, scale, rootPc, octaveU),
+          note: frame.notes[chordToneIndex(toneU, count)] ?? frame.notes[0] ?? 0,
+          voices: frame.notes,
         };
       }, rateAt, {
         block: blockKept,
@@ -843,11 +1140,32 @@ function fillSlice(
 type FigureAt = ChordFigure & { gate: number; note: number; voices: readonly number[] };
 
 /**
- * Rate, gate, tone, and octave are read once per note, so the figure follows
- * their envelopes at the resolution the pattern is drawn. A block is rechecked
- * each sixteenth and holds every chord tone at the octave it read when the
- * block began. Tone picks a single voice only while the figure is an arp.
+ * Rate, gate, and tone are read once per note. Spread, flow, and octave are
+ * already in the voicing, one frame per sixteenth. A block holds while that
+ * set of pitches stays put and attacks again when a voice moves. Tone picks a
+ * single function only while the figure is an arp.
  */
+function nextSixteenth(tick: number): number {
+  return (Math.floor(tick / SIXTEENTH_TICKS) + 1) * SIXTEENTH_TICKS;
+}
+
+function samePitchSet(a: readonly number[], b: readonly number[]): boolean {
+  if (a.length !== b.length) return false;
+  const left = [...a].sort((x, y) => x - y);
+  const right = [...b].sort((x, y) => x - y);
+  return sameNotes(left, right);
+}
+
+function pushVoices(
+  hits: { note: number; delay: number; lengthTicks: number }[],
+  notes: readonly number[],
+  delay: number,
+  lengthTicks: number,
+): void {
+  const room = Math.max(1, lengthTicks);
+  for (const note of notes) hits.push({ note, delay, lengthTicks: room });
+}
+
 function chanceAt(lane: ChordLane, macros: Record<string, number>, step: number): number {
   return clamp01(evalModulated(withMacro(lane.probability, macro(macros, "probability")), step));
 }
@@ -872,9 +1190,25 @@ function walkChord(
     const now = at(harm.startTick + cursor);
     if (now.mode === "block" || now.ticks <= 0) {
       const end = blockEnd(cursor, length, harm.startTick, rateAt);
-      const room = Math.max(1, end - cursor);
-      if (hear.block) {
-        for (const note of now.voices) hits.push({ note, delay: cursor, lengthTicks: room });
+      if (hear.block && now.voices.length) {
+        let runFrom = cursor;
+        let run = now.voices;
+        let atTick = cursor;
+        while (atTick < end) {
+          const nextTick = Math.min(end, nextSixteenth(harm.startTick + atTick) - harm.startTick);
+          const boundary = nextTick <= atTick ? Math.min(end, atTick + 1) : nextTick;
+          if (boundary >= end) {
+            pushVoices(hits, run, runFrom, end - runFrom);
+            break;
+          }
+          const later = at(harm.startTick + boundary);
+          if (!samePitchSet(later.voices, run)) {
+            pushVoices(hits, run, runFrom, boundary - runFrom);
+            runFrom = boundary;
+            run = later.voices;
+          }
+          atTick = boundary;
+        }
       }
       cursor = end;
       continue;

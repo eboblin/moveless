@@ -35,7 +35,7 @@ import {
   audibleEvents,
   heardFx,
 } from "../src/core/performance.ts";
-import { generatePhrase, unitForOctave } from "../src/core/phrase.ts";
+import { chordVoiceCaption, generatePhrase, unitForOctave } from "../src/core/phrase.ts";
 import { chordSymbol, degreeNumeral, pitchClassOfDegree, scaleOf } from "../src/core/harmony.ts";
 import { holdNote, latchedPcs, releaseChannel, resetLatch, settleLatch } from "../src/core/latch.ts";
 import { chordLabels, textPreview } from "../src/core/text-preview.ts";
@@ -45,6 +45,13 @@ import { SOUND, bindingFor, livePage, macroOffset, pagesFor } from "../src/core/
 import { DRUM_NOTE, LANES, PATTERN_LANES, type PatternId, type Project, type ScaleId } from "../src/core/types.ts";
 import { hasSoundMap } from "../src/dsp/map.ts";
 import { punch } from "../src/core/morph.ts";
+
+function voiceLeap(left: readonly number[], right: readonly number[]): number {
+  let leap = 0;
+  const count = Math.min(left.length, right.length);
+  for (let i = 0; i < count; i++) leap = Math.max(leap, Math.abs((left[i] ?? 0) - (right[i] ?? 0)));
+  return leap;
+}
 
 function bar(project: Project, bars = 1): Project {
   const next = clone(project);
@@ -1302,21 +1309,102 @@ describe("harmony", () => {
     assert.notDeepEqual(first, second);
   });
 
-  it("keeps a descending walk inside the selected octave", () => {
-    const project = bar(defaultProject(), 1);
-    project.global.phrase = 4;
-    project.progression.count = 8;
+  it("leads chords by common tone, parallel motion, and a closed loop", () => {
+    const project = bar(defaultProject(), 2);
+    project.global.scale = "major";
+    project.global.root = 0;
+    project.progression.start = 0;
+    project.progression.count = 2;
+    project.progression.length = 4;
+    project.progression.motion = 3;
+    project.progression.way = 0;
+    project.progression.variation = 0;
+    project.progression.mood = 0;
+    project.progression.tension = 0;
+    project.working.chords.rate = modulated(0);
+    project.working.chords.flow = modulated(0.5);
+    project.working.chords.spread = modulated(0);
+    project.working.chords.gen1 = { ...project.working.chords.gen1, length: 32, hits: 1, rotate: 0, probability: 1 };
+    const led = generatePhrase(project);
+    const at = (tick: number) => led.lanes.chords.filter((event) => event.tick === tick).map((event) => event.note).sort((a, b) => a - b);
+    const tonic = at(0);
+    const subdominant = at(16 * SIXTEENTH_TICKS);
+    assert.deepEqual(tonic, [48, 52, 55]);
+    assert.ok(subdominant.includes(48));
+    assert.ok(voiceLeap(tonic, subdominant) < 10);
+    assert.ok(voiceLeap(subdominant, tonic) <= voiceLeap(tonic, subdominant));
+
+    project.working.chords.flow = modulated(0);
+    project.progression.motion = 4;
+    const fifth = generatePhrase(project).lanes.chords.filter((event) => event.tick === 16 * SIXTEENTH_TICKS).map((event) => event.note).sort((a, b) => a - b);
+    assert.deepEqual(fifth, tonic.map((note) => note - 5));
+
     project.progression.motion = 1;
     project.progression.way = 1;
+    const seventh = generatePhrase(project).lanes.chords.filter((event) => event.tick === 16 * SIXTEENTH_TICKS).map((event) => event.note).sort((a, b) => a - b);
+    assert.deepEqual(seventh, tonic.map((note) => note - 1));
+
+    project.working.chords.flow = modulated(0.5);
+    project.progression.motion = 3;
+    project.progression.way = 0;
+    project.working.chords.rate = modulated(0.01);
+    project.working.chords.tone = modulated(0);
+    const arp = generatePhrase(project).lanes.chords.filter((event) => event.tick === 16 * SIXTEENTH_TICKS).map((event) => event.note);
+    assert.deepEqual(arp, [53]);
+
+    const walk = bar(defaultProject(), 4);
+    walk.global.scale = "major";
+    walk.progression.count = 8;
+    walk.progression.motion = 1;
+    walk.progression.way = 1;
+    walk.progression.variation = 0;
+    walk.progression.tension = 0.5;
+    walk.working.chords.rate = modulated(0);
+    walk.working.chords.gen1 = { ...walk.working.chords.gen1, length: 16, hits: 1, rotate: 0, probability: 1 };
+    const phrase = generatePhrase(walk);
+    const chords = phrase.harmony.map((harm) =>
+      phrase.lanes.chords.filter((event) => event.tick === harm.startTick).map((event) => event.note).sort((a, b) => a - b),
+    );
+    assert.equal(chords.length, 8);
+    for (let i = 1; i < chords.length; i++) {
+      const leap = voiceLeap(chords[i - 1], chords[i]);
+      assert.notEqual(leap, 10);
+      assert.notEqual(leap, 11);
+    }
+  });
+
+  it("opens the top voice with spread and splits the block when the pitch set moves", () => {
+    const project = bar(defaultProject(), 1);
+    project.progression.count = 1;
+    project.progression.length = 4;
     project.progression.variation = 0;
     project.working.chords.rate = modulated(0);
-    project.progression.tension = 0.5;
-    const notes = generatePhrase(project).lanes.chords.map((event) => event.note);
-    assert.ok(notes.length > 8);
-    const low = Math.min(...notes);
-    const high = Math.max(...notes);
-    assert.ok(low >= 48 && high <= 59);
-    assert.ok(high - low < 12);
+    project.working.chords.gen1 = { ...project.working.chords.gen1, length: 16, hits: 1, rotate: 0, probability: 1 };
+    const sounding = (spread: number) => {
+      project.working.chords.spread = modulated(spread);
+      return generatePhrase(project).lanes.chords.filter((event) => event.tick === 0).map((event) => event.note);
+    };
+    assert.deepEqual(sounding(0), [48, 52, 55]);
+    assert.equal(chordVoiceCaption(project.working.chords, project.progression, project.global, 0).spread, "+0");
+    assert.equal(chordVoiceCaption(project.working.chords, project.progression, project.global, 0).flow, "0");
+    assert.deepEqual(sounding(0.25), [48, 52, 55]);
+    assert.deepEqual(sounding(0.26), [48, 52, 67]);
+    assert.equal(chordVoiceCaption(project.working.chords, project.progression, project.global, 0).spread, "+12");
+    assert.deepEqual(sounding(1), [48, 64, 79]);
+    assert.equal(chordVoiceCaption(project.working.chords, project.progression, project.global, 0).spread, "+24");
+
+    project.working.chords.spread = modulated(0, 2, 16, 1);
+    const groups = new Map<string, number>();
+    for (const event of generatePhrase(project).lanes.chords) {
+      const key = `${event.tick}`;
+      groups.set(key, (groups.get(key) ?? 0) + 1);
+    }
+    const attacks = [...groups.keys()];
+    assert.equal(attacks.length, 2);
+    const first = generatePhrase(project).lanes.chords.filter((event) => event.tick === 0).map((event) => event.note);
+    const later = generatePhrase(project).lanes.chords.filter((event) => event.tick === 8 * SIXTEENTH_TICKS).map((event) => event.note);
+    assert.deepEqual(first, [48, 64, 79]);
+    assert.deepEqual(later, [48, 52, 55]);
   });
 
   it("rereads rate and gate before the chord ends", () => {

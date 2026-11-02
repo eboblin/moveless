@@ -281,6 +281,21 @@ describe("project persist", () => {
     assert.equal(parsed.project.journal[0].id, "001");
   });
 
+  it("fills spread and flow when an older chord lane never stored them", () => {
+    const project = defaultProject();
+    const raw = JSON.parse(serializeStored(project, { context: "chords", page: 0, mode: "journal", playing: true, sampleLatched: false, randomizeLatched: false, face: null, deckLayer: "group" })) as {
+      project: { working: { chords: { spread?: unknown; flow?: unknown } } };
+    };
+    delete raw.project.working.chords.spread;
+    delete raw.project.working.chords.flow;
+    const parsed = parseStored(JSON.stringify(raw));
+    assert.ok(parsed);
+    assert.equal(parsed.project.working.chords.spread.value, 0);
+    assert.equal(parsed.project.working.chords.flow.value, 0.5);
+    assert.equal(parsed.project.working.chords.spread.amount, 0);
+    assert.equal(parsed.project.working.chords.flow.amount, 0);
+  });
+
   it("resets a chord lane that has no tone or octave", () => {
     const project = defaultProject();
     const legacy = {

@@ -20,7 +20,7 @@ import {
 export type MorphKind = "lerp" | "switch";
 export type KnobStore = "lane" | "progression" | "global" | "mixer" | "macro" | "bus" | "deck";
 /** How the screen draws a knob. `number` is the plain 0..99 cell. */
-export type KnobDisplay = "number" | "pitch" | "octave" | "note" | "scale" | "division" | "chordTone" | "slice" | "count" | "time" | "fade" | "rollTone" | "span";
+export type KnobDisplay = "number" | "pitch" | "octave" | "note" | "scale" | "division" | "chordTone" | "slice" | "count" | "time" | "fade" | "rollTone" | "span" | "spread" | "flow";
 
 export interface Binding {
   path: string;
@@ -174,6 +174,10 @@ const FIELD = {
   pitch: spec("PITCH", 2, { display: "pitch" }),
   cutoff: spec("CUTOFF", 2, { detent: [0.5] }),
   tone: spec("TONE", 2, { display: "chordTone" }),
+  /** Close at 0. The top voice is two octaves up at 1. The cell stays 0..99. */
+  spread: spec("SPREAD", 2, { macro: [], display: "spread" }),
+  /** Plane at 0, nearest tone at 1. 50 holds a common tone. The cell stays 0..99. */
+  flow: spec("FLOW", 4, { detent: [0.5], macro: [], display: "flow" }),
   decay: spec("DECAY", 2),
   snap: spec("SNAP", 2),
   body: spec("BODY", 2),
@@ -495,6 +499,7 @@ function chordPages(): Page[] {
       ...vpca("probability", FIELD.probability, "pattern"),
     ]),
     pair("tone", FIELD.tone, "octave", FIELD.octave, "notes"),
+    pair("spread", FIELD.spread, "flow", FIELD.flow, "notes"),
     ...soundPages(SOUND.chords),
     filterPage(),
     sendPage(),

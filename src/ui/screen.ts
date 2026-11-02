@@ -3,7 +3,7 @@ import { laneHeard } from "../core/journal.ts";
 import { clamp01, SIXTEENTH_TICKS, countFromUnit, delayDivision, rateFromUnit, tickToSample } from "../core/clock.ts";
 import { phraseStepsOf } from "../core/events.ts";
 import { chordSymbol, degreeNumeral, pitchClassName, scaleShort, scaleTitle } from "../core/harmony.ts";
-import { chordFigure, generatePhrase, laneEnvelope, laneSteps, octaveNumber, restingChordToneLabel, restingPitchLabel, restingSliceLabel, spanDegrees } from "../core/phrase.ts";
+import { chordFigure, chordVoiceCaption, generatePhrase, laneEnvelope, laneSteps, octaveNumber, restingChordToneLabel, restingPitchLabel, restingSliceLabel, spanDegrees } from "../core/phrase.ts";
 import { applyVoiceEnvelope, evalModulated, voiceLane } from "../core/modulate.ts";
 import { isPitched, isVoice, LANES, LANE_CODE, type RandomizeDepth, type RandomizeIntensity, type RandomizeScope, type ContextId, type HarmonicEvent, type LaneId, type Phrase, type Project, type TimedEvent } from "../core/types.ts";
 import { DIGIT_H, displayAmount, divisionCell, type BigAmount, type DisplayAmount } from "./digits.ts";
@@ -115,11 +115,12 @@ export function renderScreen(
   const shown = mixer ? mixerPage() : decking ? deckPage(focusedGroup(project.deck), project.deck, tone ? "tone" : "group") : page;
   const effectTitle = GROUP_PAD.find((pad) => pad.id === focusedGroup(project.deck))?.title ?? "BEAT REPEAT";
   const knobLine = decking && focus && focusBinding ? deckKnobHeader(project, focusBinding) : null;
+  const step = playing ? stepAt(project, tick) : 0;
   const header = mixer
     ? (focusBinding?.title ?? focus ?? "MIXER")
     : decking
       ? (knobLine ?? (tone ? "" : effectTitle))
-    : (focusBinding ? figureHeader(project, context, focusBinding) : null) ??
+    : (focusBinding ? figureHeader(project, context, focusBinding, step) : null) ??
       focusBinding?.title ??
       (focus ? focus : laneHeader(project, context, page));
   const vizLane: LaneId | null = isVoice(context) ? context : null;
@@ -1115,7 +1116,7 @@ function tiltWord(unit: number, low: string, high: string): string {
 }
 
 /** Pitch and octave show the resting note. Rate shows its division, count shows how many hits. */
-function figureHeader(project: Project, context: ContextId, binding: Binding): string | null {
+function figureHeader(project: Project, context: ContextId, binding: Binding, step: number): string | null {
   if (binding.store === "progression" && binding.path === "count" && Math.round(readControl(project, context, binding.path)) === 0) {
     return "MIDI";
   }
@@ -1132,7 +1133,7 @@ function figureHeader(project: Project, context: ContextId, binding: Binding): s
       return scaleTitle(project.global.scale);
     case "chordTone":
       if (context !== "chords") return null;
-      return restingChordToneLabel(project.working.chords, project.progression, project.global);
+      return restingChordToneLabel(project.working.chords, project.progression, project.global, step);
     case "division": {
       const unit = readControl(project, context, binding.path);
       const label = context === "chords" ? chordFigure(unit).label : rateFromUnit(unit).id;
@@ -1153,6 +1154,12 @@ function figureHeader(project: Project, context: ContextId, binding: Binding): s
     case "slice":
       if (context !== "chords") return null;
       return restingSliceLabel(project.working.chords, project.global);
+    case "spread":
+    case "flow": {
+      if (context !== "chords") return null;
+      const caption = chordVoiceCaption(project.working.chords, project.progression, project.global, step);
+      return binding.display === "spread" ? caption.spread : caption.flow;
+    }
     default:
       return null;
   }
