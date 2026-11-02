@@ -193,9 +193,7 @@ export function chordVoiceCaption(
   global: GlobalSettings,
   step = 0,
 ): { spread: string; flow: string } {
-  const steps = sixteenthSteps(global.phrase, global.bar);
-  const harmony = generateHarmony(progression, global, steps);
-  const frames = voiceTimeline(harmony, steps, scaleOf(global.scale), mod(global.root + global.transpose, 12), valueReader(lane));
+  const { frames, harmony } = valueVoices(lane, progression, global);
   const index = Math.max(0, Math.min(frames.length - 1, Math.floor(step)));
   const frame = frames[index];
   if (!frame?.notes.length) return { spread: "+0", flow: "0" };
@@ -234,15 +232,44 @@ function valueReader(lane: ChordLane): VoiceRead {
   };
 }
 
-function valueVoiceAt(lane: ChordLane, progression: Progression, global: GlobalSettings, step: number): VoiceFrame | null {
+let valueKeyA = 0;
+let valueKeyB = 0;
+let valueFrames: VoiceFrame[] | null = null;
+let valueHarmony: HarmonicEvent[] | null = null;
+
+/** Value-only spelling. The tone cell and the spread/flow header share one walk per paint. */
+function valueVoices(
+  lane: ChordLane,
+  progression: Progression,
+  global: GlobalSettings,
+): { frames: VoiceFrame[]; harmony: HarmonicEvent[] } {
+  const [a, b] = stampPair((mix, text) => {
+    mix(lane.spread.value);
+    mix(lane.flow.value);
+    mix(lane.octave.value);
+    for (const key of PROGRESSION_KEYS) mix(progression[key]);
+    text(global.scale);
+    mix(global.root);
+    mix(global.transpose);
+    mix(global.bar);
+    mix(global.phrase);
+    mix(global.seed);
+  });
+  if (valueFrames && valueHarmony && a === valueKeyA && b === valueKeyB) {
+    return { frames: valueFrames, harmony: valueHarmony };
+  }
   const steps = sixteenthSteps(global.phrase, global.bar);
-  const frames = voiceTimeline(
-    generateHarmony(progression, global, steps),
-    steps,
-    scaleOf(global.scale),
-    mod(global.root + global.transpose, 12),
-    valueReader(lane),
-  );
+  const harmony = generateHarmony(progression, global, steps);
+  const frames = voiceTimeline(harmony, steps, scaleOf(global.scale), mod(global.root + global.transpose, 12), valueReader(lane));
+  valueKeyA = a;
+  valueKeyB = b;
+  valueFrames = frames;
+  valueHarmony = harmony;
+  return { frames, harmony };
+}
+
+function valueVoiceAt(lane: ChordLane, progression: Progression, global: GlobalSettings, step: number): VoiceFrame | null {
+  const { frames } = valueVoices(lane, progression, global);
   if (!frames.length) return null;
   return frames[Math.max(0, Math.min(frames.length - 1, Math.floor(step)))] ?? null;
 }
@@ -314,62 +341,105 @@ function separate(notes: readonly number[]): number[] {
 /**
  * Give every function a pitch. Sources are attractors; a function left without
  * one sits in close position above the root and does not add to the cost.
+ * The search buffer is reused: a chord spelling runs on every knob turn.
  */
+const coverMidi: number[] = [];
+const coverDist: number[] = [];
+const coverUsed: boolean[] = [];
+const coverChoice: number[] = [];
+const coverBest: number[] = [];
+const coverFrom: number[] = [];
+const coverPcs: number[] = [];
+const coverJob = {
+  m: 0,
+  n: 0,
+  rootPc: 0,
+  preferLeap: false,
+  bestKey: 0,
+  bestLeap: 0,
+  bestLow: 0,
+};
+
 function cover(sources: readonly number[], fns: ChordFns, preferLeap: boolean, from: readonly number[]): number[] {
   const pcs = fns.pcs;
   const m = pcs.length;
   const n = sources.length;
-  if (m === 0) return [];
-  if (n === 0) return [];
-  const midis = new Array<number>(m).fill(0);
-  const used = new Array<boolean>(n).fill(false);
-  let bestKey = Number.POSITIVE_INFINITY;
-  let bestLeap = Number.POSITIVE_INFINITY;
-  let bestLow = Number.POSITIVE_INFINITY;
-  let best = midis.slice();
-
-  const finish = (cost: number, leap: number, low: number) => {
-    const better = cost < bestKey - 1e-6
-      || (Math.abs(cost - bestKey) <= 1e-6 && (preferLeap ? leap < bestLeap - 1e-6 : low < bestLow))
-      || (Math.abs(cost - bestKey) <= 1e-6 && preferLeap && Math.abs(leap - bestLeap) <= 1e-6 && low < bestLow);
-    if (!better) return;
-    bestKey = cost;
-    bestLeap = leap;
-    bestLow = low;
-    best = midis.slice();
-  };
-
-  const placeRest = (fi: number, rootMidi: number, cost: number, leap: number, low: number) => {
-    for (let i = fi; i < m; i++) {
-      const semi = mod(pcs[i] - fns.rootPc, 12);
-      midis[i] = clampMidi(rootMidi + semi);
-      low += midis[i];
-    }
-    finish(cost, leap, low);
-  };
-
-  const walk = (fi: number, cost: number, leap: number, low: number) => {
-    if (cost > bestKey + 1e-6) return;
-    if (fi === m) {
-      finish(cost, leap, low);
-      return;
-    }
-    let open = false;
-    for (let s = 0; s < n; s++) {
-      if (used[s]) continue;
-      open = true;
-      used[s] = true;
+  if (m === 0 || n === 0) return [];
+  const job = coverJob;
+  job.m = m;
+  job.n = n;
+  job.rootPc = fns.rootPc;
+  job.preferLeap = preferLeap;
+  job.bestKey = Number.POSITIVE_INFINITY;
+  job.bestLeap = Number.POSITIVE_INFINITY;
+  job.bestLow = Number.POSITIVE_INFINITY;
+  if (coverChoice.length < m) coverChoice.length = m;
+  if (coverBest.length < m) coverBest.length = m;
+  if (coverUsed.length < n) coverUsed.length = n;
+  if (coverFrom.length < n) coverFrom.length = n;
+  if (coverPcs.length < m) coverPcs.length = m;
+  const pairs = n * m;
+  if (coverMidi.length < pairs) coverMidi.length = pairs;
+  if (coverDist.length < pairs) coverDist.length = pairs;
+  for (let fi = 0; fi < m; fi++) coverPcs[fi] = pcs[fi];
+  for (let s = 0; s < n; s++) {
+    coverUsed[s] = false;
+    coverFrom[s] = from[s] ?? sources[s];
+    for (let fi = 0; fi < m; fi++) {
       const hit = nearestOctave(sources[s], pcs[fi]);
-      const origin = from[s] ?? sources[s];
-      midis[fi] = hit.midi;
-      walk(fi + 1, cost + hit.dist, leap + Math.abs(hit.midi - origin), low + hit.midi);
-      used[s] = false;
+      const slot = s * m + fi;
+      coverMidi[slot] = hit.midi;
+      coverDist[slot] = hit.dist;
     }
-    if (!open) placeRest(fi, midis[0] ?? octaveNumber(0) * 12 + fns.rootPc, cost, leap, low);
-  };
+  }
+  coverWalk(0, 0, 0, 0);
+  const won = new Array<number>(m);
+  for (let i = 0; i < m; i++) won[i] = coverBest[i];
+  return separate(won);
+}
 
-  walk(0, 0, 0, 0);
-  return separate(best);
+function coverFinish(cost: number, leap: number, low: number): void {
+  const job = coverJob;
+  const better = cost < job.bestKey - 1e-6
+    || (Math.abs(cost - job.bestKey) <= 1e-6 && (job.preferLeap ? leap < job.bestLeap - 1e-6 : low < job.bestLow))
+    || (Math.abs(cost - job.bestKey) <= 1e-6 && job.preferLeap && Math.abs(leap - job.bestLeap) <= 1e-6 && low < job.bestLow);
+  if (!better) return;
+  job.bestKey = cost;
+  job.bestLeap = leap;
+  job.bestLow = low;
+  for (let i = 0; i < job.m; i++) coverBest[i] = coverChoice[i];
+}
+
+function coverPlaceRest(fi: number, rootMidi: number, cost: number, leap: number, low: number): void {
+  const job = coverJob;
+  for (let i = fi; i < job.m; i++) {
+    const semi = mod(coverPcs[i] - job.rootPc, 12);
+    coverChoice[i] = clampMidi(rootMidi + semi);
+    low += coverChoice[i];
+  }
+  coverFinish(cost, leap, low);
+}
+
+function coverWalk(fi: number, cost: number, leap: number, low: number): void {
+  const job = coverJob;
+  if (cost > job.bestKey + 1e-6) return;
+  if (fi === job.m) {
+    coverFinish(cost, leap, low);
+    return;
+  }
+  let open = false;
+  const m = job.m;
+  for (let s = 0; s < job.n; s++) {
+    if (coverUsed[s]) continue;
+    open = true;
+    coverUsed[s] = true;
+    const slot = s * m + fi;
+    const midi = coverMidi[slot];
+    coverChoice[fi] = midi;
+    coverWalk(fi + 1, cost + coverDist[slot], leap + Math.abs(midi - coverFrom[s]), low + midi);
+    coverUsed[s] = false;
+  }
+  if (!open) coverPlaceRest(fi, coverChoice[0] ?? octaveNumber(0) * 12 + job.rootPc, cost, leap, low);
 }
 
 function parallelVoicing(prev: VoiceCarry, fns: ChordFns): number[] {
@@ -463,7 +533,7 @@ function walkVoices(
   read: VoiceRead,
   carry: VoiceCarry | null,
 ): { frames: VoiceFrame[]; end: VoiceCarry | null } {
-  const frames = Array.from({ length: steps }, () => ({ notes: [] as number[], open: [] as number[] }));
+  const frames = new Array<VoiceFrame>(steps);
   let prev = carry;
   let end: VoiceCarry | null = carry;
   for (const harm of harmony) {
@@ -477,14 +547,32 @@ function walkVoices(
     const nearest = prev ? nearestVoicing(prev, fns) : close;
     const memory = prev?.notes ?? parallel;
     let lastOpen = close;
+    let openFlow = 0;
+    let openShift = 0;
+    let openNotes = close;
+    let haveOpen = false;
+    let shared: VoiceFrame | null = null;
+    let sharedSpread = 0;
     for (let step = start; step < stop; step++) {
       const flow = clamp01(read.flow(step));
-      const blended = separate(blendVoices(parallel, nearest, flow, memory, fns));
       const shift = (octaveNumber(read.octave(step)) - octaveNumber(boundaryOct)) * 12;
-      const open = separate(blended.map((note) => clampMidi(note + shift)));
-      const notes = applySpread(open, clamp01(read.spread(step)));
-      frames[step] = { notes, open };
-      lastOpen = open;
+      const spread = clamp01(read.spread(step));
+      // The boundary spelling depends on flow and the octave shift. Spread only
+      // opens that spelling, so a steady chord is one search for the whole hold.
+      if (!haveOpen || flow !== openFlow || shift !== openShift) {
+        const blended = separate(blendVoices(parallel, nearest, flow, memory, fns));
+        openNotes = shift === 0 ? blended : separate(blended.map((note) => clampMidi(note + shift)));
+        openFlow = flow;
+        openShift = shift;
+        haveOpen = true;
+        shared = null;
+      }
+      if (!shared || spread !== sharedSpread) {
+        shared = { notes: applySpread(openNotes, spread), open: openNotes };
+        sharedSpread = spread;
+      }
+      frames[step] = shared;
+      lastOpen = openNotes;
     }
     // Spread is applied again on the next chord, so the memory stays the led voices.
     prev = { notes: lastOpen, rootPc: fns.rootPc };
