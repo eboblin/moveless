@@ -1,5 +1,5 @@
 import { PPQN, SIXTEENTH_TICKS, sixteenthSteps, ticksPerBar } from "./clock.ts";
-import { clone } from "./clone.ts";
+import { clone, copy } from "./clone.ts";
 import { phraseStepsOf } from "./events.ts";
 import { fieldsOf, getPath, setPath } from "./fields.ts";
 import { isDrum, isPitched, PATTERN_LANES, TRANSITION_BARS, type GlobalSettings, type Lanes, type MorphState, type PatternId, type Project, type Scene, type TransitionId } from "./types.ts";
@@ -158,16 +158,43 @@ function switchTicks(
   return when;
 }
 
-export function mergeLanes(
+interface MorphWrite {
+  tick: number;
+  path: string;
+  value: number;
+  lane: PatternId;
+}
+
+interface MorphSchedule {
+  target: Lanes;
+  lock: Project["lock"];
+  punched: string;
+  mask: string;
+  bar: number;
+  phrase: number;
+  origin: number;
+  duration: number;
+  writes: readonly MorphWrite[];
+}
+
+/** One schedule per start snapshot. The morph object itself is replaced on every step. */
+const schedules = new WeakMap<Lanes, MorphSchedule>();
+
+function scheduleKey(punched: ReadonlySet<string>, morph: MorphState): { punched: string; mask: string } {
+  let punchedKey = "";
+  for (const path of punched) punchedKey += punchedKey ? `\0${path}` : path;
+  const mask = morph.lanes ? morph.lanes.join("\0") : "*";
+  return { punched: punchedKey, mask };
+}
+
+function buildSchedule(
   start: Lanes,
   target: Lanes,
-  current: Lanes,
-  tick: number,
   morph: MorphState,
   global: GlobalSettings,
   punched: ReadonlySet<string>,
   lock: Project["lock"],
-): Lanes {
+): readonly MorphWrite[] {
   const from = memoFields(start);
   const targetFields = new Map(memoFields(target).map((field) => [field.path, field.value]));
   const origin = morph.originTick;
@@ -205,42 +232,100 @@ export function mergeLanes(
     }
     return marks;
   };
-  const writes: { path: string; value: number }[] = [];
-  const dirty = new Set<PatternId>();
-  let nextTick = end;
+  const writes: MorphWrite[] = [];
   for (const field of from) {
     const lane = field.path.split(".")[0] as PatternId;
     if (lock[lane] || (mask && !mask.has(lane)) || punched.has(field.path)) continue;
     const to = targetFields.get(field.path);
-    if (to === undefined) continue;
-    let value = to;
-    if (tick < origin) {
-      value = field.value;
-      if (field.value !== to && origin < nextTick) nextTick = origin;
-    } else if (span > 0 && tick < end) {
-      if (field.kind === "lerp") {
-        const marks = marksOf(lane);
-        if (field.value !== to) {
-          for (const mark of marks) {
-            if (mark > tick && mark < nextTick) nextTick = mark;
-          }
-        }
-        value = lerpAt(field.value, to, tick, marks);
-      } else {
-        const at = when.get(field.path) ?? end;
-        if (field.value !== to && at > tick && at < nextTick) nextTick = at;
-        value = tick >= at ? to : field.value;
-      }
+    if (to === undefined || field.value === to) continue;
+    if (span <= 0) {
+      writes.push({ tick: origin, path: field.path, value: to, lane });
+      continue;
     }
-    if (getPath(current, field.path) === value) continue;
-    dirty.add(lane);
-    writes.push({ path: field.path, value });
+    if (field.kind === "lerp") {
+      const marks = marksOf(lane);
+      let prev = field.value;
+      let seen = Number.NaN;
+      for (const mark of marks) {
+        if (mark === seen) continue;
+        seen = mark;
+        const value = lerpAt(field.value, to, mark, marks);
+        if (value === prev) continue;
+        writes.push({ tick: mark, path: field.path, value, lane });
+        prev = value;
+      }
+      continue;
+    }
+    writes.push({ tick: when.get(field.path) ?? end, path: field.path, value: to, lane });
   }
-  morphNextTick = nextTick;
+  writes.sort((a, b) => a.tick - b.tick);
+  return writes;
+}
+
+function scheduleFor(
+  start: Lanes,
+  target: Lanes,
+  morph: MorphState,
+  global: GlobalSettings,
+  punched: ReadonlySet<string>,
+  lock: Project["lock"],
+): MorphSchedule {
+  const key = scheduleKey(punched, morph);
+  const cached = schedules.get(start);
+  if (
+    cached
+    && cached.target === target
+    && cached.lock === lock
+    && cached.punched === key.punched
+    && cached.mask === key.mask
+    && cached.bar === global.bar
+    && cached.phrase === global.phrase
+    && cached.origin === morph.originTick
+    && cached.duration === morph.durationTicks
+  ) return cached;
+  const schedule: MorphSchedule = {
+    target,
+    lock,
+    punched: key.punched,
+    mask: key.mask,
+    bar: global.bar,
+    phrase: global.phrase,
+    origin: morph.originTick,
+    duration: morph.durationTicks,
+    writes: buildSchedule(start, target, morph, global, punched, lock),
+  };
+  schedules.set(start, schedule);
+  return schedule;
+}
+
+export function mergeLanes(
+  start: Lanes,
+  target: Lanes,
+  current: Lanes,
+  tick: number,
+  morph: MorphState,
+  global: GlobalSettings,
+  punched: ReadonlySet<string>,
+  lock: Project["lock"],
+): Lanes {
+  const end = morph.originTick + Math.max(0, morph.durationTicks);
+  const writes = scheduleFor(start, target, morph, global, punched, lock).writes;
+  morphNextTick = end;
+  const due: MorphWrite[] = [];
+  const dirty = new Set<PatternId>();
+  for (const write of writes) {
+    if (write.tick > tick) {
+      morphNextTick = write.tick;
+      break;
+    }
+    if (getPath(current, write.path) === write.value) continue;
+    dirty.add(write.lane);
+    due.push(write);
+  }
   if (dirty.size === 0) return current;
   const next: Lanes = { ...current };
   for (const lane of dirty) copyLane(next, current, lane);
-  for (const write of writes) setPath(next, write.path, write.value);
+  for (const write of due) setPath(next, write.path, write.value);
   return next;
 }
 
@@ -300,17 +385,21 @@ export function retarget(project: Project, scene: Scene, tick: number, lanes: Pa
 }
 
 function copyLane(into: Lanes, from: Lanes, lane: PatternId): void {
-  if (lane === "fx") into.fx = clone(from.fx);
-  else if (isDrum(lane)) into[lane] = clone(from[lane]);
-  else if (isPitched(lane)) into[lane] = clone(from[lane]);
-  else into.chords = clone(from.chords);
+  if (lane === "fx") into.fx = copy(from.fx);
+  else if (isDrum(lane)) into[lane] = copy(from[lane]);
+  else if (isPitched(lane)) into[lane] = copy(from[lane]);
+  else into.chords = copy(from.chords);
 }
 
 export function punch(project: Project, path: string, value: number): Project {
+  if (getPath(project.working, path) === value) {
+    if (!project.morph || project.morph.punched.includes(path)) return project;
+    return { ...project, morph: { ...project.morph, punched: [...project.morph.punched, path] } };
+  }
   const dot = path.indexOf(".");
   const head = dot < 0 ? "" : path.slice(0, dot);
   const lane = (PATTERN_LANES as readonly string[]).includes(head) ? head as PatternId : null;
-  const working = lane ? { ...project.working } : clone(project.working);
+  const working = lane ? { ...project.working } : copy(project.working);
   if (lane) copyLane(working, project.working, lane);
   setPath(working, path, value);
   if (!project.morph) return { ...project, working };

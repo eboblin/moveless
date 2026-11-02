@@ -3877,11 +3877,11 @@ describe("page title", () => {
     const started = state.ui.pageTitleSlide?.startedMs ?? 0;
     const until = state.ui.pageTitleUntilMs ?? 0;
     assert.equal(pageTitlePaintKey(state.ui, started), 0);
-    assert.equal(pageTitlePaintKey(state.ui, started + 40), 40);
-    assert.equal(pageTitlePaintKey(state.ui, started + PAGE_TITLE_SLIDE_MS), PAGE_TITLE_SLIDE_MS);
-    assert.equal(pageTitlePaintKey(state.ui, started + PAGE_TITLE_SLIDE_MS + 50), PAGE_TITLE_SLIDE_MS);
+    assert.equal(pageTitlePaintKey(state.ui, started + 40), pageTitleTravel(40));
+    assert.equal(pageTitlePaintKey(state.ui, started + PAGE_TITLE_SLIDE_MS), WIDTH);
+    assert.equal(pageTitlePaintKey(state.ui, started + PAGE_TITLE_SLIDE_MS + 50), WIDTH);
     assert.ok(until > started + PAGE_TITLE_SLIDE_MS);
-    assert.equal(pageTitlePaintKey(state.ui, until), PAGE_TITLE_SLIDE_MS);
+    assert.equal(pageTitlePaintKey(state.ui, until), WIDTH);
     const letGoSlide = reduce(state, { kind: "note", data1: 9, data2: 0 });
     assert.equal(pageTitlePaintKey(letGoSlide.ui, until), -1);
     const upSlide = settleWheel(letGoSlide.ui, (letGoSlide.ui.wheelReleaseMs ?? 0) + WHEEL_RELEASE_MS);

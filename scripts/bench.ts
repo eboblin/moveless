@@ -1,11 +1,15 @@
+import { SIXTEENTH_TICKS } from "../src/core/clock.ts";
+import { clone } from "../src/core/clone.ts";
 import { defaultProject } from "../src/core/defaults.ts";
-import { punch } from "../src/core/morph.ts";
+import { launchScene, record } from "../src/core/journal.ts";
+import { applyMorph, punch } from "../src/core/morph.ts";
 import { generatePhrase } from "../src/core/phrase.ts";
+import { LANES, type Project } from "../src/core/types.ts";
 import { eventsInBlock, phraseLoop, soundMotions } from "../src/dsp/schedule.ts";
-import { packPhraseBody, createEngine, loadPhrase, renderBlock, renderClock } from "../src/dsp/voice.ts";
-import { renderScreen, WIDTH, HEIGHT } from "../src/ui/screen.ts";
+import { packPhraseBody, createEngine, loadPhrase, parseMeterPage, renderBlock, renderClock } from "../src/dsp/voice.ts";
+import { laneMark, renderScreen, WIDTH, HEIGHT } from "../src/ui/screen.ts";
 import { defaultUi } from "../src/ui/state.ts";
-import type { Project } from "../src/core/types.ts";
+import { emptyWave, strokeWaveform } from "../src/ui/wave.ts";
 
 const project = defaultProject();
 const rounds = 80;
@@ -95,6 +99,79 @@ const deckStart = performance.now();
 for (let i = 0; i < rounds; i++) renderClock(deckEngine);
 const deckMs = performance.now() - deckStart;
 
+generatePhrase(project);
+const hitStart = performance.now();
+let hitEvents = 0;
+for (let i = 0; i < rounds; i++) hitEvents += generatePhrase(project).lanes.kick.length;
+const hitMs = performance.now() - hitStart;
+
+const tape = emptyWave();
+for (let i = 0; i < 256; i++) {
+  tape.left.set(i * 128, (i % 7) / 7);
+  tape.right.set(i * 128, (i % 5) / 7);
+}
+let waveRects = 0;
+const waveStart = performance.now();
+for (let i = 0; i < rounds; i++) {
+  strokeWaveform(
+    tape,
+    { x: 0, y: 0, w: WIDTH, h: 40, head: i * 128, span: 128 * 128, stylus: true },
+    () => { waveRects += 1; },
+    () => {},
+  );
+}
+const waveMs = performance.now() - waveStart;
+
+let punched = defaultProject();
+const punchStart = performance.now();
+for (let i = 0; i < rounds; i++) punched = punch(punched, "snare.ratchet.count.amount", (i % 20) / 20);
+const punchMs = performance.now() - punchStart;
+
+const mixUi = { ...ui, face: "mixer" as const };
+let mixLit = 0;
+const mixStart = performance.now();
+for (let i = 0; i < rounds; i++) {
+  const level = (i * 17) & 255;
+  const byte = level.toString(16).padStart(2, "0");
+  const screen = renderScreen(project, mixUi, 0, false, 0, pixels, 0, null, parseMeterPage((byte + byte).repeat(8)));
+  mixLit += screen.pixels[0] ?? 0;
+}
+const mixMs = performance.now() - mixStart;
+
+function morphProject(): Project {
+  let next = defaultProject();
+  next.transition = "medium";
+  next = punch(next, "kick.gen1.velocity.value", 0.2);
+  next = punch(next, "bass.filter.cutoff.value", 0.2);
+  next = punch(next, "lead.pitch.value", 0.3);
+  next = record(next);
+  next = punch(next, "kick.gen1.velocity.value", 0.9);
+  next = punch(next, "bass.filter.cutoff.value", 0.8);
+  next = punch(next, "lead.pitch.value", 0.7);
+  next = record(next);
+  next = { ...next, working: clone(next.journal[0].lanes) };
+  return launchScene(next, "002", 0);
+}
+
+let morphCursor = morphProject();
+const morphSteps = Math.max(1, Math.ceil((morphCursor.morph?.durationTicks ?? 0) / SIXTEENTH_TICKS));
+let morphRebuilds = 0;
+let morphScreens = 0;
+let morphMarks = 0;
+let morphPhrase: ReturnType<typeof generatePhrase> | null = null;
+const morphStart = performance.now();
+for (let i = 0; i <= morphSteps; i++) {
+  const at = i * SIXTEENTH_TICKS;
+  morphCursor = applyMorph(morphCursor, at);
+  const phrase = generatePhrase(morphCursor);
+  if (phrase !== morphPhrase) morphRebuilds += 1;
+  morphPhrase = phrase;
+  for (const lane of LANES) morphMarks += laneMark(morphCursor, phrase, lane, at / SIXTEENTH_TICKS);
+  renderScreen(morphCursor, ui, at, true, 0, pixels);
+  morphScreens += 1;
+}
+const morphMs = performance.now() - morphStart;
+
 const per = (ms: number) => Number(((ms * 1000) / rounds).toFixed(1));
 
 console.log(JSON.stringify({
@@ -119,4 +196,21 @@ console.log(JSON.stringify({
   usPerBlock: per(audioMs),
   deckUs: per(deckMs),
   deckLead: deckEngine.deck.lead,
+  hitMs: Number(hitMs.toFixed(2)),
+  hitEvents,
+  usPerPhraseHit: per(hitMs),
+  waveMs: Number(waveMs.toFixed(2)),
+  waveRects,
+  usPerWave: per(waveMs),
+  punchMs: Number(punchMs.toFixed(2)),
+  usPerPunch: per(punchMs),
+  mixMs: Number(mixMs.toFixed(2)),
+  mixLit,
+  usPerMixer: per(mixMs),
+  morphMs: Number(morphMs.toFixed(2)),
+  morphSteps,
+  morphRebuilds,
+  morphScreens,
+  morphMarks,
+  usPerMorphStep: Number(((morphMs * 1000) / morphSteps).toFixed(1)),
 }, null, 2));

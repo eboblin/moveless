@@ -61,7 +61,7 @@ function mixText(h: number, text: string, prime: number): number {
 }
 
 /** Two short stamps over the same walk. A hit skips cloning both lane trees. */
-function stampPair(fill: (mix: (n: number) => void, text: (s: string) => void) => void): [number, number] {
+export function hashPair(fill: (mix: (n: number) => void, text: (s: string) => void) => void): [number, number] {
   let a = 2166136261;
   let b = 2166136261 ^ 0x9e3779b9;
   fill(
@@ -76,6 +76,8 @@ function stampPair(fill: (mix: (n: number) => void, text: (s: string) => void) =
   );
   return [a, b];
 }
+
+const stampPair = hashPair;
 
 function stampLanes(mix: (n: number) => void, lanes: Lanes): void {
   mixFieldValues(lanes, mix);

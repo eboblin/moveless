@@ -39,8 +39,8 @@ export const PARAM_H = HEIGHT - HEADER_H - VIZ_H;
  * Caption rows in the picture, above the separator's own 1 px gap.
  * One line is centered. Two lines share one pad above, between, and below.
  */
-const CAPTION_BOX_TOP = HEADER_H;
-const CAPTION_BOX_BOTTOM = SEP_Y - 2;
+export const CAPTION_BOX_TOP = HEADER_H;
+export const CAPTION_BOX_BOTTOM = SEP_Y - 2;
 const CAPTION_BOX_H = CAPTION_BOX_BOTTOM - CAPTION_BOX_TOP + 1;
 export const CAPTION_GAP = Math.floor((CAPTION_BOX_H - 2 * DIGIT_H) / 3);
 export const CAPTION_LANE_Y = CAPTION_BOX_TOP + CAPTION_GAP;
@@ -162,7 +162,10 @@ export function renderScreen(
   if (notice) labels.push(...noticeLabels(notice.title, notice.value));
   if ((menu || titleOn) && (phrase || mixer || decking)) dimPattern(pixels, mixer ? MIX_FADER_BOTTOM : undefined);
   if (menu && !titleOn) drawMenuCaption(pixels, project, menu);
-  if (titleOn) drawPageTitle(pixels, project, ui, now);
+  if (titleOn) {
+    captureTitleUnder(pixels);
+    drawPageTitle(pixels, project, ui, now);
+  }
   const digits = mixer || !shown ? [] : paramDigits(project, context, shown, focus, ui, now);
   const dim: number[] = [];
   return { header, viz, pixels, labels, digits, dim };
@@ -228,12 +231,54 @@ export function pageTitleVisible(ui: UiState, now: number): boolean {
 
 /**
  * Host repaint key. `-1` once the caption is gone. `0` while a still caption is up.
- * During a jog slide it is the elapsed milliseconds, so a stopped transport still walks the line.
+ * During a jog slide it is the pixel travel, so a stopped transport still walks the line
+ * and a frame repeats while the glyph sits on the same column.
  */
 export function pageTitlePaintKey(ui: UiState, now: number): number {
   if (!pageTitleVisible(ui, now)) return -1;
   if (!ui.pageTitleSlide) return 0;
-  return Math.min(PAGE_TITLE_SLIDE_MS, Math.max(0, now - ui.pageTitleSlide.startedMs));
+  return pageTitleTravel(Math.max(0, now - ui.pageTitleSlide.startedMs));
+}
+
+/** Dimmed picture under the sliding caption, captured before the glyphs are drawn. */
+let titleUnder: Uint8Array | null = null;
+
+function captureTitleUnder(pixels: Uint8Array): void {
+  const rows = CAPTION_BOX_BOTTOM - CAPTION_BOX_TOP + 1;
+  const bytes = rows * WIDTH;
+  if (!titleUnder || titleUnder.length !== bytes) titleUnder = new Uint8Array(bytes);
+  let offset = 0;
+  for (let y = CAPTION_BOX_TOP; y <= CAPTION_BOX_BOTTOM; y++) {
+    const row = y * WIDTH;
+    titleUnder.set(pixels.subarray(row, row + WIDTH), offset);
+    offset += WIDTH;
+  }
+}
+
+/** Put the stored picture back and draw the caption where it sits now. */
+export function slidePageTitle(pixels: Uint8Array, project: Project, ui: UiState, now: number): boolean {
+  if (!titleUnder) return false;
+  let offset = 0;
+  for (let y = CAPTION_BOX_TOP; y <= CAPTION_BOX_BOTTOM; y++) {
+    pixels.set(titleUnder.subarray(offset, offset + WIDTH), y * WIDTH);
+    offset += WIDTH;
+  }
+  drawPageTitle(pixels, project, ui, now);
+  return true;
+}
+
+/** Values on the current page. A morph landing uses this to see whether the digits moved. */
+export function readoutKey(project: Project, ui: UiState): string {
+  const peek = ui.heldContext;
+  const context = peek ?? ui.context;
+  const pageIndex = peek ? ui.heldPage ?? ui.lanePages[peek] ?? 0 : ui.page;
+  const page = livePage(project, context, pageIndex);
+  if (!page) return "";
+  let key = "";
+  for (const binding of page.bindings) {
+    key += binding ? `,${readControl(project, context, binding.path)}` : ",";
+  }
+  return key;
 }
 
 /** Pixels the jog slide has travelled. Ease-out, full screen width by `PAGE_TITLE_SLIDE_MS`. */
@@ -332,6 +377,43 @@ function drawChannelMeter(
   };
   for (let y = 0; y < levelPx; y++) paint(bottom - y);
   if (peakPx > 0) paint(bottom - (peakPx - 1));
+}
+
+/** Level and peak columns. The fader and the captions stay where the last full frame put them. */
+export function strokeMeters(
+  meters: ChannelMeter[] | null,
+  focus: string | null,
+  rect: (x: number, y: number, w: number, h: number, value: number) => void,
+): void {
+  const top = MIX_METER_TOP;
+  const bottom = MIX_METER_BOTTOM;
+  const trackH = Math.max(1, bottom - top);
+  for (let i = 0; i < MIX_CHANNELS.length; i++) {
+    const x = MIX_METER_X[i];
+    const framed = focus === mixFocusLabel(MIX_CHANNELS[i]);
+    const y0 = framed ? top + 1 : top;
+    const y1 = framed ? bottom - 1 : bottom;
+    if (y1 >= y0) rect(x, y0, 1, y1 - y0 + 1, 0);
+    const meter = meters?.[i];
+    if (!meter) continue;
+    const levelPx = Math.round(Math.max(0, Math.min(1, meter.level)) * trackH);
+    const peakPx = Math.round(Math.max(0, Math.min(1, meter.peak)) * trackH);
+    if (levelPx > 0) {
+      let y = bottom - levelPx + 1;
+      let h = levelPx;
+      if (framed && y <= top) {
+        h -= top + 1 - y;
+        y = top + 1;
+      }
+      if (framed && y + h - 1 >= bottom) h = bottom - y;
+      if (h > 0) rect(x, y, 1, h, 1);
+    }
+    if (peakPx > 0) {
+      const row = bottom - (peakPx - 1);
+      const inside = levelPx > 0 && row >= bottom - levelPx + 1;
+      if (!inside && !(framed && (row === top || row === bottom))) rect(x, row, 1, 1, 1);
+    }
+  }
 }
 
 function deckHeardTick(ui: UiState): number | null {
@@ -693,14 +775,30 @@ function lanePicture(project: Project, phrase: Phrase, lane: LaneId, playhead: n
   if (width == null || width >= full) return { steps: full, events: phrase.lanes[lane], playhead };
   const cursor = playhead < 0 ? 0 : ((playhead % full) + full) % full;
   const origin = Math.floor(cursor / width) * width;
+  return { steps: width, events: sliceRing(phrase.lanes[lane], origin, width), playhead: playhead < 0 ? -1 : cursor - origin };
+}
+
+const sliceBook = new WeakMap<TimedEvent[], Map<number, TimedEvent[]>>();
+
+/** One window of a bass or lead phrase. The same ring and origin keep the glyph cache. */
+function sliceRing(events: TimedEvent[], origin: number, width: number): TimedEvent[] {
+  let book = sliceBook.get(events);
+  if (!book) {
+    book = new Map();
+    sliceBook.set(events, book);
+  }
+  const key = origin + width * 1048576;
+  const hit = book.get(key);
+  if (hit) return hit;
   const originTick = origin * SIXTEENTH_TICKS;
   const endTick = (origin + width) * SIXTEENTH_TICKS;
   const sliced: TimedEvent[] = [];
-  for (const event of phrase.lanes[lane]) {
+  for (const event of events) {
     if (event.tick < originTick || event.tick >= endTick) continue;
     sliced.push({ ...event, tick: event.tick - originTick });
   }
-  return { steps: width, events: sliced, playhead: playhead < 0 ? -1 : cursor - origin };
+  book.set(key, sliced);
+  return sliced;
 }
 
 /** Pattern length of the live lane. Chords stay on the shared phrase. */

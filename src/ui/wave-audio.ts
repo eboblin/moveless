@@ -1,6 +1,6 @@
 import { PPQN, SAMPLE_RATE, SIXTEENTH_TICKS, tickToSample } from "../core/clock.ts";
 import { heardFx, laneHeard, sameHeard } from "../core/journal.ts";
-import { generatePhrase } from "../core/phrase.ts";
+import { generatePhrase, hashPair } from "../core/phrase.ts";
 import { LANES, type LaneId, type Phrase, type Project } from "../core/types.ts";
 import { phraseLoop, soundMotions, type LoopEvent } from "../dsp/schedule.ts";
 import {
@@ -13,10 +13,12 @@ import {
   snareBodyDecaySeconds,
   snareNoiseDecaySeconds,
 } from "../dsp/envelope.ts";
-import { WAVE_HOP, emptyWave, type WaveTape } from "./wave.ts";
+import { WAVE_HOP, emptyWave, resetWaveScroll, type WaveTape } from "./wave.ts";
 
 let bound: Project | null = null;
-let boundStamp = "";
+let boundA = 0;
+let boundB = 0;
+let boundReady = false;
 let tape: WaveTape = emptyWave();
 /** Times the collage stamp ran. A deck-only project skips this. */
 let stampPasses = 0;
@@ -24,9 +26,12 @@ let stampPasses = 0;
 /** Drop the collage. The next view builds it again from the phrase. */
 export function resetWaveform(): void {
   bound = null;
-  boundStamp = "";
+  boundA = 0;
+  boundB = 0;
+  boundReady = false;
   tape = emptyWave();
   stampPasses = 0;
+  resetWaveScroll();
 }
 
 /** How many times the heard-phrase stamp has been built since the last reset. */
@@ -188,24 +193,65 @@ function buildSketch(project: Project, phrase: Phrase, period: number): WaveTape
 }
 
 /** Deck knobs are not part of this. Turning them must not rebuild the picture. */
-function audioStamp(project: Project, phrase: Phrase): string {
-  return JSON.stringify([
-    project.global.tempo,
-    project.global.bar,
-    project.global.seed,
-    project.global.phrase,
-    project.global.scale,
-    project.global.swing,
-    project.mixer,
-    project.mute,
-    project.solo,
-    project.lock,
-    project.bus,
-    heardFx(project),
-    phrase.steps,
-    phraseLoop(project, phrase),
-    soundMotions(project, phrase),
-  ]);
+function audioStamp(project: Project, phrase: Phrase): [number, number] {
+  return hashPair((mix, text) => {
+    mix(project.global.tempo);
+    mix(project.global.bar);
+    mix(project.global.seed);
+    mix(project.global.phrase);
+    text(project.global.scale);
+    mix(project.global.swing);
+    for (const lane of LANES) {
+      mix(project.mixer[lane]);
+      mix(project.mute[lane] ? 1 : 0);
+      mix(project.solo[lane] ? 1 : 0);
+      mix(project.lock[lane] ? 1 : 0);
+      mix(phrase.steps[lane]);
+    }
+    mix(project.mixer.master);
+    mix(project.mute.fx ? 1 : 0);
+    mix(project.lock.fx ? 1 : 0);
+    mix(project.bus.glue);
+    mix(project.bus.pump);
+    mix(project.bus.wide);
+    mix(project.bus.tilt);
+    const fx = heardFx(project);
+    mix(fx.reverb.size);
+    mix(fx.reverb.decay);
+    mix(fx.reverb.air);
+    mix(fx.reverb.spin);
+    mix(fx.reverb.shim);
+    mix(fx.reverb.level);
+    mix(fx.delay.time);
+    mix(fx.delay.feed);
+    mix(fx.delay.tone);
+    mix(fx.delay.duck);
+    mix(fx.delay.ping);
+    mix(fx.delay.taps);
+    mix(fx.delay.wow);
+    mix(fx.delay.level);
+    for (const event of phraseLoop(project, phrase)) {
+      text(event.lane);
+      mix(event.sample);
+      mix(event.loop);
+      mix(event.note);
+      mix(event.velocity);
+      mix(event.lengthTicks);
+      for (const param of event.params) {
+        text(param.id);
+        mix(param.value);
+      }
+    }
+    for (const motion of soundMotions(project, phrase)) {
+      text(motion.lane);
+      text(motion.id);
+      mix(motion.value);
+      mix(motion.pattern);
+      mix(motion.cycle);
+      mix(motion.amount);
+      mix(motion.loop);
+    }
+  });
 }
 
 /**
@@ -221,13 +267,15 @@ export function serviceWaveform(project: Project): WaveTape {
   }
   stampPasses += 1;
   const phrase = generatePhrase(project);
-  const stamp = audioStamp(project, phrase);
-  if (stamp === boundStamp) {
+  const [a, b] = audioStamp(project, phrase);
+  if (boundReady && a === boundA && b === boundB) {
     bound = project;
     return tape;
   }
   tape = buildSketch(project, phrase, loopPeriod(project, phrase));
   bound = project;
-  boundStamp = stamp;
+  boundA = a;
+  boundB = b;
+  boundReady = true;
   return tape;
 }

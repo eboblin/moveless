@@ -9,10 +9,12 @@ import { formatFx } from "../dsp/fx.ts";
 import { assembleDeck, behaviorOf, formatDeckCommand, isDeckGroup } from "../core/deck.ts";
 import { formatBus, packPhraseBody, parseMeterPage } from "../dsp/voice.ts";
 import { midiMessage, reduce, settleTrackPeek, type Session } from "../ui/input.ts";
-import { CAPTURE_CC, DOWN_CC, LANES, MENU_CC, MUTE_CC, PLAY_CC, SAMPLE_CC, UP_CC } from "../core/types.ts";
+import { CAPTURE_CC, DOWN_CC, isVoice, LANES, MENU_CC, MUTE_CC, PLAY_CC, SAMPLE_CC, UP_CC } from "../core/types.ts";
 import { advancePulseClock, blinkHalfMs, directionLit, dropLed, faceButtonLed, ledColorAt, menuLed, modeButtonLed, offerLed, padLeds, padPackets, playLed, PULSE_CLOCK_IDLE, sceneShadeStep, STEP_ICON_CC, stepIconColors, stepLampKey, stepLeds, takeLeds, trackLeds, type PulseClock } from "../ui/leds.ts";
 import { plotAmount, plotMinus } from "../ui/digits.ts";
 import {
+  CAPTION_BOX_BOTTOM,
+  CAPTION_BOX_TOP,
   CHAR_W,
   DIGIT_Y,
   FONT_H,
@@ -32,11 +34,14 @@ import {
   nudgePlayhead,
   pageTitlePaintKey,
   pageTitleVisible,
+  readoutKey,
   renderScreen,
+  slidePageTitle,
+  strokeMeters,
   type Screen,
 } from "../ui/screen.ts";
 import { resetWaveform, serviceWaveform } from "../ui/wave-audio.ts";
-import { applyWavePages, strokeWaveform, type WaveTape } from "../ui/wave.ts";
+import { applyWavePages, resetWaveScroll, strokeWaveform, strokeWaveScroll, type WaveTape } from "../ui/wave.ts";
 import { defaultUi, focusVisible, peekKind, restoreUi, screenPlace, settleWheel, type UiState } from "../ui/state.ts";
 import type { Project } from "../core/types.ts";
 
@@ -252,8 +257,8 @@ function blit(pixels: Uint8Array): void {
   }
 }
 
-let sentSteps: string[] = [];
-let sentPads: string[] = [];
+let sentSteps: number[] = [];
+let sentPads: number[] = [];
 /** Unsent LED MIDI. Drained a block at a time so a full repaint is not dropped. */
 const ledOut = new Map<number, number[]>();
 /** Pad packets still owed, one per drain, so a pulse arms after its colour has latched. */
@@ -281,8 +286,9 @@ let paintHint = false;
 let paintCapture = false;
 let paintFocus = false;
 let paintPeek: string | null = null;
-let paintDeckFrame = -1;
 let paintTitleKey = -1;
+let paintLane: object | null = null;
+let paintDigits = "";
 let ledPhase = -1;
 let ledShade = -1;
 let ledLamps = "";
@@ -299,10 +305,15 @@ let deckColumn = Number.NaN;
 let deckSpan = Number.NaN;
 let deckTape: WaveTape | null = null;
 let chromeDeck: Project["deck"] | null = null;
-let chromeUi: UiState | null = null;
 let chromeFocus = false;
+let chromeFocusPath = "";
+let chromeGesture = "";
 let chromeWidth = -2;
 let chromeBar = Number.NaN;
+let deckCoverKey = "";
+let gateProject: Project | null = null;
+let gateStep = Number.NaN;
+let gateList: readonly number[] = LANES.map(() => 0);
 let pulseClock: PulseClock = PULSE_CLOCK_IDLE;
 
 function blitColumns(pixels: Uint8Array, xs: readonly number[], y0: number, y1: number): void {
@@ -314,33 +325,61 @@ function blitColumns(pixels: Uint8Array, xs: readonly number[], y0: number, y1: 
   }
 }
 
-function screenDelta(): "same" | "full" | "head" {
-  const ui = session.ui;
-  const now = Date.now();
-  const notice = !!(ui.notice && now < ui.notice.untilMs);
-  const hint = !!(ui.randomizeHint && now < ui.randomizeHint.untilMs);
-  const capture = !!(ui.sampleHint && now < ui.sampleHint.untilMs);
-  const focus = focusVisible(ui.focus, session.tick, now);
-  const peek = peekKind(ui);
-  const latch = Math.round(session.project.progression.count) <= 0 ? latchStamp() : "";
-  const deckFrame = deckVisible(ui) ? Math.floor(Math.max(0, session.tick)) : -1;
-  const titleKey = pageTitlePaintKey(ui, now);
-  const pictureSame = paintProject === session.project
-    && paintUi === ui
-    && paintPlaying === session.playing
-    && paintNotice === notice
-    && paintHint === hint
-    && paintCapture === capture
-    && paintFocus === focus
-    && paintPeek === peek
-    && paintLatch === latch
-    && paintDeckFrame === deckFrame
-    && paintLoad === audioLoad
-    && paintTitleKey === titleKey;
-  if (pictureSame) {
-    if (!session.playing || deckVisible(ui)) return "same";
-    return "head";
-  }
+type PaintDelta = "same" | "full" | "head" | "viz" | "readout" | "caption";
+
+function focusSame(a: UiState["focus"], b: UiState["focus"]): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  return a.path === b.path && a.label === b.label && a.generator === b.generator && a.held === b.held && a.showPattern === b.showPattern;
+}
+
+/** Encoder travel and the detent hold do not change a pixel. */
+function samePaintUi(a: UiState | null, b: UiState): boolean {
+  if (!a) return false;
+  if (a === b) return true;
+  return a.context === b.context
+    && a.page === b.page
+    && a.mode === b.mode
+    && a.wheelTouch === b.wheelTouch
+    && a.face === b.face
+    && a.deckLayer === b.deckLayer
+    && a.deckGesture === b.deckGesture
+    && a.deckGestureTick === b.deckGestureTick
+    && a.deckLatchedGesture === b.deckLatchedGesture
+    && a.deckLatchTick === b.deckLatchTick
+    && a.deckPress === b.deckPress
+    && a.heldContext === b.heldContext
+    && a.heldPage === b.heldPage
+    && a.pageTitleLane === b.pageTitleLane
+    && a.pageTitleSlide === b.pageTitleSlide
+    && a.pageTitleUntilMs === b.pageTitleUntilMs
+    && a.notice === b.notice
+    && a.randomizeHint === b.randomizeHint
+    && a.sampleHint === b.sampleHint
+    && a.macroReturns === b.macroReturns
+    && a.lanePages === b.lanePages
+    && focusSame(a.focus, b.focus);
+}
+
+function shownWorking(project: Project, ui: UiState): object | null {
+  if (ui.face === "mixer" || ui.face === "deck") return null;
+  const context = ui.heldContext ?? ui.context;
+  if (!isVoice(context)) return null;
+  return project.working[context];
+}
+
+function rememberPaint(
+  ui: UiState,
+  notice: boolean,
+  hint: boolean,
+  capture: boolean,
+  focus: boolean,
+  peek: string | null,
+  latch: string,
+  titleKey: number,
+  lane: object | null,
+  digits: string,
+): void {
   paintProject = session.project;
   paintUi = ui;
   paintPlaying = session.playing;
@@ -350,17 +389,77 @@ function screenDelta(): "same" | "full" | "head" {
   paintFocus = focus;
   paintPeek = peek;
   paintLatch = latch;
-  paintDeckFrame = deckFrame;
   paintLoad = audioLoad;
   paintTitleKey = titleKey;
+  paintLane = lane;
+  paintDigits = digits;
+}
+
+function screenDelta(now: number): PaintDelta {
+  const ui = session.ui;
+  const notice = !!(ui.notice && now < ui.notice.untilMs);
+  const hint = !!(ui.randomizeHint && now < ui.randomizeHint.untilMs);
+  const capture = !!(ui.sampleHint && now < ui.sampleHint.untilMs);
+  const focus = focusVisible(ui.focus, session.tick, now);
+  const peek = peekKind(ui);
+  const latch = Math.round(session.project.progression.count) <= 0 ? latchStamp() : "";
+  const titleKey = pageTitlePaintKey(ui, now);
+  const uiSame = paintUi === ui || samePaintUi(paintUi, ui);
+  const flagsSame = uiSame
+    && paintPlaying === session.playing
+    && paintNotice === notice
+    && paintHint === hint
+    && paintCapture === capture
+    && paintFocus === focus
+    && paintPeek === peek
+    && paintLatch === latch
+    && paintLoad === audioLoad;
+  const pictureSame = flagsSame && paintProject === session.project && paintTitleKey === titleKey;
+  if (pictureSame) {
+    if (!session.playing || deckVisible(ui)) return "same";
+    return "head";
+  }
+  const titleOnly = flagsSame && paintProject === session.project && paintTitleKey >= 0 && titleKey >= 0 && paintTitleKey !== titleKey;
+  const lane = shownWorking(session.project, ui);
+  const digits = readoutKey(session.project, ui);
+  const prevLane = paintLane;
+  const prevDigits = paintDigits;
+  const projectChanged = paintProject !== session.project;
+  rememberPaint(ui, notice, hint, capture, focus, peek, latch, titleKey, lane, digits);
+  if (titleOnly) return "caption";
+  const quietFace = !notice && ui.face !== "mixer" && ui.face !== "deck";
+  if (projectChanged && flagsSame && quietFace && session.project.morph) {
+    if (lane === prevLane) return digits === prevDigits ? (session.playing ? "head" : "same") : "readout";
+    return "viz";
+  }
   return "full";
 }
 
-function laneGates(): readonly number[] {
-  if (!session.playing) return LANES.map(() => 0);
+function currentGates(): readonly number[] {
+  if (!session.playing) {
+    gateProject = session.project;
+    gateStep = -1;
+    if (gateList.length !== LANES.length || gateList.some((gate) => gate !== 0)) gateList = LANES.map(() => 0);
+    return gateList;
+  }
+  const step = Math.floor(Math.max(0, session.tick) / SIXTEENTH_TICKS);
+  if (gateProject === session.project && gateStep === step) return gateList;
   const phrase = generatePhrase(session.project);
-  const step = Math.max(0, session.tick) / SIXTEENTH_TICKS;
-  return LANES.map((lane) => laneMark(session.project, phrase, lane, step));
+  const at = Math.max(0, session.tick) / SIXTEENTH_TICKS;
+  gateList = LANES.map((lane) => laneMark(session.project, phrase, lane, at));
+  gateProject = session.project;
+  gateStep = step;
+  return gateList;
+}
+
+function ledsDue(): boolean {
+  const phase = Math.floor(Date.now() / blinkHalfMs(session.project.global.tempo));
+  const peek = peekKind(session.ui);
+  const shade = sceneShadeStep(session.project, session.tick);
+  if (ledPhase !== phase || ledShade !== shade || ledProject !== session.project || ledUi !== session.ui || ledPlaying !== session.playing || ledPeek !== peek) return true;
+  if (!session.playing) return false;
+  const step = Math.floor(Math.max(0, session.tick) / SIXTEENTH_TICKS);
+  return gateProject !== session.project || gateStep !== step;
 }
 
 function ledsChanged(gates: readonly number[]): boolean {
@@ -411,7 +510,7 @@ function paintScreen(): void {
 /** Faders stay. Only the eight level columns move. */
 function paintMixerFast(now: number): void {
   const text = readParam("meters");
-  const delta = screenDelta();
+  const delta = screenDelta(now);
   if (delta === "full" || !mixerFastLatched) {
     paintScreen();
     mixerFastLatched = true;
@@ -420,8 +519,8 @@ function paintMixerFast(now: number): void {
   }
   if (text === mixerMeterText) return;
   mixerMeterText = text;
-  const screen = renderScreen(session.project, session.ui, session.tick, session.playing, now, frame, audioLoad, null, parseMeterPage(text));
-  blitColumns(screen.pixels, MIX_METER_X, MIX_METER_TOP, MIX_METER_BOTTOM);
+  const focus = focusVisible(session.ui.focus, session.tick, now) ? session.ui.focus?.label ?? null : null;
+  strokeMeters(parseMeterPage(text), focus, hostRect);
 }
 
 function hostRect(x: number, y: number, w: number, h: number, value: number): void {
@@ -512,9 +611,13 @@ function deckOverlay(ui: UiState, now: number): boolean {
 }
 
 function deckChromeStale(now: number): boolean {
+  const focusOn = focusVisible(session.ui.focus, session.tick, now);
+  const path = focusOn && session.ui.focus ? `${session.ui.focus.path}\0${session.ui.focus.label}` : "";
+  const gesture = `${session.ui.deckLayer}\0${session.ui.deckGesture ?? ""}\0${session.ui.deckLatchedGesture ?? ""}`;
   return chromeDeck !== session.project.deck
-    || chromeUi !== session.ui
-    || chromeFocus !== focusVisible(session.ui.focus, session.tick, now)
+    || chromeFocus !== focusOn
+    || chromeFocusPath !== path
+    || chromeGesture !== gesture
     || chromeWidth !== shownWidth
     || chromeBar !== session.project.global.bar;
 }
@@ -528,27 +631,26 @@ function paintDeckChrome(now: number): void {
   hostRect(0, paramTop, WIDTH, HEIGHT - paramTop, 0);
   paintHostReadout(screen);
   chromeDeck = session.project.deck;
-  chromeUi = session.ui;
   chromeFocus = focusVisible(session.ui.focus, session.tick, now);
+  chromeFocusPath = chromeFocus && session.ui.focus ? `${session.ui.focus.path}\0${session.ui.focus.label}` : "";
+  chromeGesture = `${session.ui.deckLayer}\0${session.ui.deckGesture ?? ""}\0${session.ui.deckLatchedGesture ?? ""}`;
   chromeWidth = shownWidth;
   chromeBar = session.project.global.bar;
 }
 
-function paintDeckWave(wave: WaveTape, head: number, span: number): void {
+function paintDeckWave(wave: WaveTape, head: number, span: number, shift: number): void {
   const yTop = HEADER_H;
   const h = VIZ_H - 1;
-  hostRect(0, yTop, WIDTH, h, 0);
   const pixel = (globalThis as HostGlobals).set_pixel;
-  strokeWaveform(
-    wave,
-    { x: 0, y: yTop, w: WIDTH, h, head, span, gain: 1, stylus: true },
-    hostRect,
-    (x, y, value) => pixel?.(x, y, value),
-  );
+  const view = { x: 0, y: yTop, w: WIDTH, h, head, span, gain: 1, stylus: true };
+  const plot = (x: number, y: number, value: number) => pixel?.(x, y, value);
+  if (shift !== 0 && strokeWaveScroll(wave, view, shift, hostRect, plot)) return;
+  hostRect(0, yTop, WIDTH, h, 0);
+  strokeWaveform(wave, view, hostRect, plot);
 }
 
 /** Platter column and knob readout, each only when that band changed. */
-function paintDeckFast(now: number): void {
+function paintDeckFast(now: number): boolean {
   const wave = serviceWaveform(session.project);
   applyWavePages(wave, [readParam("wave0"), readParam("wave1")]);
   const picture = deckFrame(session.project, session.ui, session.tick);
@@ -557,12 +659,71 @@ function paintDeckFast(now: number): void {
   const column = span > 0 ? Math.floor((head * WIDTH) / span) : 0;
   const waveDirty = !deckFastLatched || column !== deckColumn || span !== deckSpan || wave !== deckTape;
   const chromeDirty = !deckFastLatched || deckChromeStale(now);
+  const shift = deckFastLatched && wave === deckTape && span === deckSpan && Number.isFinite(deckColumn) ? column - deckColumn : 0;
   if (chromeDirty) paintDeckChrome(now);
-  if (waveDirty) paintDeckWave(wave, head, span);
+  if (waveDirty) paintDeckWave(wave, head, span, shift);
   deckFastLatched = true;
   deckColumn = column;
   deckSpan = span;
   deckTape = wave;
+  return waveDirty;
+}
+
+function deckCoverStamp(now: number): string {
+  const ui = session.ui;
+  return `${pageTitlePaintKey(ui, now)}|${ui.notice?.title ?? ""}|${ui.notice?.value ?? ""}|${ui.randomizeHint?.line ?? ""}|${ui.sampleHint?.line ?? ""}`;
+}
+
+/** Wave and caption share the platter. A steady caption does not redraw the band. */
+function paintDeckCovered(now: number): void {
+  const wave = serviceWaveform(session.project);
+  applyWavePages(wave, [readParam("wave0"), readParam("wave1")]);
+  const picture = deckFrame(session.project, session.ui, session.tick);
+  const head = wave.readHead != null ? wave.readHead : picture.head;
+  const span = wave.pastSpan > 0 ? wave.pastSpan : picture.span;
+  const column = span > 0 ? Math.floor((head * WIDTH) / span) : 0;
+  const waveDirty = !deckFastLatched || column !== deckColumn || span !== deckSpan || wave !== deckTape;
+  const stamp = deckCoverStamp(now);
+  const chromeDirty = !deckFastLatched || deckChromeStale(now);
+  if (chromeDirty) paintDeckChrome(now);
+  if (!waveDirty && stamp === deckCoverKey && deckFastLatched) return;
+  deckCoverKey = stamp;
+  const screen = renderScreen(session.project, session.ui, session.tick, session.playing, now, frame, audioLoad, wave, null);
+  hostRect(0, HEADER_H, WIDTH, VIZ_H - 1, 0);
+  blitRows(screen.pixels, HEADER_H, HEADER_H + VIZ_H - 1);
+  deckFastLatched = true;
+  deckColumn = column;
+  deckSpan = span;
+  deckTape = wave;
+  resetWaveScroll();
+}
+
+function paintViz(now: number, readout: boolean): void {
+  const screen = renderScreen(session.project, session.ui, session.tick, session.playing, now, frame, audioLoad, null, mixerMeters());
+  hostRect(0, HEADER_H, WIDTH, VIZ_H - 1, 0);
+  blitRows(screen.pixels, HEADER_H, HEADER_H + VIZ_H - 1);
+  if (!readout) return;
+  const top = HEADER_H + VIZ_H;
+  hostRect(0, top, WIDTH, HEIGHT - top, 0);
+  paintHostReadout(screen);
+}
+
+function paintReadout(now: number): void {
+  const screen = renderScreen(session.project, session.ui, session.tick, session.playing, now, frame, audioLoad, null, mixerMeters());
+  const top = HEADER_H + VIZ_H;
+  hostRect(0, top, WIDTH, HEIGHT - top, 0);
+  paintHostReadout(screen);
+}
+
+function paintCaption(now: number): void {
+  if (!slidePageTitle(frame, session.project, session.ui, now)) {
+    paintScreen();
+    return;
+  }
+  const y0 = CAPTION_BOX_TOP;
+  const y1 = CAPTION_BOX_BOTTOM;
+  hostRect(0, y0, WIDTH, y1 - y0 + 1, 0);
+  blitRows(frame, y0, y1 + 1);
 }
 
 function arrowBrightness(): { up: number; down: number } {
@@ -585,7 +746,7 @@ function paintLeds(levels?: readonly number[]): void {
   stepLeds(session.project, session.ui.context, levels).forEach((led, index) => {
     const note = 16 + index;
     const packets = padPackets(note, led);
-    const key = packets.map((packet) => packet.join(",")).join(";");
+    const key = ledPacketKey(led);
     if (sentSteps[index] !== key) {
       sentSteps[index] = key;
       padQueue.set(note, packets);
@@ -624,7 +785,7 @@ function paintLeds(levels?: readonly number[]): void {
   padLeds(session.project, session.ui.mode, session.ui, tick).forEach((led, index) => {
     const note = 68 + index;
     const packets = padPackets(note, led);
-    const key = packets.map((packet) => packet.join(",")).join(";");
+    const key = ledPacketKey(led);
     if (sentPads[index] !== key) {
       sentPads[index] = key;
       padQueue.set(note, packets);
@@ -688,28 +849,47 @@ function drainLeds(): void {
   }
 }
 
+function ledPacketKey(led: { color: number; blink: boolean; blinkTo?: number }): number {
+  return (led.color & 255) | ((led.blink ? 1 : 0) << 8) | (((led.blinkTo ?? 0) & 255) << 16);
+}
+
 function paint(): void {
   paintPulseClock();
   const now = Date.now();
   if (deckVisible(session.ui) && !deckOverlay(session.ui, now)) {
     mixerFastLatched = false;
+    if (deckCoverKey !== "") {
+      deckFastLatched = false;
+      resetWaveScroll();
+    }
+    deckCoverKey = "";
     paintDeckFast(now);
+  } else if (deckVisible(session.ui)) {
+    mixerFastLatched = false;
+    paintDeckCovered(now);
   } else if (session.ui.face === "mixer" && !mixerCovered(session.ui, now)) {
     deckFastLatched = false;
+    deckCoverKey = "";
     paintMixerFast(now);
   } else {
     deckFastLatched = false;
+    deckCoverKey = "";
     mixerFastLatched = false;
-    const delta = screenDelta();
+    const delta = screenDelta(now);
     if (delta === "full") paintScreen();
+    else if (delta === "viz") paintViz(now, true);
+    else if (delta === "readout") paintReadout(now);
+    else if (delta === "caption") paintCaption(now);
     else if (delta === "head") {
       const moved = nudgePlayhead(frame, session.tick);
-      if (moved.kind === "repaint") paintScreen();
+      if (moved.kind === "repaint") paintViz(now, false);
       else if (moved.kind === "moved") blitColumns(frame, moved.xs, moved.y0, moved.y1);
     }
   }
-  const gates = laneGates();
-  if (ledsChanged(gates)) paintLeds(gates);
+  if (ledsDue()) {
+    const gates = currentGates();
+    if (ledsChanged(gates)) paintLeds(gates);
+  }
 }
 
 function advanceClock(): void {
@@ -729,10 +909,11 @@ function advanceClock(): void {
   }
   const before = session.project;
   const journalPage = clampJournalPage(session.ui.journalPage, session.project.journal.length);
-  session = {
-    ...session,
-    project: advance(session.project, session.tick, wanderCandidates(session.project, session.ui.mode, journalPage)),
-  };
+  const candidates = session.project.wander
+    ? wanderCandidates(session.project, session.ui.mode, journalPage)
+    : undefined;
+  const project = advance(session.project, session.tick, candidates);
+  if (project !== before) session = { ...session, project };
   markDirty(before);
   syncVoice(starting);
 }
@@ -774,8 +955,9 @@ export function init(): void {
   paintCapture = false;
   paintFocus = false;
   paintPeek = null;
-  paintDeckFrame = -1;
   paintTitleKey = -1;
+  paintLane = null;
+  paintDigits = "";
   resetWaveform();
   ledPhase = -1;
   ledShade = -1;
@@ -787,10 +969,15 @@ export function init(): void {
   deckSpan = Number.NaN;
   deckTape = null;
   chromeDeck = null;
-  chromeUi = null;
   chromeFocus = false;
+  chromeFocusPath = "";
+  chromeGesture = "";
   chromeWidth = -2;
   chromeBar = Number.NaN;
+  deckCoverKey = "";
+  gateProject = null;
+  gateStep = Number.NaN;
+  gateList = LANES.map(() => 0);
   ledProject = null;
   ledUi = null;
   ledPlaying = false;

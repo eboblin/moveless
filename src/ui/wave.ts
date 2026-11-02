@@ -183,6 +183,65 @@ export function drawWaveform(pixels: Uint8Array, stride: number, tape: WaveTape,
   }
 }
 
+const scrollUp = new Int16Array(128);
+const scrollDown = new Int16Array(128);
+let scrollTape: WaveTape | null = null;
+let scrollSpan = 0;
+let scrollGain = Number.NaN;
+let scrollW = 0;
+let scrollX = 0;
+let scrollY = 0;
+let scrollH = 0;
+let scrollReady = false;
+
+/** Drop the column-height cache. The next strip is a full stroke. */
+export function resetWaveScroll(): void {
+  scrollReady = false;
+  scrollTape = null;
+}
+
+function columnLevels(
+  tape: WaveTape,
+  view: WaveView,
+  i: number,
+  column: number,
+  origin: number,
+  gain: number,
+  upRoom: number,
+  downRoom: number,
+): { up: number; down: number } {
+  const sample = view.head + (view.x + i - origin) * column;
+  const got = wavePeak(tape, sample - column * 0.5, sample + column * 0.5, view.head);
+  return {
+    up: Math.round(waveLevel(got.left) * gain * upRoom),
+    down: Math.round(waveLevel(got.right) * gain * downRoom),
+  };
+}
+
+function paintColumn(
+  x: number,
+  up: number,
+  down: number,
+  view: WaveView,
+  mid: number,
+  y1: number,
+  stylusX: number,
+  rect: (x: number, y: number, w: number, h: number, value: number) => void,
+  pixel: (x: number, y: number, value: number) => void,
+): void {
+  if (x === stylusX) {
+    for (let y = view.y; y <= y1; y++) {
+      const lit = y === mid || (y < mid && y >= mid - up) || (y > mid && y <= mid + down);
+      pixel(x, y, lit ? 0 : 1);
+    }
+    return;
+  }
+  rect(x, view.y, 1, view.h, 0);
+  if (up > 0) rect(x, mid - up, 1, up, 1);
+  rect(x, mid, 1, 1, 1);
+  if (down > 0) rect(x, mid + 1, 1, down, 1);
+}
+
 /**
  * Same strip as {@link drawWaveform}, sent as column rectangles.
  * The stylus column is inverted one pixel at a time.
@@ -202,15 +261,17 @@ export function strokeWaveform(
   const column = view.span / view.w;
   const origin = view.x + (view.w - 1) / 2;
   const stylusX = view.stylus ? Math.round(origin) : -1;
+  const remember = view.w <= scrollUp.length;
   rect(view.x, mid, view.w, 1, 1);
   let stylusUp = 0;
   let stylusDown = 0;
   for (let i = 0; i < view.w; i++) {
-    const sample = view.head + (view.x + i - origin) * column;
-    const got = wavePeak(tape, sample - column * 0.5, sample + column * 0.5, view.head);
+    const { up, down } = columnLevels(tape, view, i, column, origin, gain, upRoom, downRoom);
+    if (remember) {
+      scrollUp[i] = up;
+      scrollDown[i] = down;
+    }
     const x = view.x + i;
-    const up = Math.round(waveLevel(got.left) * gain * upRoom);
-    const down = Math.round(waveLevel(got.right) * gain * downRoom);
     if (x === stylusX) {
       stylusUp = up;
       stylusDown = down;
@@ -219,9 +280,74 @@ export function strokeWaveform(
     if (up > 0) rect(x, mid - up, 1, up, 1);
     if (down > 0) rect(x, mid + 1, 1, down, 1);
   }
+  if (remember) {
+    scrollReady = true;
+    scrollTape = tape;
+    scrollSpan = view.span;
+    scrollGain = gain;
+    scrollW = view.w;
+    scrollX = view.x;
+    scrollY = view.y;
+    scrollH = view.h;
+  } else scrollReady = false;
   if (!view.stylus) return;
   for (let y = view.y; y <= y1; y++) {
     const lit = y === mid || (y < mid && y >= mid - stylusUp) || (y > mid && y <= mid + stylusDown);
     pixel(stylusX, y, lit ? 0 : 1);
   }
+}
+
+/**
+ * Move a strip that {@link strokeWaveform} just drew.
+ * `shift` is the column delta: positive scrolls the picture left and fills the right edge.
+ * A miss returns false and the caller draws the whole strip.
+ */
+export function strokeWaveScroll(
+  tape: WaveTape,
+  view: WaveView,
+  shift: number,
+  rect: (x: number, y: number, w: number, h: number, value: number) => void,
+  pixel: (x: number, y: number, value: number) => void,
+): boolean {
+  const gain = view.gain ?? 1;
+  if (
+    !scrollReady
+    || shift === 0
+    || Math.abs(shift) >= view.w
+    || tape !== scrollTape
+    || view.span !== scrollSpan
+    || gain !== scrollGain
+    || view.w !== scrollW
+    || view.x !== scrollX
+    || view.y !== scrollY
+    || view.h !== scrollH
+  ) return false;
+  const y1 = view.y + view.h - 1;
+  const mid = view.y + Math.floor((view.h - 1) / 2);
+  const upRoom = Math.max(1, mid - view.y);
+  const downRoom = Math.max(1, y1 - mid);
+  const column = view.span / view.w;
+  const origin = view.x + (view.w - 1) / 2;
+  const stylusX = view.stylus ? Math.round(origin) : -1;
+  const commit = (i: number, up: number, down: number) => {
+    if (scrollUp[i] === up && scrollDown[i] === down) return;
+    paintColumn(view.x + i, up, down, view, mid, y1, stylusX, rect, pixel);
+    scrollUp[i] = up;
+    scrollDown[i] = down;
+  };
+  if (shift > 0) {
+    for (let i = 0; i < view.w - shift; i++) commit(i, scrollUp[i + shift], scrollDown[i + shift]);
+    for (let i = view.w - shift; i < view.w; i++) {
+      const levels = columnLevels(tape, view, i, column, origin, gain, upRoom, downRoom);
+      commit(i, levels.up, levels.down);
+    }
+  } else {
+    const distance = -shift;
+    for (let i = view.w - 1; i >= distance; i--) commit(i, scrollUp[i - distance], scrollDown[i - distance]);
+    for (let i = 0; i < distance; i++) {
+      const levels = columnLevels(tape, view, i, column, origin, gain, upRoom, downRoom);
+      commit(i, levels.up, levels.down);
+    }
+  }
+  return true;
 }

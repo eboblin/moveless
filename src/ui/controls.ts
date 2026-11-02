@@ -1,10 +1,9 @@
-import { clone } from "../core/clone.ts";
 import { isDeckSlot, readDeckSlot } from "../core/deck.ts";
 import { setDeck } from "../core/journal.ts";
 import { punch } from "../core/morph.ts";
 import { bindingFor, type Binding } from "../core/pages.ts";
 import { setBus, setMacro, setMixer } from "../core/performance.ts";
-import { SCALE_IDS, type Bus, type ContextId, type LaneId, type Progression, type Project } from "../core/types.ts";
+import { SCALE_IDS, type Bus, type ContextId, type GlobalSettings, type LaneId, type Progression, type Project } from "../core/types.ts";
 import type { DetentHold } from "./state.ts";
 
 export function readControl(project: Project, context: ContextId, path: string): number {
@@ -212,16 +211,20 @@ function readStored(project: Project, binding: Binding): number {
 }
 
 function writeGlobal(project: Project, path: string, value: number): Project {
-  const next = clone(project);
-  if (path === "scale") next.global.scale = SCALE_IDS[value] ?? SCALE_IDS[0];
-  else (next.global as unknown as Record<string, number>)[path] = value;
-  return next;
+  if (path === "scale") {
+    const scale = SCALE_IDS[value] ?? SCALE_IDS[0];
+    if (project.global.scale === scale) return project;
+    return { ...project, global: { ...project.global, scale } };
+  }
+  const key = path as keyof GlobalSettings;
+  if (project.global[key] === value) return project;
+  return { ...project, global: { ...project.global, [key]: value } };
 }
 
 function writeProgression(project: Project, path: string, value: number): Project {
-  const next = clone(project);
-  next.progression[path as keyof Progression] = value;
-  return next;
+  const key = path as keyof Progression;
+  if (project.progression[key] === value) return project;
+  return { ...project, progression: { ...project.progression, [key]: value } };
 }
 
 function readWorking(project: Project, path: string): number {
