@@ -38,6 +38,16 @@ export function percDecaySeconds(unit: number): number {
   return squaredSeconds(unit, 0.03, 1.2);
 }
 
+/** Snare snap, in samples. The voice uses this as a click tau; a sketch divides by the sample rate. */
+export function snareClickSamples(snap: number): number {
+  return 40 + (1 - snap) ** 1.4 * 700;
+}
+
+/** Hat body stretches with ring. `decaySeconds` is already in seconds. */
+export function hatBodySeconds(decaySeconds: number, ring: number): number {
+  return decaySeconds * (1 + ring * 2.8);
+}
+
 function unitOf(event: EnvelopeHit, key: string, fallback: number): number {
   const found = event.params.find((param) => param.id === key || param.id.endsWith(`_${key}`));
   if (!found) return fallback;
@@ -161,14 +171,14 @@ function shapeOf(event: EnvelopeHit, tempo: number): EnvelopeShape {
       amp,
       a: snareBodyDecaySeconds(unitOf(event, "bdcy", 0.3)),
       b: snareNoiseDecaySeconds(unitOf(event, "ndcy", 0.3)),
-      c: (40 + (1 - snap) ** 1.4 * 700) / SAMPLE_RATE,
+      c: snareClickSamples(snap) / SAMPLE_RATE,
       hold: 0,
       attack: 0,
       release: 0,
     };
   }
   if (event.lane === "hat") {
-    const body = hatDecaySeconds(unitOf(event, "decay", 0.3)) * (1 + unitOf(event, "ring", 0.3) * 2.8);
+    const body = hatBodySeconds(hatDecaySeconds(unitOf(event, "decay", 0.3)), unitOf(event, "ring", 0.3));
     return { kind: 0, amp, a: body, b: 0, c: 0, hold: 0, attack: 0, release: 0 };
   }
   if (event.lane === "perc") {

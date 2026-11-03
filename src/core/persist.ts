@@ -343,9 +343,11 @@ function acceptLanes(raw: unknown): Lanes {
 function migratePluck(raw: unknown): void {
   if (!isRecord(raw) || !isRecord(raw.sound)) return;
   const sound = raw.sound;
-  if (isRecord(sound.sustain) || !isRecord(sound.pluck) || typeof sound.pluck.value !== "number") return;
+  if (isRecord(sound.sustain) || !isRecord(sound.pluck)) return;
   const pluck = sound.pluck;
-  const value = pluck.value < 0 ? 0 : pluck.value > 1 ? 1 : pluck.value;
+  const rawValue = pluck.value;
+  if (typeof rawValue !== "number") return;
+  const value = rawValue < 0 ? 0 : rawValue > 1 ? 1 : rawValue;
   sound.sustain = { ...pluck, value: 1 - value };
 }
 

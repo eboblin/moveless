@@ -1,12 +1,10 @@
 import { clamp01, SAMPLE_RATE, SIXTEENTH_TICKS, tickToSample } from "../core/clock.ts";
-import { formatDeckCommand, THROW_DELAY, throwPreset, type DeckCommand, type ThrowDelay } from "../core/deck.ts";
+import { THROW_DELAY, throwPreset, type DeckCommand, type ThrowDelay } from "../core/deck.ts";
 import { defaultBus, defaultFx } from "../core/defaults.ts";
 import { applyVoiceEnvelope, evalModulated, voiceLane } from "../core/modulate.ts";
-import { isDrum, LANES, type Bus, type Fx, type LaneId } from "../core/types.ts";
+import { DRUM_HZ, isDrum, LANES, type Bus, type DrumId, type Fx, type LaneId } from "../core/types.ts";
 import { commandDeck, createDeckRuntime, deckTargetLead, deckThrow, hearDeck, writeDeckBlock, type DeckRuntime } from "./deck.ts";
-import { envelopeTable, hatDecaySeconds, kickDecaySeconds, melodyContour, melodyLevel, melodyReleaseSeconds, melodySustain, percDecaySeconds, readEnvelope, snareBodyDecaySeconds, snareNoiseDecaySeconds, type EnvelopeTable } from "./envelope.ts";
-
-export { hatDecaySeconds, kickDecaySeconds, percDecaySeconds, snareBodyDecaySeconds, snareNoiseDecaySeconds };
+import { envelopeTable, hatBodySeconds, hatDecaySeconds, kickDecaySeconds, melodyContour, melodyLevel, melodyReleaseSeconds, melodySustain, percDecaySeconds, readEnvelope, snareBodyDecaySeconds, snareClickSamples, snareNoiseDecaySeconds, type EnvelopeTable } from "./envelope.ts";
 import type { EngineParam } from "./map.ts";
 import type { BlockEvent, LoopEvent, Motion } from "./schedule.ts";
 import { clearEcho, clearTank, createEcho, createTank, echoSample, tankSample, type Echo, type Tank } from "./fx.ts";
@@ -726,10 +724,6 @@ export function applyDeckCommand(engine: Engine, command: DeckCommand): void {
   commandDeck(engine.deck, command.gesture, engine.clock, command.press ?? 0);
 }
 
-export function formatDeck(command: DeckCommand): string {
-  return formatDeckCommand(command);
-}
-
 function clearHaas(voice: { haas: Float32Array; haasI: number }): void {
   voice.haas.fill(0);
   voice.haasI = 0;
@@ -1292,7 +1286,7 @@ function unisonPan(wide: number, index: number): number {
   return (index === 0 ? -UNI_PAN : UNI_PAN);
 }
 
-/** Low 32 bits of a product. Matches uint32_t multiply in dsp/src/voice.c. */
+/** Low 32 bits of a product. Matches the uint32_t multiply in dsp/src. */
 function u32mul(a: number, b: number): number {
   const a0 = a & 0xffff;
   const a1 = (a >>> 16) & 0xffff;
@@ -1301,7 +1295,7 @@ function u32mul(a: number, b: number): number {
   return ((a0 * b0) + (((a0 * b1 + a1 * b0) & 0xffff) << 16)) >>> 0;
 }
 
-/** Note-on phase. Same integer mix as unison_phase in dsp/src/voice.c. */
+/** Note-on phase. Same integer mix as unison_phase in dsp/src/notes.c. */
 function unisonPhase(pitch: number, lane: number, sample: number, copy: number): number {
   let h = (u32mul(pitch, 0x16566731) + u32mul(lane, 0x27d4eb2f) + u32mul(sample >>> 0, 0x85ebca77) + u32mul(copy, 0xc2b2ae35)) >>> 0;
   h = u32mul(h ^ (h >>> 16), 0x7feb352d);
@@ -1461,11 +1455,11 @@ function applyNote(note: NoteVoice, param: number, unit: number): void {
 }
 
 function refreshDrumEnv(drum: DrumVoice): void {
-  const bodySec = drum.lane === 2 ? drum.decay * (1 + drum.ring * 2.8) : drum.decay;
+  const bodySec = drum.lane === 2 ? hatBodySeconds(drum.decay, drum.ring) : drum.decay;
   drum.envK = Math.exp(-1 / (Math.max(0.004, bodySec) * SAMPLE_RATE));
   drum.noiseK = Math.exp(-1 / (Math.max(0.003, drum.noiseDecay) * SAMPLE_RATE));
   drum.pitchK = Math.exp(-1 / (Math.max(0.004, drum.bendTime) * SAMPLE_RATE));
-  const clickSamples = drum.lane === 1 ? 40 + (1 - drum.click) ** 1.4 * 700 : 12 + drum.click * 520;
+  const clickSamples = drum.lane === 1 ? snareClickSamples(drum.click) : 12 + drum.click * 520;
   drum.clickK = Math.exp(-1 / Math.max(1, clickSamples));
 }
 
@@ -1526,7 +1520,7 @@ function cascade(pole: TonePole, input: number, coef: number): number {
 }
 
 /** 0 kills, 0.5 is unity, 1 is +6 dB. Exactly 0.5 stays 1 so the bypass is a wire. */
-function isoGain(knob: number): number {
+export function isoGain(knob: number): number {
   const x = clamp01(knob);
   if (x === 0.5) return 1;
   if (x < 0.5) return x * 2;
@@ -1722,14 +1716,14 @@ function knob(event: BlockEvent | LoopEvent, key: string, fallback: number): num
   return Math.max(0, Math.min(1, read(event.params, [key], fallback)));
 }
 
+const DRUM_LANE: readonly DrumId[] = ["kick", "snare", "hat", "perc"];
+
 /** Kick 32–180 Hz, snare 140–900, hat 250–4000, perc 70–2500. The knob is the pitch, not the MIDI note. */
 export function drumPitchHz(lane: number, unit: number): number {
   const u = Math.max(0, Math.min(1, unit));
-  const span = (lo: number, hi: number) => lo * (hi / lo) ** u;
-  if (lane === 1) return span(140, 900);
-  if (lane === 2) return span(250, 4000);
-  if (lane === 3) return span(70, 2500);
-  return span(32, 180);
+  const id = DRUM_LANE[lane] ?? "kick";
+  const [lo, hi] = DRUM_HZ[id];
+  return lo * (hi / lo) ** u;
 }
 
 function squaredSeconds(unit: number, lo: number, span: number): number {

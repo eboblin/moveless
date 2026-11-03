@@ -1,6 +1,6 @@
-import { GROUP_PAD, DIV_LABEL, BRAKE_LABEL, QUANT_LABEL, RATE_LABEL, assembleDeck, behaviorOf, brakeShort, deckPicture, divShort, focusedGroup, isDeckGroup, lenCount, lenLabel, phraseShort, phraseWord, quantShort, readDeckSlot, rowValueLabel, rowValueWord, scratchCue, type DeckPicture } from "../core/deck.ts";
+import { GROUP_PAD, assembleDeck, behaviorOf, deckCellValue, deckFractionText, deckHeaderValue, deckKnobTitle, deckPicture, focusedGroup, isDeckGroup, lenCount, scratchCue, type DeckPicture } from "../core/deck.ts";
 import { laneHeard } from "../core/journal.ts";
-import { clamp01, SIXTEENTH_TICKS, countFromUnit, delayDivision, rateFromUnit, tickToSample } from "../core/clock.ts";
+import { SIXTEENTH_TICKS, countFromUnit, delayDivision, rateFromUnit, tickToSample } from "../core/clock.ts";
 import { phraseStepsOf } from "../core/events.ts";
 import { chordSymbol, degreeNumeral, pitchClassName, scaleShort, scaleTitle } from "../core/harmony.ts";
 import { chordFigure, chordVoiceCaption, generatePhrase, laneEnvelope, laneSteps, octaveNumber, restingChordToneLabel, restingPitchLabel, restingSliceLabel, spanDegrees } from "../core/phrase.ts";
@@ -1221,7 +1221,7 @@ function figureHeader(project: Project, context: ContextId, binding: Binding, st
   switch (binding.display) {
     case "pitch":
       if (context !== "bass" && context !== "lead") return null;
-      return restingPitchLabel(context, readControl(project, context, "pitch.value"), readControl(project, context, "octave.value"), project.global);
+      return restingPitchLabel(readControl(project, context, "pitch.value"), readControl(project, context, "octave.value"), project.global);
     case "octave":
       if (context !== "bass" && context !== "lead" && context !== "chords") return null;
       return `OCT ${octaveNumber(readControl(project, context, "octave.value"))}`;
@@ -1300,9 +1300,12 @@ function knobAmount(project: Project, context: ContextId, binding: Binding, ui: 
       if (focusedGroup(project.deck) === "scr") return { kind: "big", n: scratchCue(project.deck.len), negative: false };
       return { kind: "big", n: lenCount(project.deck, project.global.bar), negative: false };
     }
-    const fraction = deckFraction(project, binding.path);
-    if (fraction) return fraction;
-    const text = deckKnobText(project, binding.path);
+    const fraction = deckFractionText(binding.path, project.deck);
+    if (fraction !== null) {
+      const cell = divisionCell(fraction);
+      if (cell) return cell;
+    }
+    const text = deckCellValue(binding.path, project.deck);
     if (text) return { kind: "wide", text, negative: false };
   }
   const ret = binding.store === "macro" ? ui.macroReturns.find((item) => item.path === binding.path) : undefined;
@@ -1313,133 +1316,14 @@ function knobAmount(project: Project, context: ContextId, binding: Binding, ui: 
 /** Full knob name and its current value, shown while the encoder is held. */
 function deckKnobHeader(project: Project, binding: Binding): string {
   const name = deckKnobTitle(binding.path, focusedGroup(project.deck));
-  const named = deckKnobWord(project, binding.path);
+  const named = deckHeaderValue(binding.path, project.deck, project.global.bar);
   const value = named ?? deckNumber(project, binding);
   return `${name}: ${value}`.toLowerCase().slice(0, LINE_LIMIT);
-}
-
-function deckKnobTitle(path: string, group: ReturnType<typeof focusedGroup>): string {
-  if (group === "scr") {
-    if (path === "deck.len") return "CUE";
-    if (path === "deck.brake") return "DURATION";
-    if (path === "deck.vary") return "THROW";
-    if (path === "deck.duty") return "CUT";
-    if (path === "deck.ramp") return "DIRECTION";
-    if (path === "deck.row") return "COMPLEXITY";
-  }
-  switch (path) {
-    case "deck.div":
-      return "DIVISION";
-    case "deck.len":
-      return "LENGTH";
-    case "deck.depth":
-      return "DEPTH";
-    case "deck.brake":
-      return "TIME";
-    case "deck.vary":
-      return "VARY";
-    case "deck.quant":
-      return "QUANTIZE";
-    case "deck.duty":
-      return "DUTY";
-    case "deck.ramp":
-      return "BEND";
-    case "deck.filter":
-      return "FILTER";
-    case "deck.resonance":
-      return "RESONANCE";
-    case "deck.drive":
-      return "DRIVE";
-    case "deck.low":
-      return "LOW";
-    case "deck.mid":
-      return "MID";
-    case "deck.high":
-      return "HIGH";
-    case "deck.rate":
-      return "RATE";
-    case "deck.open":
-      return "OPEN";
-    case "deck.row":
-      if (group === "glc") return "PATTERN";
-      if (group === "gat") return "TRANSFORM";
-      if (group === "pch" || group === "stp") return "SHAPE";
-      if (group === "thr") return "SEND";
-      return "WAY";
-    default:
-      return "DECK";
-  }
 }
 
 function deckNumber(project: Project, binding: Binding): string {
   const amount = displayAmount(readControl(project, "aux", binding.path), binding);
   return amount.kind === "big" ? String(amount.n) : amount.text;
-}
-
-function deckKnobWord(project: Project, path: string): string | null {
-  const deck = project.deck;
-  const group = focusedGroup(deck);
-  switch (path) {
-    case "deck.div":
-      return DIV_LABEL[deck.div] ?? null;
-    case "deck.len":
-      if (group === "scr") return ["NOW", "1/16", "1/8", "3/16", "1/4"][scratchCue(deck.len)] ?? "NOW";
-      return lenLabel(deck, project.global.bar);
-    case "deck.brake":
-      return group === "scr" ? phraseWord(deck.brake) : (BRAKE_LABEL[deck.brake] ?? null);
-    case "deck.quant":
-      return QUANT_LABEL[deck.quant] ?? null;
-    case "deck.row":
-      return rowValueWord(group, readDeckSlot(deck, "row"));
-    case "deck.rate":
-      return RATE_LABEL[readDeckSlot(deck, "rate")] ?? null;
-    case "deck.open":
-      return DIV_LABEL[readDeckSlot(deck, "open")] ?? null;
-    default:
-      return null;
-  }
-}
-
-function labelAt(index: number, labels: readonly string[]): string | null {
-  if (!Number.isFinite(index)) return labels[0] ?? null;
-  return labels[Math.max(0, Math.min(labels.length - 1, Math.round(index)))] ?? null;
-}
-
-/** DIV, OPN and TIM. OPN reads the same division table as DIV. */
-function deckFraction(project: Project, path: string): DisplayAmount | null {
-  const deck = project.deck;
-  switch (path) {
-    case "deck.div":
-      return divisionCell(labelAt(deck.div, DIV_LABEL) ?? "");
-    case "deck.brake":
-      if (focusedGroup(deck) === "scr") return null;
-      return divisionCell(labelAt(deck.brake, BRAKE_LABEL) ?? "");
-    case "deck.open":
-      return divisionCell(labelAt(readDeckSlot(deck, "open"), DIV_LABEL) ?? "");
-    default:
-      return null;
-  }
-}
-
-function deckKnobText(project: Project, path: string): string | null {
-  const deck = project.deck;
-  const group = focusedGroup(deck);
-  switch (path) {
-    case "deck.div":
-      return divShort(deck.div);
-    case "deck.brake":
-      return group === "scr" ? phraseShort(deck.brake) : brakeShort(deck.brake);
-    case "deck.quant":
-      return quantShort(deck.quant);
-    case "deck.row":
-      return rowValueLabel(group, readDeckSlot(deck, "row"));
-    case "deck.rate":
-      return RATE_LABEL[readDeckSlot(deck, "rate")] ?? null;
-    case "deck.open":
-      return divShort(readDeckSlot(deck, "open"));
-    default:
-      return null;
-  }
 }
 
 function stepAt(_project: Project, tick: number): number {

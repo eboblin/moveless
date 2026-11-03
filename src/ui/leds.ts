@@ -19,6 +19,7 @@ import {
 import { livePage, pageCount, pageGroupColor, scopeIncludesPage } from "../core/pages.ts";
 import { depthTouchesPath } from "../core/randomize.ts";
 import { DECK_GROUPS, GROUP_PAD, fieldAt, groupAt, type DeckKnobs } from "../core/deck.ts";
+import { litPageRows, padGrid, padRead, randomizePages } from "./pads.ts";
 import { patternPadsVisible, peekKind, type FaceMode } from "./state.ts";
 
 export const LED = {
@@ -248,34 +249,21 @@ export interface PadSurface {
  * Mixer and DJ FX take every pad. On the purple lane the same latch draws the page row
  * and leaves the randomize rows off.
  */
-function menuPlace(surface: PadSurface | undefined, context: ContextId, page: number): { context: ContextId; page: number } {
-  const held = surface?.heldContext;
-  if (!held) return { context, page };
-  const remembered = surface?.heldPage ?? surface?.lanePages?.[held];
-  return { context: held, page: remembered ?? (held === context ? page : 0) };
-}
-
 export function padLeds(project: Project, mode: "journal" | "set", surface?: PadSurface, tick = 0): Led[] {
-  const context = surface?.context ?? "kick";
-  const page = surface?.page ?? 0;
-  const onAux = context === "aux" || surface?.heldContext === "aux";
-  const auxPages = context === "aux" && !!(surface?.wheelTouch || surface?.randomizeLatched);
+  const read = padRead(surface ?? {});
   const scenes = scenePadLeds(project, mode, tick, surface?.journalPage ?? 0, surface?.copyHeld ?? false);
-  const menu = menuPlace(surface, context, page);
-  if (surface?.face === "mixer") return mutePeekLeds(project);
-  if (surface?.face === "deck") return deckPadLeds(scenes, project.deck);
-  if (!onAux && (surface?.wheelTouch || surface?.randomizeLatched)) return randomizePadLeds(project, menu.context, menu.page);
-  let leds: Led[];
-  if (surface?.heldContext) {
-    leds = pageOverlay(scenes, menu.context, menu.page, surface.heldContext === "aux" ? 1 : 2);
-  } else {
-    leds = auxPages ? pageOverlay(scenes, "aux", page, 1) : scenes;
+  const grid = padGrid(read);
+  if (grid === "mixer") return mutePeekLeds(project);
+  if (grid === "deck") return deckPadLeds(scenes, project.deck);
+  if (grid === "randomize") {
+    const menu = randomizePages(read);
+    return randomizePadLeds(project, menu.context, menu.page);
   }
-  if (peekKind(surface ?? {}) === "sample" && patternPadsVisible({ ...surface, context, page })) {
+  const pages = litPageRows(read);
+  const leds = pages ? pageOverlay(scenes, pages.context, pages.page, pages.rows) : scenes;
+  if (peekKind(surface ?? {}) === "sample" && patternPadsVisible(read)) {
     const covered = captureRow(scenes, project);
-    if (surface?.heldContext) return pageOverlay(covered, menu.context, menu.page, surface.heldContext === "aux" ? 1 : 2);
-    if (auxPages) return pageOverlay(covered, "aux", page, 1);
-    return covered;
+    return pages ? pageOverlay(covered, pages.context, pages.page, pages.rows) : covered;
   }
   return leds;
 }

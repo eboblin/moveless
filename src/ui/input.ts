@@ -25,11 +25,12 @@ import {
   toggleMute,
 } from "../core/performance.ts";
 import { DECK_GROUPS, fieldAt, focusedGroup, groupAt, recallGroup, resetDeckKnobs, setGroupCell, type DeckGroup } from "../core/deck.ts";
-import { CAPTURE_CC, contextAtStep, DOWN_CC, isLane, JOG_CLICK_CC, LANES, LOOP_CC, MENU_CC, MUTE_CC, PLAY_CC, RANDOMIZE_DEPTHS, RANDOMIZE_SCOPES, RECORD_CC, SAMPLE_CC, TRANSITIONS, UP_CC, WANDERS, type ContextId, type PatternId, type Project } from "../core/types.ts";
+import { CAPTURE_CC, contextAtStep, COPY_CC, DELETE_CC, DOWN_CC, ENCODER_CC, ENCODER_NOTE, isLane, JOG_CLICK_CC, LANES, LOOP_CC, MENU_CC, MUTE_CC, PAD_NOTE, PLAY_CC, RANDOMIZE_DEPTHS, RANDOMIZE_SCOPES, RECORD_CC, SAMPLE_CC, SHIFT_CC, STEP_NOTE, TRACK_CC, TRANSITIONS, UP_CC, WANDERS, WHEEL_CC, WHEEL_NOTE, type ContextId, type PatternId, type Project } from "../core/types.ts";
 import { resetControl, writeControl } from "./controls.ts";
 import { bindingFor, bindingPaths, deckPage, livePage, mixerPage, pageCount, pageGroup, pageTitle, pagesFor, scopeIncludesPage } from "../core/pages.ts";
-import { applyBookmark, auxHidesRandomize, clearFace, FOCUS_HOLD_MS, focusHoldTicks, HOLD_MS, HOLD_TICKS, holdIsShort, MACRO_RETURN_MS, PAGE_TITLE_MS, patternPadsVisible, RANDOMIZE_HINT_MS, rememberPage, restoreTrackPlace, screenPlace, settleRandomize, settleWheel, showPageTitle, toggleRandomize, type CaptureLine, type FaceMode, type MacroReturn, type Notice, type RandomizeLine, type UiState } from "./state.ts";
+import { applyBookmark, clearFace, FOCUS_HOLD_MS, focusHoldTicks, HOLD_MS, HOLD_TICKS, holdIsShort, MACRO_RETURN_MS, PAGE_TITLE_MS, RANDOMIZE_HINT_MS, rememberPage, restoreTrackPlace, screenPlace, settleRandomize, settleWheel, showPageTitle, toggleRandomize, type CaptureLine, type FaceMode, type MacroReturn, type Notice, type RandomizeLine, type UiState } from "./state.ts";
 import { journalPageCount } from "../core/journal.ts";
+import { PAD_COUNT, padRead, padZone } from "./pads.ts";
 
 export interface MidiMsg {
   kind: "note" | "cc";
@@ -43,8 +44,6 @@ export interface Session {
   tick: number;
   playing: boolean;
 }
-
-const SHIFT = 49;
 
 /**
  * Notes and control changes only. Pad pressure is polyphonic aftertouch on the
@@ -68,15 +67,15 @@ export function reduce(session: Session, msg: MidiMsg): Session {
 }
 
 function onNote(session: Session, note: number, press: boolean): Session {
-  if (note >= 0 && note <= 7) return touchEncoder(session, note, press);
-  if (note === 9) return touchWheel(session, press);
-  if (note >= 16 && note <= 31) return onStep(session, note - 16, press);
-  if (note >= 68 && note <= 99) return onPad(session, note - 68, press);
+  if (note >= ENCODER_NOTE && note < ENCODER_NOTE + 8) return touchEncoder(session, note - ENCODER_NOTE, press);
+  if (note === WHEEL_NOTE) return touchWheel(session, press);
+  if (note >= STEP_NOTE && note < STEP_NOTE + 16) return onStep(session, note - STEP_NOTE, press);
+  if (note >= PAD_NOTE && note < PAD_NOTE + PAD_COUNT) return onPad(session, note - PAD_NOTE, press);
   return session;
 }
 
 function onCc(session: Session, cc: number, value: number, press: boolean): Session {
-  if (cc === SHIFT) return holdShift(session, press);
+  if (cc === SHIFT_CC) return holdShift(session, press);
   if (cc === MENU_CC && press) {
     const mode = session.ui.mode === "set" ? "journal" : "set";
     return {
@@ -84,8 +83,8 @@ function onCc(session: Session, cc: number, value: number, press: boolean): Sess
       ui: { ...session.ui, mode, notice: modeNotice("MODE", mode === "set" ? "SET" : "JOURNAL") },
     };
   }
-  if (cc === 60) return onCopy(session, press);
-  if (cc === 119) return holdDelete(session, press);
+  if (cc === COPY_CC) return onCopy(session, press);
+  if (cc === DELETE_CC) return holdDelete(session, press);
   if (cc === MUTE_CC) return onFace(session, "mixer", press);
   if (cc === CAPTURE_CC) return onFace(session, "deck", press);
   if (cc === SAMPLE_CC) return onSample(session, press);
@@ -95,9 +94,9 @@ function onCc(session: Session, cc: number, value: number, press: boolean): Sess
   if (cc === LOOP_CC && press) return applyRandomize(session);
   if (cc === RECORD_CC && press) return { ...session, project: recordInto(session.project, session.ui.mode === "set") };
   if (cc === PLAY_CC && press) return { ...session, playing: !session.playing };
-  if (cc >= 71 && cc <= 78) return turnEncoder(session, cc - 71, value);
-  if (cc === 14) return turnWheel(session, value);
-  if (cc >= 40 && cc <= 43) return onTrack(session, cc - 40, press);
+  if (cc >= ENCODER_CC && cc < ENCODER_CC + 8) return turnEncoder(session, cc - ENCODER_CC, value);
+  if (cc === WHEEL_CC) return turnWheel(session, value);
+  if (cc >= TRACK_CC && cc < TRACK_CC + 4) return onTrack(session, cc - TRACK_CC, press);
   if ((cc === DOWN_CC || cc === UP_CC) && press) return onArrow(session, cc === UP_CC ? 1 : -1);
   return session;
 }
@@ -144,33 +143,25 @@ function onStep(session: Session, index: number, press: boolean): Session {
 
 function onPad(session: Session, index: number, press: boolean): Session {
   if (!press) return onPadRelease(session, index);
-  const row = Math.floor(index / 8);
-  const col = index % 8;
-  const top = row === 3;
-  const second = row === 2;
-  if (session.ui.face === "mixer") return onMutePad(session, index);
-  if (session.ui.face === "deck") return pressDeckPad(session, index);
-  const holdingAux = session.ui.heldContext === "aux";
-  if (session.ui.heldContext && (holdingAux ? top : top || second)) {
-    const page = top ? col : 8 + col;
-    const held = session.ui.heldContext;
-    if (page >= pageCount(held)) return session;
+  const zone = padZone(index, padRead(session.ui));
+  if (zone.kind === "mixer") return onMutePad(session, zone.index);
+  if (zone.kind === "deck") return pressDeckPad(session, zone.index);
+  if (zone.kind === "page") return pressPagePad(session, zone.page, zone.owner);
+  if (zone.kind === "randomize") return onRandomizePad(session, zone.row, zone.column);
+  if (zone.kind === "sample") return onCaptureStrip(session, zone.column);
+  return onScenePad(session, zone.index);
+}
+
+function pressPagePad(session: Session, page: number, owner: "held" | "aux"): Session {
+  const context = owner === "held" ? session.ui.heldContext : "aux";
+  if (!context || page >= pageCount(context)) return session;
+  if (owner === "held") {
     return {
       ...session,
-      ui: settleRandomize({ ...rememberPage(session.ui, held, page), heldContext: held, heldPage: page }),
+      ui: settleRandomize({ ...rememberPage(session.ui, context, page), heldContext: context, heldPage: page }),
     };
   }
-  const randomize = !auxHidesRandomize(session.ui) && (session.ui.wheelTouch || session.ui.randomizeLatched);
-  if (randomize) return onRandomizePad(session, row, col);
-  if (!session.ui.heldContext && session.ui.context === "aux" && (session.ui.wheelTouch || session.ui.randomizeLatched) && top) {
-    if (col >= pageCount("aux")) return session;
-    return { ...session, ui: settleRandomize(rememberPage(session.ui, "aux", col)) };
-  }
-  if ((session.ui.sampleHeld || session.ui.sampleLatched) && patternPadsVisible(session.ui)) {
-    if (row === 0) return onCaptureStrip(session, col);
-    return onScenePad(session, index);
-  }
-  return onScenePad(session, index);
+  return { ...session, ui: settleRandomize(rememberPage(session.ui, "aux", page)) };
 }
 
 function onPadRelease(session: Session, index: number): Session {

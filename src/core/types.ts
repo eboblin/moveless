@@ -33,9 +33,6 @@ export function isVoice(id: ContextId): id is LaneId {
   return (LANES as readonly string[]).includes(id);
 }
 
-export const DRUMS: readonly DrumId[] = ["kick", "snare", "hat", "perc"];
-export const PITCHED: readonly PitchedId[] = ["bass", "lead"];
-
 export const LANE_CODE: Record<ContextId, string> = {
   kick: "KCK",
   snare: "SNR",
@@ -243,6 +240,27 @@ export const TRANSITIONS: readonly TransitionId[] = ["now", "fast", "medium", "s
 export const WANDERS: readonly WanderId[] = ["fast", "medium", "slow"];
 /** Menu button under the jog wheel. */
 export const MENU_CC = 50;
+/** Shift. Held with an encoder zeros that knob. */
+export const SHIFT_CC = 49;
+/** Copy. Marks scenes, then inserts them into the current set. */
+export const COPY_CC = 60;
+/** Delete. With a pad or a step, removes or resets that target. */
+export const DELETE_CC = 119;
+/** Encoder turn. One CC per column, left to right. */
+export const ENCODER_CC = 71;
+/** Jog wheel turn. */
+export const WHEEL_CC = 14;
+/** Jog wheel touch. */
+export const WHEEL_NOTE = 9;
+/** Encoder touch. One note per column, left to right. */
+export const ENCODER_NOTE = 0;
+/** Step buttons. Sixteen notes, voices packed to the left. */
+export const STEP_NOTE = 16;
+/** Grid pads. Thirty-two notes, bottom-left first. */
+export const PAD_NOTE = 68;
+export const PAD_COLUMNS = 8;
+/** Track buttons. Four bookmarks. */
+export const TRACK_CC = 40;
 /** Jog wheel click. Latches the randomize pads. */
 export const JOG_CLICK_CC = 3;
 /** Transport play. The button LED has one color: bright while running, dark when stopped. */
@@ -391,8 +409,6 @@ export interface Phrase {
 
 export const SET_CAPACITY = 32;
 
-export const QUALITY_NAMES = ["maj", "min", "sus2", "sus4", "7", "m7", "dim", "aug"] as const;
-
 /** Semitone stacks from the chord root pitch class. */
 export const QUALITY_SEMITONES: readonly (readonly number[])[] = [
   [0, 4, 7],
@@ -410,6 +426,14 @@ export const DRUM_NOTE: Record<DrumId, number> = {
   snare: 38,
   hat: 42,
   perc: 47,
+};
+
+/** Log pitch spans in Hz. The phrase roll and `drumPitchHz` share these edges. */
+export const DRUM_HZ: Record<DrumId, readonly [number, number]> = {
+  kick: [32, 180],
+  snare: [140, 900],
+  hat: [250, 4000],
+  perc: [70, 2500],
 };
 
 export function isDrum(lane: LaneId): lane is DrumId {

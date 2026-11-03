@@ -21,8 +21,6 @@ import {
   type Fx,
 } from "./types.ts";
 
-export { defaultDeck };
-
 /** Pattern, cycle and amount sit at rest. Cycle 1 is the bottom of the knob; amount 0 keeps it silent. */
 function home(value: number) {
   return modulated(value);

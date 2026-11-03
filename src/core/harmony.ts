@@ -216,7 +216,7 @@ export function chordLengths(
   return lengths;
 }
 
-function externalHarmony(global: GlobalSettings, span: number): HarmonicEvent[] {
+function externalHarmony(span: number): HarmonicEvent[] {
   const pcs = latchedPcs();
   if (!pcs || pcs.length === 0) return [];
   const matched = matchQuality(pcs, pcs[0]);
@@ -239,7 +239,7 @@ function walkSign(way: number, index: number, seed: number): number {
 export function generateHarmony(progression: Progression, global: GlobalSettings, steps: number): HarmonicEvent[] {
   const phraseSteps = sixteenthSteps(global.phrase, global.bar);
   const span = Math.max(phraseSteps, Math.round(steps));
-  if (Math.round(progression.count) <= 0) return externalHarmony(global, span);
+  if (Math.round(progression.count) <= 0) return externalHarmony(span);
   const variation = Math.max(0, Math.min(3, Math.round(progression.variation)));
   const lengths = chordLengths(progression.count, progression.length, variation, global.seed, span, global.bar);
   const quality = qualityIndex(clamp01(progression.mood), clamp01(progression.tension));

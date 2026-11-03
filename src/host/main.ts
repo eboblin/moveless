@@ -10,7 +10,7 @@ import { formatFx } from "../dsp/fx.ts";
 import { assembleDeck, behaviorOf, formatDeckCommand, isDeckGroup } from "../core/deck.ts";
 import { formatBus, formatGainSpans, packPhraseBody, parseMeterPage } from "../dsp/voice.ts";
 import { midiMessage, reduce, settleTrackPeek, type Session } from "../ui/input.ts";
-import { CAPTURE_CC, DOWN_CC, isVoice, LANES, MENU_CC, MUTE_CC, PLAY_CC, SAMPLE_CC, UP_CC } from "../core/types.ts";
+import { CAPTURE_CC, DOWN_CC, isVoice, LANES, MENU_CC, MUTE_CC, PLAY_CC, SAMPLE_CC, TRACK_CC, UP_CC } from "../core/types.ts";
 import { advancePulseClock, blinkHalfMs, directionLit, dropLed, faceButtonLed, ledColorAt, menuLed, modeButtonLed, offerLed, padLeds, padPackets, playLed, PULSE_CLOCK_IDLE, sceneShadeStep, STEP_ICON_CC, stepIconColors, stepLampKey, stepLeds, takeLeds, trackLeds, type PulseClock } from "../ui/leds.ts";
 import { plotAmount, plotMinus } from "../ui/digits.ts";
 import {
@@ -22,9 +22,6 @@ import {
   HEADER_H,
   HEIGHT,
   PARAM_COL_W,
-  MIX_METER_BOTTOM,
-  MIX_METER_TOP,
-  MIX_METER_X,
   SEP_Y,
   WIDTH,
   VIZ_H,
@@ -110,41 +107,32 @@ let clockMs = 0;
 let sentMs = 0;
 let phraseProject: Project | null = null;
 let phraseBody = "";
-let phraseSent = "";
-let gainSent = "";
-let deckSent = "";
 let phraseLatch = "";
 let voiceStep = -1;
 let voiceMorph = false;
 let projectDirty = false;
 let dirtySinceMs = 0;
-/** Last audio-frame load drawn, after the glide toward the dsp.so reading. */
-let audioLoad = 0;
-let audioLoadAt = 0;
-let targetLoad = 0;
-let shownLoad = 0;
-let shownAt = 0;
-let shownWidth = -1;
+
 /** Glide so a new reading moves the line instead of jumping it. */
 const LOAD_TAU_MS = 450;
 
 function pollAudioLoad(now: number): void {
-  if (now - audioLoadAt >= 100) {
-    audioLoadAt = now;
+  if (now - sent.loadAt >= 100) {
+    sent.loadAt = now;
     const host = globalThis as HostGlobals;
     const raw = host.host_module_get_param?.("cpu") ?? host.shadow_get_param?.(0, "overtake_dsp:cpu");
     if (typeof raw === "string") {
       const n = Number.parseInt(raw, 10);
-      if (Number.isInteger(n) && n >= 0 && n <= 99) targetLoad = n;
+      if (Number.isInteger(n) && n >= 0 && n <= 99) sent.target = n;
     }
   }
-  const dt = shownAt === 0 ? 0 : Math.max(0, Math.min(50, now - shownAt));
-  shownAt = now;
-  if (dt > 0) shownLoad += (targetLoad - shownLoad) * (1 - Math.exp(-dt / LOAD_TAU_MS));
-  const width = loadWidth(shownLoad);
-  if (width === shownWidth) return;
-  shownWidth = width;
-  audioLoad = shownLoad;
+  const dt = sent.shownAt === 0 ? 0 : Math.max(0, Math.min(50, now - sent.shownAt));
+  sent.shownAt = now;
+  if (dt > 0) sent.shown += (sent.target - sent.shown) * (1 - Math.exp(-dt / LOAD_TAU_MS));
+  const width = loadWidth(sent.shown);
+  if (width === sent.width) return;
+  sent.width = width;
+  sent.load = sent.shown;
 }
 
 function markDirty(before: Project): void {
@@ -189,9 +177,9 @@ function syncVoice(reset: boolean): void {
   if (!session.playing) {
     if (voiceOn) sendBlock(`S|${tempo}`);
     voiceOn = false;
-    phraseSent = "";
-    gainSent = "";
-    deckSent = "";
+    sent.phrase = "";
+    sent.gain = "";
+    sent.deck = "";
     return;
   }
   const step = Math.floor(session.tick / 48);
@@ -201,7 +189,7 @@ function syncVoice(reset: boolean): void {
   const latchChanged = latch !== phraseLatch;
   const heardSame = phraseProject !== null && sameHeard(phraseProject, session.project);
   const gains = gainTrailer(session.project);
-  if ((!heardSame && (!morphing || boundary || reset)) || latchChanged || gains !== gainSent) {
+  if ((!heardSame && (!morphing || boundary || reset)) || latchChanged || gains !== sent.gain) {
     const phrase = generatePhrase(session.project);
     phraseBody = packPhraseBody(
       phraseLoop(session.project, phrase),
@@ -210,25 +198,25 @@ function syncVoice(reset: boolean): void {
       formatBus(session.project.bus),
       gains,
     );
-    gainSent = gains;
+    sent.gain = gains;
     phraseProject = session.project;
-    phraseSent = "";
+    sent.phrase = "";
     phraseLatch = latch;
   }
   voiceStep = step;
   voiceMorph = morphing;
   const now = Date.now();
   const deck = deckCommand();
-  const sameBody = !reset && phraseBody.length > 0 && phraseSent === phraseBody;
-  const phraseDue = reset || phraseSent !== phraseBody || now - sentMs > 400;
+  const sameBody = !reset && phraseBody.length > 0 && sent.phrase === phraseBody;
+  const phraseDue = reset || sent.phrase !== phraseBody || now - sentMs > 400;
   if (phraseDue) {
     sendBlock(sameBody ? `K|${tempo}` : `P|${tempo}|${reset ? 1 : 0}|${phraseBody}`);
-    if (!sameBody) phraseSent = phraseBody;
+    if (!sameBody) sent.phrase = phraseBody;
     sentMs = now;
   }
-  if (phraseDue || deck !== deckSent) {
+  if (phraseDue || deck !== sent.deck) {
     sendBlock(deck);
-    deckSent = deck;
+    sent.deck = deck;
   }
   voiceOn = true;
 }
@@ -271,7 +259,7 @@ function blit(pixels: Uint8Array): void {
   host.clear_screen();
   for (let i = 0; i < pixels.length; i++) {
     if (!pixels[i]) continue;
-    host.set_pixel(i % 128, Math.floor(i / 128), 1);
+    host.set_pixel(i % WIDTH, Math.floor(i / WIDTH), 1);
   }
 }
 
@@ -292,7 +280,21 @@ let sentCapture = -1;
 let sentSample = -1;
 let sentUp = -1;
 let sentDown = -1;
-const TRACK_CC = 40;
+/**
+ * What the last frame already handed to dsp.so, and the load line on screen.
+ * Kept beside the paint cache: both exist so a frame can skip work it already did.
+ */
+const sent = {
+  phrase: "",
+  gain: "",
+  deck: "",
+  load: 0,
+  loadAt: 0,
+  target: 0,
+  shown: 0,
+  shownAt: 0,
+  width: -1,
+};
 const frame = new Uint8Array(WIDTH * HEIGHT);
 let paintProject: Project | null = null;
 let paintUi: UiState | null = null;
@@ -407,7 +409,7 @@ function rememberPaint(
   paintFocus = focus;
   paintPeek = peek;
   paintLatch = latch;
-  paintLoad = audioLoad;
+  paintLoad = sent.load;
   paintTitleKey = titleKey;
   paintLane = lane;
   paintDigits = digits;
@@ -431,7 +433,7 @@ function screenDelta(now: number): PaintDelta {
     && paintFocus === focus
     && paintPeek === peek
     && paintLatch === latch
-    && paintLoad === audioLoad;
+    && paintLoad === sent.load;
   const pictureSame = flagsSame && paintProject === session.project && paintTitleKey === titleKey;
   if (pictureSame) {
     if (!session.playing || deckVisible(ui)) return "same";
@@ -520,7 +522,7 @@ function paintScreen(): void {
     wave = serviceWaveform(session.project);
     applyWavePages(wave, [readParam("wave0"), readParam("wave1")]);
   }
-  const screen = renderScreen(session.project, session.ui, session.tick, session.playing, Date.now(), frame, audioLoad, wave, mixerMeters());
+  const screen = renderScreen(session.project, session.ui, session.tick, session.playing, Date.now(), frame, sent.load, wave, mixerMeters());
   blit(screen.pixels);
   paintHostReadout(screen);
 }
@@ -636,12 +638,12 @@ function deckChromeStale(now: number): boolean {
     || chromeFocus !== focusOn
     || chromeFocusPath !== path
     || chromeGesture !== gesture
-    || chromeWidth !== shownWidth
+    || chromeWidth !== sent.width
     || chromeBar !== session.project.global.bar;
 }
 
 function paintDeckChrome(now: number): void {
-  const screen = renderScreen(session.project, session.ui, session.tick, session.playing, now, frame, audioLoad, null);
+  const screen = renderScreen(session.project, session.ui, session.tick, session.playing, now, frame, sent.load, null);
   hostRect(0, 0, WIDTH, HEADER_H, 0);
   blitRows(screen.pixels, 0, HEADER_H);
   hostRect(0, SEP_Y, WIDTH, 1, 1);
@@ -652,7 +654,7 @@ function paintDeckChrome(now: number): void {
   chromeFocus = focusVisible(session.ui.focus, session.tick, now);
   chromeFocusPath = chromeFocus && session.ui.focus ? `${session.ui.focus.path}\0${session.ui.focus.label}` : "";
   chromeGesture = `${session.ui.deckLayer}\0${session.ui.deckGesture ?? ""}\0${session.ui.deckLatchedGesture ?? ""}`;
-  chromeWidth = shownWidth;
+  chromeWidth = sent.width;
   chromeBar = session.project.global.bar;
 }
 
@@ -706,7 +708,7 @@ function paintDeckCovered(now: number): void {
   if (chromeDirty) paintDeckChrome(now);
   if (!waveDirty && stamp === deckCoverKey && deckFastLatched) return;
   deckCoverKey = stamp;
-  const screen = renderScreen(session.project, session.ui, session.tick, session.playing, now, frame, audioLoad, wave, null);
+  const screen = renderScreen(session.project, session.ui, session.tick, session.playing, now, frame, sent.load, wave, null);
   hostRect(0, HEADER_H, WIDTH, VIZ_H - 1, 0);
   blitRows(screen.pixels, HEADER_H, HEADER_H + VIZ_H - 1);
   deckFastLatched = true;
@@ -717,7 +719,7 @@ function paintDeckCovered(now: number): void {
 }
 
 function paintViz(now: number, readout: boolean): void {
-  const screen = renderScreen(session.project, session.ui, session.tick, session.playing, now, frame, audioLoad, null, mixerMeters());
+  const screen = renderScreen(session.project, session.ui, session.tick, session.playing, now, frame, sent.load, null, mixerMeters());
   hostRect(0, HEADER_H, WIDTH, VIZ_H - 1, 0);
   blitRows(screen.pixels, HEADER_H, HEADER_H + VIZ_H - 1);
   if (!readout) return;
@@ -727,7 +729,7 @@ function paintViz(now: number, readout: boolean): void {
 }
 
 function paintReadout(now: number): void {
-  const screen = renderScreen(session.project, session.ui, session.tick, session.playing, now, frame, audioLoad, null, mixerMeters());
+  const screen = renderScreen(session.project, session.ui, session.tick, session.playing, now, frame, sent.load, null, mixerMeters());
   const top = HEADER_H + VIZ_H;
   hostRect(0, top, WIDTH, HEIGHT - top, 0);
   paintHostReadout(screen);
@@ -942,9 +944,9 @@ export function init(): void {
   voiceOn = false;
   phraseProject = null;
   phraseBody = "";
-  phraseSent = "";
-  gainSent = "";
-  deckSent = "";
+  sent.phrase = "";
+  sent.gain = "";
+  sent.deck = "";
   phraseLatch = "";
   paintLatch = "";
   voiceStep = -1;

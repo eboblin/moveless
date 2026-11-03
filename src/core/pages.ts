@@ -535,25 +535,6 @@ function plain(
   return bind({ path, label, min, max, step, integer, store, weight: PLAIN_WEIGHT, display, morph, sensitivity });
 }
 
-function plainPage(
-  id: string,
-  title: string,
-  left: string,
-  right: string,
-  group: PageGroup,
-  store: KnobStore,
-  knobs: readonly [string, string][],
-  morph?: MorphKind,
-): Page {
-  return page(
-    id,
-    title,
-    [left, right],
-    group,
-    knobs.map(([key, label]) => plain(`${id}.${key}`, label, 0, 1, 0.01, false, store, undefined, morph)),
-  );
-}
-
 function progPage(): Page {
   return page("prog", "CHORDS", ["WALK", "TONE"], "notes", [
     plain("start", "START", -7, 7, 1, true, "progression"),
@@ -791,14 +772,6 @@ export function mixerPage(): Page {
   return MIXER_PAGE;
 }
 
-/** Id of one context page. The index clamps into the page list. */
-export function pageId(context: ContextId, index: number): string | null {
-  const pages = pagesFor(context);
-  if (!pages.length) return null;
-  const clamped = Math.min(Math.max(0, index), pages.length - 1);
-  return pages[clamped]?.id ?? null;
-}
-
 function workingNumber(project: Project, path: string): number | null {
   let current: unknown = project.working;
   for (const part of path.split(".")) {
@@ -898,22 +871,6 @@ export function laneScopePaths(lane: PatternId, scope: "pattern" | "notes" | "so
     picked.push(bindingPaths(item));
   }
   return picked;
-}
-
-/** Paths of one generator. A paired page contributes only the named modulator. */
-export function modulatorPaths(lane: PatternId, target: string): string[] {
-  if (target === "gen1" || target === "gen2") {
-    const found = pagesFor(lane).find((item) => item.id === target);
-    return found ? bindingPaths(found) : [];
-  }
-  const prefix = `${target}.`;
-  const paths: string[] = [];
-  for (const item of pagesFor(lane)) {
-    for (const binding of item.bindings) {
-      if (binding && (binding.path === target || binding.path.startsWith(prefix))) paths.push(binding.path);
-    }
-  }
-  return paths;
 }
 
 export function pageGroup(context: ContextId, index: number): PageGroup {

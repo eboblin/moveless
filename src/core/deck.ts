@@ -1,4 +1,5 @@
-import { SAMPLE_RATE } from "./clock.ts";
+import { SAMPLE_RATE, clamp01, countFromUnit } from "./clock.ts";
+import { mod as wrapMod } from "./motif.ts";
 
 /**
  * Beat-synced deck gestures. The read head is a pure function of musical time,
@@ -272,6 +273,119 @@ export function rowValueLabel(group: DeckGroup, y: number): string {
 /** Spoken row name for the header. The cell uses {@link rowValueLabel}. */
 export function rowValueWord(group: DeckGroup, y: number): string {
   return ROW_WORD[group][pick(y, 4)] ?? "REPEAT";
+}
+
+/** Header word for a deck path. Scratch renames the shared knobs. */
+const KNOB_TITLE: Record<string, string> = {
+  "deck.div": "DIVISION",
+  "deck.len": "LENGTH",
+  "deck.depth": "DEPTH",
+  "deck.brake": "TIME",
+  "deck.vary": "VARY",
+  "deck.quant": "QUANTIZE",
+  "deck.duty": "DUTY",
+  "deck.ramp": "BEND",
+  "deck.filter": "FILTER",
+  "deck.resonance": "RESONANCE",
+  "deck.drive": "DRIVE",
+  "deck.low": "LOW",
+  "deck.mid": "MID",
+  "deck.high": "HIGH",
+  "deck.rate": "RATE",
+  "deck.open": "OPEN",
+};
+
+const SCRATCH_TITLE: Record<string, string> = {
+  "deck.len": "CUE",
+  "deck.brake": "DURATION",
+  "deck.vary": "THROW",
+  "deck.duty": "CUT",
+  "deck.ramp": "DIRECTION",
+  "deck.row": "COMPLEXITY",
+};
+
+const ROW_TITLE: Record<DeckGroup, string> = {
+  rpt: "WAY",
+  lop: "WAY",
+  glc: "PATTERN",
+  scr: "COMPLEXITY",
+  gat: "TRANSFORM",
+  pch: "SHAPE",
+  stp: "SHAPE",
+  thr: "SEND",
+};
+
+/** Full knob name while the encoder is held. */
+export function deckKnobTitle(path: string, group: DeckGroup): string {
+  if (group === "scr" && SCRATCH_TITLE[path]) return SCRATCH_TITLE[path];
+  if (path === "deck.row") return ROW_TITLE[group];
+  return KNOB_TITLE[path] ?? "DECK";
+}
+
+function labelAt(index: number, labels: readonly string[]): string | null {
+  if (!Number.isFinite(index)) return labels[0] ?? null;
+  return labels[Math.max(0, Math.min(labels.length - 1, Math.round(index)))] ?? null;
+}
+
+/** Spoken value in the header. Null when the header prints the number instead. */
+export function deckHeaderValue(path: string, deck: DeckKnobs, barBeats: number): string | null {
+  const group = focusedGroup(deck);
+  switch (path) {
+    case "deck.div":
+      return DIV_LABEL[deck.div] ?? null;
+    case "deck.len":
+      if (group === "scr") return ["NOW", "1/16", "1/8", "3/16", "1/4"][scratchCue(deck.len)] ?? "NOW";
+      return lenLabel(deck, barBeats);
+    case "deck.brake":
+      return group === "scr" ? phraseWord(deck.brake) : (BRAKE_LABEL[deck.brake] ?? null);
+    case "deck.quant":
+      return QUANT_LABEL[deck.quant] ?? null;
+    case "deck.row":
+      return rowValueWord(group, readDeckSlot(deck, "row"));
+    case "deck.rate":
+      return RATE_LABEL[readDeckSlot(deck, "rate")] ?? null;
+    case "deck.open":
+      return DIV_LABEL[readDeckSlot(deck, "open")] ?? null;
+    default:
+      return null;
+  }
+}
+
+/** Three-character cell. Null when the cell is a plain number. */
+export function deckCellValue(path: string, deck: DeckKnobs): string | null {
+  const group = focusedGroup(deck);
+  switch (path) {
+    case "deck.div":
+      return divShort(deck.div);
+    case "deck.brake":
+      return group === "scr" ? phraseShort(deck.brake) : brakeShort(deck.brake);
+    case "deck.quant":
+      return quantShort(deck.quant);
+    case "deck.row":
+      return rowValueLabel(group, readDeckSlot(deck, "row"));
+    case "deck.rate":
+      return RATE_LABEL[readDeckSlot(deck, "rate")] ?? null;
+    case "deck.open":
+      return divShort(readDeckSlot(deck, "open"));
+    default:
+      return null;
+  }
+}
+
+/** Division text for a cell that draws a big denominator. Null when this path is not a fraction. */
+export function deckFractionText(path: string, deck: DeckKnobs): string | null {
+  const group = focusedGroup(deck);
+  switch (path) {
+    case "deck.div":
+      return labelAt(deck.div, DIV_LABEL) ?? "";
+    case "deck.brake":
+      if (group === "scr") return null;
+      return labelAt(deck.brake, BRAKE_LABEL) ?? "";
+    case "deck.open":
+      return labelAt(readDeckSlot(deck, "open"), DIV_LABEL) ?? "";
+    default:
+      return null;
+  }
 }
 
 export function divShort(index: number): string {
@@ -570,10 +684,10 @@ function pick(value: number, count: number): number {
   return Math.max(0, Math.min(count - 1, Math.round(value)));
 }
 
+/** Sample periods of one or less stay put. Longer periods use the shared wrap. */
 function mod(n: number, m: number): number {
   if (m <= 1) return 0;
-  const r = n % m;
-  return r < 0 ? r + m : r;
+  return wrapMod(n, m);
 }
 
 export function samplesPerBeat(tempo: number): number {
@@ -586,10 +700,7 @@ export function divSamples(knobs: DeckKnobs, tempo: number): number {
 
 /** One sixteenth up to one bar, in samples. */
 export function lenSamples(knobs: DeckKnobs, tempo: number, barBeats: number): number {
-  const sixteenths = Math.max(1, Math.round(barBeats) * 4);
-  const unit = Math.max(0, Math.min(1, knobs.len));
-  const n = 1 + Math.min(sixteenths - 1, Math.floor(unit * sixteenths));
-  return Math.max(1, Math.round((n * samplesPerBeat(tempo)) / 4));
+  return Math.max(1, Math.round((lenCount(knobs, barBeats) * samplesPerBeat(tempo)) / 4));
 }
 
 export function brakeSamples(knobs: DeckKnobs, tempo: number): number {
@@ -834,10 +945,6 @@ function parseGroupGesture(value: string): { group: DeckGroup; y: number } | nul
   return { group, y };
 }
 
-function clamp01(value: number): number {
-  return Math.max(0, Math.min(1, value));
-}
-
 function pingPong(start: number, now: number, origin: number, slice: number): DeckRead {
   const period = Math.max(1, slice) * 2;
   const at = mod(now - origin, period);
@@ -851,7 +958,7 @@ function reverseSlice(start: number, now: number, origin: number, slice: number)
 }
 
 function readGroup(moment: DeckMoment, group: DeckGroup, y: number): DeckRead {
-  const { knobs, tempo, barBeats, now, down, ahead, seed } = moment;
+  const { knobs, tempo, barBeats, now, down, ahead } = moment;
   const bar = barSamples(tempo, barBeats);
   const div = divSamples(knobs, tempo);
   const len = lenSamples(knobs, tempo, barBeats);
@@ -1299,15 +1406,10 @@ export function parseDeckCommand(text: string): DeckCommand | null {
   };
 }
 
-export function divLabel(knobs: DeckKnobs): string {
-  return DIV_LABEL[pick(knobs.div, DIV_LABEL.length)];
-}
-
 /** Sixteenths the length knob stands for. The cell shows this count. */
 export function lenCount(knobs: DeckKnobs, barBeats: number): number {
   const sixteenths = Math.max(1, Math.round(barBeats) * 4);
-  const unit = Math.max(0, Math.min(1, knobs.len));
-  return 1 + Math.min(sixteenths - 1, Math.floor(unit * sixteenths));
+  return countFromUnit(knobs.len, sixteenths);
 }
 
 function gcd(a: number, b: number): number {

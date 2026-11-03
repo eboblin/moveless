@@ -377,7 +377,7 @@ describe("project persist", () => {
     const raw = JSON.parse(serializeStored(project, { context: "bass", page: 0, mode: "journal", playing: true, sampleLatched: false, randomizeLatched: false, face: null, deckLayer: "group" })) as {
       project: {
         working: { bass: { sound: Record<string, { value: number; pattern: number; cycle: number; amount: number }> } };
-        journal: { lanes: { bass: { sound: Record<string, { value: number }> } } }[];
+        journal: { lanes: { bass: { sound: Record<string, { value: number; pattern: number; cycle: number; amount: number }> } } }[];
       };
     };
     const pluck = { value: 0.25, pattern: 3, cycle: 2, amount: 0.1 };

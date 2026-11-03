@@ -4,6 +4,7 @@ import { generatePhrase, hashPair } from "../core/phrase.ts";
 import { LANES, type LaneId, type Phrase, type Project } from "../core/types.ts";
 import { phraseLoop, soundMotions, type LoopEvent } from "../dsp/schedule.ts";
 import {
+  hatBodySeconds,
   hatDecaySeconds,
   kickDecaySeconds,
   melodyLevel,
@@ -11,6 +12,7 @@ import {
   melodySustain,
   percDecaySeconds,
   snareBodyDecaySeconds,
+  snareClickSamples,
   snareNoiseDecaySeconds,
 } from "../dsp/envelope.ts";
 import { WAVE_HOP, emptyWave, resetWaveScroll, type WaveTape } from "./wave.ts";
@@ -153,13 +155,11 @@ function paintHit(tape: WaveTape, period: number, event: LoopEvent, at: number, 
   if (event.lane === "snare") {
     paintDecay(tape, period, at, amp, snareBodyDecaySeconds(unit(event, "bdcy", 0.3)), leftGain, rightGain);
     paintDecay(tape, period, at, amp, snareNoiseDecaySeconds(unit(event, "ndcy", 0.3)), leftGain, rightGain);
-    const snap = unit(event, "snap", 0.4);
-    const clickSamples = 40 + (1 - snap) ** 1.4 * 700;
-    paintDecay(tape, period, at, amp, clickSamples / SAMPLE_RATE, leftGain, rightGain);
+    paintDecay(tape, period, at, amp, snareClickSamples(unit(event, "snap", 0.4)) / SAMPLE_RATE, leftGain, rightGain);
     return;
   }
   if (event.lane === "hat") {
-    const body = hatDecaySeconds(unit(event, "decay", 0.3)) * (1 + unit(event, "ring", 0.3) * 2.8);
+    const body = hatBodySeconds(hatDecaySeconds(unit(event, "decay", 0.3)), unit(event, "ring", 0.3));
     paintDecay(tape, period, at, amp, body, leftGain, rightGain);
     return;
   }

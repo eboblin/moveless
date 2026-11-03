@@ -5,7 +5,6 @@ export {
   createSet,
   cycleSet,
   deleteSet,
-  ensureTrailingEmpty,
   journalPadIds,
   journalPageCount,
   heardFx,

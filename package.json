@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "test": "node --experimental-strip-types --test test/core.test.ts test/ui.test.ts test/dsp.test.ts test/persist.test.ts test/drum-landmarks.test.ts test/deck.test.ts test/wave.test.ts",
+    "test:dsp": "node --experimental-strip-types scripts/test-dsp.ts",
     "typecheck": "tsc --noEmit",
     "bench": "node scripts/bench.ts",
     "build": "esbuild src/host/main.ts --bundle --format=esm --platform=neutral --target=es2022 --outfile=ui.js",

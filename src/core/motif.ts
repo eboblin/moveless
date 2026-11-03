@@ -53,7 +53,7 @@ export function mod(n: number, m: number): number {
   return ((n % m) + m) % m;
 }
 
-function euclidGate(steps: number, pulses: number, phase: number): number {
+export function euclidGate(steps: number, pulses: number, phase: number): number {
   const idx = Math.floor(phase * steps) % steps;
   const hits = Math.max(1, Math.min(pulses, steps));
   for (let p = 0; p < hits; p++) {

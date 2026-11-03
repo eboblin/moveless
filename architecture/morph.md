@@ -1,6 +1,6 @@
 # Морф
 
-Код: `src/core/morph.ts`, `src/core/phrase.ts`, `src/dsp/voice.ts`, `dsp/src/voice.c`.
+Код: `src/core/morph.ts`, `src/core/phrase.ts`, `src/dsp/voice.ts`, `dsp/src`.
 
 Слышимое состояние — `working`. Фраза читает только его. Второго лупа на дорожку нет: смена прячется громкостью, а не кроссфейдом двух фраз.
 

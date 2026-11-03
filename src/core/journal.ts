@@ -184,6 +184,7 @@ export function advance(project: Project, tick: number, candidates?: readonly (s
   const pending = project.morph;
   let next = applyMorph(project, tick);
   if (!next.wander) return next;
+  const wander = next.wander;
   if (pending && !next.morph) {
     const end = morphEndTick(pending);
     if (end > next.wanderOriginTick) next = { ...next, wanderOriginTick: end };
@@ -192,7 +193,7 @@ export function advance(project: Project, tick: number, candidates?: readonly (s
     const end = morphEndTick(next.morph);
     return next.wanderOriginTick === end ? next : { ...next, wanderOriginTick: end };
   }
-  const interval = WANDER_BARS[next.wander] * ticksPerBar(next.global.bar);
+  const interval = WANDER_BARS[wander] * ticksPerBar(next.global.bar);
   let ready = next.wanderOriginTick;
   let guard = 0;
   while (tick - ready >= interval && guard < 8) {

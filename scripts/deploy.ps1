@@ -32,15 +32,16 @@ Write-Host "сборка ui.js"
 Invoke-Checked { npm run build }
 
 if (-not $SkipDsp) {
-    $voice = Join-Path $Root "dsp\src\voice.c"
-    $dspFresh = (Test-Path $Dsp) -and ((Get-Item $Dsp).LastWriteTime -ge (Get-Item $voice).LastWriteTime)
+    $srcDir = Join-Path $Root "dsp\src"
+    $newest = Get-ChildItem $srcDir -File | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+    $dspFresh = (Test-Path $Dsp) -and $newest -and ((Get-Item $Dsp).LastWriteTime -ge $newest.LastWriteTime)
     if (-not $dspFresh) {
         Write-Host "сборка dsp.so под AArch64"
         Invoke-Checked { docker build -t moveless-dsp (Join-Path $Root "dsp") }
         $srcMount = (Join-Path $Root "dsp") -replace '\\', '/'
         $outMount = $Root -replace '\\', '/'
         Invoke-Checked {
-            docker run --rm -v "${srcMount}:/src" -v "${outMount}:/out" moveless-dsp bash -lc "aarch64-linux-gnu-gcc -O2 -Wall -Werror -shared -fPIC -o /out/dsp.so src/voice.c -lm -Wl,--version-script=src/plugin.lds"
+            docker run --rm -v "${srcMount}:/src" -v "${outMount}:/out" moveless-dsp bash -lc "srcs=`$(ls src/*.c | grep -v /check.c); aarch64-linux-gnu-gcc -O2 -Wall -Werror -shared -fPIC -o /out/dsp.so `$srcs -lm -Wl,--version-script=src/plugin.lds"
         }
     }
 }

@@ -50,7 +50,6 @@ export function generateHits(gen1: EuclidGen, gen2: EuclidGen, steps: number): H
   for (let step = 0; step < span; step++) {
     const fired: (1 | 2)[] = [];
     for (const which of [1, 2] as const) {
-      const gen = which === 1 ? gen1 : gen2;
       const pattern = rings[which - 1];
       const length = lengths[which - 1] ?? 0;
       if (!pattern || length <= 0) continue;
