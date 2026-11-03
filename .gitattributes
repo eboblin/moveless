@@ -1,2 +1,5 @@
 # Host font sidecar must stay LF-only; a trailing CR breaks atlas cell width.
 assets/*.dat text eol=lf
+# CI runs these on Linux.
+scripts/*.sh text eol=lf
+.github/workflows/*.yml text eol=lf
