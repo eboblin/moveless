@@ -148,7 +148,53 @@ int fire_cmp(const void *a, const void *b) {
     return fa->offset - fb->offset;
 }
 
+/* Full-velocity peak of each lane. Same shelf the TypeScript follower divides by. */
+static const float DUCK_FULL[7] = { 0.85f, 0.55f, 0.6f, 0.6f, 0.22f, 0.22f, 0.22f };
+
+static float duck_hold(void) {
+    static float k = -1.0f;
+    if (k < 0.0f) k = expf(-1.0f / (0.03f * SR));
+    return k;
+}
+
+static float follow_heard(float env, float peak) {
+    float next = peak >= env ? peak : peak + (env - peak) * duck_hold();
+    return next < 1e-8f ? 0.0f : next;
+}
+
+static float duck_scale(float value, float env, float amount) {
+    float rest = value < 0 ? 0 : value > 1 ? 1 : value;
+    float heard = rest + env * amount * 3.0f;
+    if (heard < 0) heard = 0;
+    if (heard > 1) heard = 1;
+    if (rest < 1e-4f) return 1.0f;
+    return heard / rest;
+}
+
+static float lane_duck(const Engine *engine, int lane) {
+    int n = engine->duck_n[lane];
+    float scale = 1.0f;
+    for (int i = 0; i < n; i++) {
+        int source = engine->duck_source[lane][i];
+        float env = source == lane ? engine->dry_env[source] : engine->wet_env[source];
+        float unit = env / DUCK_FULL[source];
+        if (unit < 0) unit = 0;
+        if (unit > 1) unit = 1;
+        scale *= duck_scale(engine->duck_value[lane][i], unit, engine->duck_amount[lane][i]);
+    }
+    return scale;
+}
+
 void render(Engine *engine, int16_t *out, int frames) {
+#if defined(__aarch64__)
+    /* Denormals stall this core. A fade or a duck sits on that edge for the whole transition. */
+    {
+        uint64_t fpcr;
+        __asm__ volatile("mrs %0, fpcr" : "=r"(fpcr));
+        fpcr |= 1ull << 24;
+        __asm__ volatile("msr fpcr, %0" :: "r"(fpcr));
+    }
+#endif
     /* Events in this message belong at the start of the block. Sample offsets
      * are applied by triggering before the frame loop only when offset is 0,
      * and during the loop otherwise. consume parses all events up front, so
@@ -212,7 +258,9 @@ void render(Engine *engine, int16_t *out, int frames) {
 
     int fi = 0;
     float block_peak[METER_N];
+    int hot = 0;
     for (int m = 0; m < METER_N; m++) block_peak[m] = 0.0f;
+    for (int lane = 0; lane < 7; lane++) if (engine->duck_n[lane]) hot = 1;
     for (int i = 0; i < frames; i++) {
         if (engine->phrase_on) {
             while (fi < fire_count && fires[fi].offset == i) {
@@ -240,27 +288,43 @@ void render(Engine *engine, int16_t *out, int frames) {
         }
         float left = 0, right = 0, revL = 0, revR = 0, dlyL = 0, dlyR = 0;
         float lane_l[7], lane_r[7];
+        float dry_l[7] = {0}, dry_r[7] = {0}, duck_scale[7] = {1, 1, 1, 1, 1, 1, 1}, lane_gain[8] = {0};
         for (int lane = 0; lane < 7; lane++) {
             lane_l[lane] = 0.0f;
             lane_r[lane] = 0.0f;
         }
+        /* One duck gain per lane. Voices only multiply; the follower runs after the mix. */
+        if (hot) {
+            for (int lane = 0; lane < 7; lane++) {
+                dry_l[lane] = 0.0f;
+                dry_r[lane] = 0.0f;
+                duck_scale[lane] = lane_duck(engine, lane);
+            }
+        }
+        if (engine->handoff_n) {
+            for (int lane = 0; lane < 8; lane++) lane_gain[lane] = handoff_gain(engine, lane, engine->clock);
+        }
         for (int d = 0; d < DRUMS; d++) {
             if (!engine->drums[d].on) continue;
             float l = 0, r = 0;
+            int dlane = engine->drums[d].lane;
+            float g = engine->handoff_n && dlane >= 0 && dlane < 8 ? lane_gain[dlane] : 1.0f;
             drum_sample(engine, &engine->drums[d], &l, &r);
-            float g = handoff_gain(engine, engine->drums[d].lane, engine->clock);
             l *= g;
             r *= g;
-            if (wide > 0.0f && engine->drums[d].lane == LANE_HAT) open_hat(&l, &r, engine->drums[d].pos, wide);
-            else if (wide > 0.0f && engine->drums[d].lane == LANE_PERC) haas(engine->drums[d].haas, &engine->drums[d].haas_i, &l, &r, wide);
+            if (wide > 0.0f && dlane == LANE_HAT) open_hat(&l, &r, engine->drums[d].pos, wide);
+            else if (wide > 0.0f && dlane == LANE_PERC) haas(engine->drums[d].haas, &engine->drums[d].haas_i, &l, &r, wide);
+            if (hot && dlane >= 0 && dlane < 7) {
+                dry_l[dlane] += l;
+                dry_r[dlane] += r;
+                l *= duck_scale[dlane];
+                r *= duck_scale[dlane];
+            }
             left += l;
             right += r;
-            {
-                int lane = engine->drums[d].lane;
-                if (lane >= 0 && lane < 7) {
-                    lane_l[lane] += l;
-                    lane_r[lane] += r;
-                }
+            if (dlane >= 0 && dlane < 7) {
+                lane_l[dlane] += l;
+                lane_r[dlane] += r;
             }
             revL += l * engine->drums[d].reverb;
             revR += r * engine->drums[d].reverb;
@@ -270,21 +334,25 @@ void render(Engine *engine, int16_t *out, int frames) {
         for (int n = 0; n < NOTES; n++) {
             if (!engine->notes[n].on) continue;
             float nl = 0, nr = 0;
+            int nlane = engine->notes[n].lane;
+            float g = engine->handoff_n && nlane >= 0 && nlane < 8 ? lane_gain[nlane] : 1.0f;
             note_sample(engine, &engine->notes[n], &nl, &nr);
-            float g = handoff_gain(engine, engine->notes[n].lane, engine->clock);
             nl *= g;
             nr *= g;
-            if (wide > 0.0f && engine->notes[n].lane == LANE_CHORDS) pan_chord(&nl, &nr, engine->notes[n].pitch, chord_lo, chord_hi, wide);
-            else if (wide > 0.0f && engine->notes[n].lane == LANE_LEAD) haas(engine->notes[n].haas, &engine->notes[n].haas_i, &nl, &nr, wide);
-            pump_pair(engine, engine->notes[n].lane, &nl, &nr);
+            if (wide > 0.0f && nlane == LANE_CHORDS) pan_chord(&nl, &nr, engine->notes[n].pitch, chord_lo, chord_hi, wide);
+            else if (wide > 0.0f && nlane == LANE_LEAD) haas(engine->notes[n].haas, &engine->notes[n].haas_i, &nl, &nr, wide);
+            if (hot && nlane >= 0 && nlane < 7) {
+                dry_l[nlane] += nl;
+                dry_r[nlane] += nr;
+                nl *= duck_scale[nlane];
+                nr *= duck_scale[nlane];
+            }
+            pump_pair(engine, nlane, &nl, &nr);
             left += nl;
             right += nr;
-            {
-                int lane = engine->notes[n].lane;
-                if (lane >= 0 && lane < 7) {
-                    lane_l[lane] += nl;
-                    lane_r[lane] += nr;
-                }
+            if (nlane >= 0 && nlane < 7) {
+                lane_l[nlane] += nl;
+                lane_r[nlane] += nr;
             }
             revL += nl * engine->notes[n].reverb;
             revR += nr * engine->notes[n].reverb;
@@ -296,6 +364,11 @@ void render(Engine *engine, int16_t *out, int frames) {
             float b = fabsf(lane_r[lane]);
             float p = a > b ? a : b;
             if (p > block_peak[lane]) block_peak[lane] = p;
+            if (hot) {
+                float dry = fabsf(dry_l[lane]) > fabsf(dry_r[lane]) ? fabsf(dry_l[lane]) : fabsf(dry_r[lane]);
+                engine->dry_env[lane] = follow_heard(engine->dry_env[lane], dry);
+                engine->wet_env[lane] = follow_heard(engine->wet_env[lane], p);
+            }
         }
         float wetL = 0, wetR = 0, delL = 0, delR = 0, thrL = 0, thrR = 0;
         {
@@ -314,7 +387,7 @@ void render(Engine *engine, int16_t *out, int frames) {
         plate_sample(engine, revL, revR, &wetL, &wetR);
         echo_sample(engine, &engine->echo, dlyL, dlyR, &delL, &delR);
         {
-            float g = handoff_gain(engine, 7, engine->clock);
+            float g = engine->handoff_n ? lane_gain[7] : 1.0f;
             wetL *= g;
             wetR *= g;
             delL *= g;

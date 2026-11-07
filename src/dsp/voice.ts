@@ -6,7 +6,7 @@ import { DRUM_HZ, isDrum, LANES, type Bus, type DrumId, type Fx, type LaneId } f
 import { commandDeck, createDeckRuntime, deckTargetLead, deckThrow, hearDeck, writeDeckBlock, type DeckRuntime } from "./deck.ts";
 import { envelopeTable, hatBodySeconds, hatDecaySeconds, kickDecaySeconds, melodyContour, melodyLevel, melodyReleaseSeconds, melodySustain, percDecaySeconds, readEnvelope, snareBodyDecaySeconds, snareClickSamples, snareNoiseDecaySeconds, type EnvelopeTable } from "./envelope.ts";
 import type { EngineParam } from "./map.ts";
-import type { BlockEvent, LoopEvent, Motion } from "./schedule.ts";
+import type { BlockEvent, DuckTap, LoopEvent, Motion } from "./schedule.ts";
 import { clearEcho, clearTank, createEcho, createTank, echoSample, tankSample, type Echo, type Tank } from "./fx.ts";
 
 const TWO_PI = Math.PI * 2;
@@ -70,6 +70,10 @@ const LANE_LEAD = 5;
 const LANE_CHORDS = 6;
 const HAAS_N = 544;
 const TILT_COEF = 1 - Math.exp((-TWO_PI * 1000) / SAMPLE_RATE);
+/** Peak hold. Instant attack, 30 ms release, long enough to ignore a waveform cycle. */
+const DUCK_HOLD = Math.exp(-1 / (0.03 * SAMPLE_RATE));
+/** Full-velocity peak of each lane, so the follower sits on the same 0..1 scale as the drawn envelope. */
+const DUCK_FULL = [0.85, 0.55, 0.6, 0.6, 0.22, 0.22, 0.22];
 const GLUE_ATTACK = 1 - Math.exp(-1 / (0.015 * SAMPLE_RATE));
 const GLUE_RELEASE = 1 - Math.exp(-1 / (0.15 * SAMPLE_RATE));
 /** Mixer strips. Seven lanes, then the heard master. */
@@ -87,6 +91,11 @@ export interface Engine {
   motions: Motion[];
   /** Per-lane fade during a morph. Lane 7 is the fx return. Empty leaves every lane at unity. */
   gains: GainSpan[];
+  /** Voice patterns on velocity, up to two generators. Empty lanes stay at unity. */
+  ducks: DuckTap[][];
+  /** Peak followers of the lane before and after its own duck. Index is the lane. */
+  dryEnv: number[];
+  wetEnv: number[];
   clock: number;
   tempo: number;
   beats: number;
@@ -288,6 +297,9 @@ export function createEngine(): Engine {
     phrase: [],
     motions: [],
     gains: [],
+    ducks: Array.from({ length: 7 }, () => []),
+    dryEnv: Array.from({ length: 7 }, () => 0),
+    wetEnv: Array.from({ length: 7 }, () => 0),
     clock: 0,
     tempo: 120,
     beats: 4,
@@ -374,12 +386,13 @@ export function parseMeterPage(text: string | null): ChannelMeter[] | null {
 }
 
 /** Store a looping phrase. `reset` starts the audio clock at the downbeat. */
-export function loadPhrase(engine: Engine, events: LoopEvent[], tempo: number, reset: boolean, motions: Motion[] = [], gains: GainSpan[] = []): void {
+export function loadPhrase(engine: Engine, events: LoopEvent[], tempo: number, reset: boolean, motions: Motion[] = [], gains: GainSpan[] = [], ducks: DuckTap[] = []): void {
   const sig = holdSig(events);
   const previous = engine.holdSig;
   engine.phrase = events;
   engine.motions = motions;
   engine.gains = gains;
+  engine.ducks = bucketDucks(ducks);
   engine.tempo = Math.max(1, tempo);
   engine.holdSig = sig;
   bucketMotions(engine, motions);
@@ -414,8 +427,37 @@ function holdSig(events: LoopEvent[]): string {
   return sig;
 }
 
+function samePitch(engine: Engine, lane: number, pitch: number, kept: Set<NoteVoice>): NoteVoice | null {
+  return engine.notes.find((note) => (
+    note.on && note.lane === lane && note.pitch === pitch && note.left > 0 && note.age > 0 && !kept.has(note)
+  )) ?? null;
+}
+
+/** Old pitch on this lane, else a free voice, else a voice that is already releasing. A held note on another lane stays where it is. */
+function takeSlot(engine: Engine, lane: number, kept: Set<NoteVoice>): NoteVoice | null {
+  let free: NoteVoice | null = null;
+  let same: NoteVoice | null = null;
+  let quiet: NoteVoice | null = null;
+  for (const note of engine.notes) {
+    if (kept.has(note)) continue;
+    if (!note.on) {
+      if (!free) free = note;
+      continue;
+    }
+    if (note.age === 0) continue;
+    if (note.lane === lane && note.left > 0) {
+      if (!same || note.age > same.age) same = note;
+    } else if (note.left <= 0 && (!quiet || note.env < quiet.env)) {
+      quiet = note;
+    }
+  }
+  return same ?? free ?? quiet;
+}
+
 function catchHolding(engine: Engine): void {
   const tempo = Math.max(1, engine.tempo);
+  const kept = new Set<NoteVoice>();
+  const fresh: { event: LoopEvent; left: number; loop: number }[] = [];
   for (const event of engine.phrase) {
     if (isDrum(event.lane)) continue;
     const loop = Math.max(1, event.loop);
@@ -425,8 +467,29 @@ function catchHolding(engine: Engine): void {
     let elapsed = pos - start;
     if (elapsed < 0) elapsed += loop;
     if (elapsed <= 0 || elapsed >= dur) continue;
-    const note = armNote(engine, event, dur - elapsed, loop);
-    note.left = dur - elapsed;
+    const lane = LANES.indexOf(event.lane);
+    const have = samePitch(engine, lane, event.note, kept);
+    if (have) {
+      kept.add(have);
+      continue;
+    }
+    if (fresh.length < 32) fresh.push({ event, left: dur - elapsed, loop });
+  }
+  const serial = beginArm(engine);
+  for (const note of kept) note.claim = serial;
+  for (const item of fresh) {
+    const lane = LANES.indexOf(item.event.lane);
+    const glide = read(item.event.params, ["glide"], 0);
+    const prior = glide > 1e-4 ? glideVoice(engine, lane, item.event.note, serial) : null;
+    let note: NoteVoice | null = null;
+    if (prior && prior.left > 0 && !kept.has(prior)) note = armNote(engine, item.event, item.left, item.loop);
+    else {
+      const slot = takeSlot(engine, lane, kept);
+      if (slot) note = armFresh(engine, slot, item.event, item.left, item.loop);
+    }
+    if (!note) continue;
+    note.left = item.left;
+    kept.add(note);
   }
 }
 
@@ -479,7 +542,49 @@ function laneGain(engine: Engine, lane: number, sample: number): number {
   return 1;
 }
 
-export function packPhraseBody(events: LoopEvent[], motions: Motion[] = [], fx = "", bus = "", gains = ""): string {
+function bucketDucks(ducks: readonly DuckTap[]): DuckTap[][] {
+  const out: DuckTap[][] = Array.from({ length: 7 }, () => []);
+  for (const duck of ducks) {
+    if (duck.lane < 0 || duck.lane >= 7 || duck.source < 0 || duck.source >= 7) continue;
+    const list = out[duck.lane];
+    if (!list || list.length >= 2) continue;
+    list.push(duck);
+  }
+  return out;
+}
+
+function ducksHot(engine: Engine): boolean {
+  for (const list of engine.ducks) if (list.length) return true;
+  return false;
+}
+
+/** Same law as the drawn envelope, as a gain around the resting value. */
+function duckScale(value: number, env: number, amount: number): number {
+  const rest = clamp01(value);
+  const heard = applyVoiceEnvelope(rest, env, amount);
+  if (rest < 1e-4) return 1;
+  return heard / rest;
+}
+
+function laneDuck(engine: Engine, lane: number): number {
+  const list = engine.ducks[lane];
+  if (!list?.length) return 1;
+  let scale = 1;
+  for (const duck of list) {
+    const followed = duck.source === lane ? engine.dryEnv[duck.source] : engine.wetEnv[duck.source];
+    const full = DUCK_FULL[duck.source] ?? 1;
+    const unit = Math.min(1, Math.max(0, (followed ?? 0) / full));
+    scale *= duckScale(duck.value, unit, duck.amount);
+  }
+  return scale;
+}
+
+function followHeard(env: number, peak: number): number {
+  const next = peak >= env ? peak : peak + (env - peak) * DUCK_HOLD;
+  return next < 1e-8 ? 0 : next;
+}
+
+export function packPhraseBody(events: LoopEvent[], motions: Motion[] = [], fx = "", bus = "", gains = "", ducks = ""): string {
   const body = events.map((event) => {
     const lane = LANES.indexOf(event.lane);
     const params = event.params.map((param) => `${param.id}=${param.value.toFixed(4)}`).join(",");
@@ -497,7 +602,8 @@ export function packPhraseBody(events: LoopEvent[], motions: Motion[] = [], fx =
     packed = fx ? `${body}#${tail}@${fx}` : `${body}#${tail}`;
   }
   if (bus) packed = `${packed}^${bus}`;
-  return gains ? `${packed}~${gains}` : packed;
+  if (gains) packed = `${packed}~${gains}`;
+  return ducks ? `${packed}*${ducks}` : packed;
 }
 
 /** Bass, Lead and Chords share these twelve notes. Drums keep one voice each. */
@@ -571,6 +677,12 @@ function renderFrames(engine: Engine, frames: number, at: (frame: number) => voi
   const blockPeak = ahead ? null : new Array<number>(METER_COUNT).fill(0);
   const laneL = blockPeak ? [0, 0, 0, 0, 0, 0, 0] : null;
   const laneR = blockPeak ? [0, 0, 0, 0, 0, 0, 0] : null;
+  const hot = ducksHot(engine);
+  const duckDryL = hot ? [0, 0, 0, 0, 0, 0, 0] : null;
+  const duckDryR = hot ? [0, 0, 0, 0, 0, 0, 0] : null;
+  const duckWetL = hot ? [0, 0, 0, 0, 0, 0, 0] : null;
+  const duckWetR = hot ? [0, 0, 0, 0, 0, 0, 0] : null;
+  const duckScale = hot ? [1, 1, 1, 1, 1, 1, 1] : null;
   for (let i = 0; i < frames; i++) {
     at(i);
     if ((i & (FOLLOW_STRIDE - 1)) === 0) follow(engine);
@@ -594,16 +706,37 @@ function renderFrames(engine: Engine, frames: number, at: (frame: number) => voi
       laneL.fill(0);
       laneR.fill(0);
     }
+    if (duckDryL && duckDryR && duckWetL && duckWetR) {
+      duckDryL.fill(0);
+      duckDryR.fill(0);
+      duckWetL.fill(0);
+      duckWetR.fill(0);
+    }
+    if (duckScale) {
+      for (let lane = 0; lane < 7; lane++) duckScale[lane] = laneDuck(engine, lane);
+    }
     for (const drum of engine.drums) {
       if (!drum.on) continue;
       const gain = laneGain(engine, drum.lane, engine.clock);
       const heard = drumSample(engine, drum);
-      const pair = placeDrum(drum, [heard[0] * gain, heard[1] * gain], wide);
+      let pair = placeDrum(drum, [heard[0] * gain, heard[1] * gain], wide);
+      const lane = drum.lane;
+      if (hot && duckScale && duckDryL && duckDryR && duckWetL && duckWetR && lane >= 0 && lane < 7) {
+        duckDryL[lane] += pair[0];
+        duckDryR[lane] += pair[1];
+        const scale = duckScale[lane] ?? 1;
+        if (scale !== 1) {
+          pair[0] *= scale;
+          pair[1] *= scale;
+        }
+        duckWetL[lane] += pair[0];
+        duckWetR[lane] += pair[1];
+      }
       left += pair[0];
       right += pair[1];
-      if (laneL && laneR && drum.lane >= 0 && drum.lane < laneL.length) {
-        laneL[drum.lane] += pair[0];
-        laneR[drum.lane] += pair[1];
+      if (laneL && laneR && lane >= 0 && lane < laneL.length) {
+        laneL[lane] += pair[0];
+        laneR[lane] += pair[1];
       }
       revL += pair[0] * drum.reverb;
       revR += pair[1] * drum.reverb;
@@ -615,17 +748,39 @@ function renderFrames(engine: Engine, frames: number, at: (frame: number) => voi
       const gain = laneGain(engine, note.lane, engine.clock);
       const heard = noteSample(engine, note);
       let pair = placeNote(note, [heard[0] * gain, heard[1] * gain], wide, chordLo, chordHi);
-      pair = pumpPair(engine, note.lane, pair);
+      const lane = note.lane;
+      if (hot && duckScale && duckDryL && duckDryR && lane >= 0 && lane < 7) {
+        duckDryL[lane] += pair[0];
+        duckDryR[lane] += pair[1];
+        const scale = duckScale[lane] ?? 1;
+        if (scale !== 1) {
+          pair[0] *= scale;
+          pair[1] *= scale;
+        }
+      }
+      pair = pumpPair(engine, lane, pair);
+      if (hot && duckWetL && duckWetR && lane >= 0 && lane < 7) {
+        duckWetL[lane] += pair[0];
+        duckWetR[lane] += pair[1];
+      }
       left += pair[0];
       right += pair[1];
-      if (laneL && laneR && note.lane >= 0 && note.lane < laneL.length) {
-        laneL[note.lane] += pair[0];
-        laneR[note.lane] += pair[1];
+      if (laneL && laneR && lane >= 0 && lane < laneL.length) {
+        laneL[lane] += pair[0];
+        laneR[lane] += pair[1];
       }
       revL += pair[0] * note.reverb;
       revR += pair[1] * note.reverb;
       dlyL += pair[0] * note.delay;
       dlyR += pair[1] * note.delay;
+    }
+    if (hot && duckDryL && duckDryR && duckWetL && duckWetR) {
+      for (let lane = 0; lane < 7; lane++) {
+        const dry = Math.max(Math.abs(duckDryL[lane] ?? 0), Math.abs(duckDryR[lane] ?? 0));
+        const wet = Math.max(Math.abs(duckWetL[lane] ?? 0), Math.abs(duckWetR[lane] ?? 0));
+        engine.dryEnv[lane] = followHeard(engine.dryEnv[lane] ?? 0, dry);
+        engine.wetEnv[lane] = followHeard(engine.wetEnv[lane] ?? 0, wet);
+      }
     }
     if (blockPeak && laneL && laneR) {
       for (let lane = 0; lane < laneL.length; lane++) {
@@ -734,6 +889,8 @@ function clearBusState(engine: Engine): void {
   engine.glueGain = 1;
   engine.tiltL = 0;
   engine.tiltR = 0;
+  engine.dryEnv.fill(0);
+  engine.wetEnv.fill(0);
   for (const drum of engine.drums) clearHaas(drum);
   for (const note of engine.notes) clearHaas(note);
 }
@@ -997,6 +1154,30 @@ function paintNote(note: NoteVoice, event: BlockEvent | LoopEvent, samples: numb
   note.gate = samples;
 }
 
+function attackFields(note: NoteVoice): void {
+  note.on = true;
+  note.env = 0;
+  note.age = 0;
+  note.filterEnv = 0;
+  note.legato = false;
+  note.fromAmp = 0;
+  note.fromContour = 0;
+}
+
+/** Hard note-on. Phase, filter and the Haas buffer start clean. */
+function hardAttack(engine: Engine, note: NoteVoice, event: BlockEvent | LoopEvent, lane: number, glide: number): void {
+  for (let copy = 0; copy < 3; copy++) {
+    note.phase[copy] = unisonPhase(event.note, lane, engine.clock | 0, copy);
+    note.slave[copy] = 0;
+  }
+  clearHaas(note);
+  note.low = 0;
+  note.band = 0;
+  const target = midiFreq(event.note);
+  const remembered = engine.laneFreq[lane] ?? 0;
+  note.freq = glide > 1e-4 && remembered > 1 ? remembered : target;
+}
+
 function armNote(engine: Engine, event: BlockEvent | LoopEvent, samples: number, loop: number): NoteVoice {
   const serial = beginArm(engine);
   const lane = LANES.indexOf(event.lane);
@@ -1006,24 +1187,8 @@ function armNote(engine: Engine, event: BlockEvent | LoopEvent, samples: number,
   const note = prior ?? steal(engine);
   note.on = true;
   if (!legato) {
-    note.env = 0;
-    note.age = 0;
-    note.filterEnv = 0;
-    note.legato = false;
-    note.fromAmp = 0;
-    note.fromContour = 0;
-    if (!prior) {
-      for (let copy = 0; copy < 3; copy++) {
-        note.phase[copy] = unisonPhase(event.note, lane, engine.clock | 0, copy);
-        note.slave[copy] = 0;
-      }
-      clearHaas(note);
-      note.low = 0;
-      note.band = 0;
-      const target = midiFreq(event.note);
-      const remembered = engine.laneFreq[lane] ?? 0;
-      note.freq = glide > 1e-4 && remembered > 1 ? remembered : target;
-    }
+    attackFields(note);
+    if (!prior) hardAttack(engine, note, event, lane, glide);
   }
   paintNote(note, event, samples, loop);
   if (legato) {
@@ -1033,6 +1198,19 @@ function armNote(engine: Engine, event: BlockEvent | LoopEvent, samples: number,
     note.age = 0;
   }
   if (glide <= 1e-4) note.freq = note.target;
+  note.claim = serial;
+  stampNote(engine, note);
+  return note;
+}
+
+/** A grid rebuild starts a pitch that is not already sounding. The caller picks the voice, so a held note on another lane is never reset. */
+function armFresh(engine: Engine, note: NoteVoice, event: LoopEvent, samples: number, loop: number): NoteVoice {
+  const serial = beginArm(engine);
+  const lane = LANES.indexOf(event.lane);
+  attackFields(note);
+  hardAttack(engine, note, event, lane, 0);
+  paintNote(note, event, samples, loop);
+  note.freq = note.target;
   note.claim = serial;
   stampNote(engine, note);
   return note;
@@ -1127,23 +1305,27 @@ function noteSample(engine: Engine, note: NoteVoice): [number, number] {
   slewNote(note);
   const inc = (TWO_PI * note.freq) / SAMPLE_RATE;
   const open = note.wide > 1e-4;
-  const indexes = open ? [0, 1, 2] : [1];
-  let power = 0;
-  for (const index of indexes) power += unisonWeight(note.wide, index) ** 2;
-  const norm = 1 / Math.sqrt(power);
   let mid = 0;
   let side = 0;
-  for (const index of indexes) {
-    const weight = unisonWeight(note.wide, index);
-    const cents = unisonCents(note.wide, index);
-    const ratio = cents === 0 ? 1 : 2 ** (cents / 1200);
-    const shaped = shapeNote(advanceOsc(note, index, inc * ratio, note.sync, note.bend, note.wave), note.fold, note.drive);
-    const scaled = shaped * weight;
-    mid += scaled;
-    side += scaled * unisonPan(note.wide, index);
+  if (!open) {
+    mid = shapeNote(advanceOsc(note, 1, inc, note.sync, note.bend, note.wave), note.fold, note.drive);
+  } else {
+    const indexes = [0, 1, 2];
+    let power = 0;
+    for (const index of indexes) power += unisonWeight(note.wide, index) ** 2;
+    const norm = 1 / Math.sqrt(power);
+    for (const index of indexes) {
+      const weight = unisonWeight(note.wide, index);
+      const cents = unisonCents(note.wide, index);
+      const ratio = cents === 0 ? 1 : 2 ** (cents / 1200);
+      const shaped = shapeNote(advanceOsc(note, index, inc * ratio, note.sync, note.bend, note.wave), note.fold, note.drive);
+      const scaled = shaped * weight;
+      mid += scaled;
+      side += scaled * unisonPan(note.wide, index);
+    }
+    mid *= norm;
+    side *= norm;
   }
-  mid *= norm;
-  side *= norm;
   const origin = note.legato ? note.fromAmp : undefined;
   const contourFrom = note.legato ? note.fromContour : undefined;
   note.filterEnv = melodyContour(note.age, note.gate, note.attack, contourFrom);

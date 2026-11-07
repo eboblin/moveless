@@ -178,6 +178,32 @@ void paint_note(Note *note, int note_num, int velocity, int samples, const char 
     note->gain = velocity / 127.0f;
 }
 
+static void attack_fields(Note *note) {
+    note->on = 1;
+    note->env = 0;
+    note->age = 0;
+    note->filter_env = 0.0f;
+    note->legato = 0;
+    note->from_amp = 0.0f;
+    note->from_contour = 0.0f;
+}
+
+/* Hard note-on. Phase, filter and the Haas buffer start clean. */
+static void hard_attack(Engine *engine, Note *note, int note_num, int lane, float glide) {
+    int copy;
+    float target = midi_freq(note_num);
+    float remembered = lane >= 0 && lane < LANE_COUNT ? engine->lane_freq[lane] : 0.0f;
+    for (copy = 0; copy < 3; copy++) {
+        note->phase[copy] = unison_phase(note_num, lane, engine->clock, copy);
+        note->slave[copy] = 0.0f;
+    }
+    note->haas_i = 0;
+    memset(note->haas, 0, sizeof note->haas);
+    note->low = 0;
+    note->band = 0;
+    note->freq = glide > 1e-4f && remembered > 1.0f ? remembered : target;
+}
+
 Note *arm_note(Engine *engine, int note_num, int velocity, int ticks, const char *params, int lane, int loop) {
     float tempo = engine->tempo > 1.0f ? engine->tempo : 120.0f;
     int samples = (int)((ticks * SR * 60.0f) / (tempo * 192.0f));
@@ -189,26 +215,8 @@ Note *arm_note(Engine *engine, int note_num, int velocity, int ticks, const char
     if (samples < 1) samples = 1;
     note->on = 1;
     if (!legato) {
-        note->env = 0;
-        note->age = 0;
-        note->filter_env = 0.0f;
-        note->legato = 0;
-        note->from_amp = 0.0f;
-        note->from_contour = 0.0f;
-        if (!prior) {
-            int copy;
-            float target = midi_freq(note_num);
-            float remembered = lane >= 0 && lane < LANE_COUNT ? engine->lane_freq[lane] : 0.0f;
-            for (copy = 0; copy < 3; copy++) {
-                note->phase[copy] = unison_phase(note_num, lane, engine->clock, copy);
-                note->slave[copy] = 0.0f;
-            }
-            note->haas_i = 0;
-            memset(note->haas, 0, sizeof note->haas);
-            note->low = 0;
-            note->band = 0;
-            note->freq = glide > 1e-4f && remembered > 1.0f ? remembered : target;
-        }
+        attack_fields(note);
+        if (!prior) hard_attack(engine, note, note_num, lane, glide);
     }
     paint_note(note, note_num, velocity, samples, params, lane, loop);
     if (legato) {
@@ -218,6 +226,24 @@ Note *arm_note(Engine *engine, int note_num, int velocity, int ticks, const char
         note->age = 0;
     }
     if (glide <= 1e-4f) note->freq = note->target;
+    note->claim = serial;
+    stamp_note(engine, note);
+    return note;
+}
+
+/* A grid rebuild starts a pitch that is not already sounding. The caller picks
+ * the voice, so a held note on another lane is never reset. */
+Note *arm_fresh(Engine *engine, Note *note, int note_num, int velocity, int ticks, const char *params, int lane, int loop) {
+    float tempo = engine->tempo > 1.0f ? engine->tempo : 120.0f;
+    int samples = (int)((ticks * SR * 60.0f) / (tempo * 192.0f));
+    int serial;
+    if (!note) return NULL;
+    if (samples < 1) samples = 1;
+    serial = begin_arm(engine);
+    attack_fields(note);
+    hard_attack(engine, note, note_num, lane, 0.0f);
+    paint_note(note, note_num, velocity, samples, params, lane, loop);
+    note->freq = note->target;
     note->claim = serial;
     stamp_note(engine, note);
     return note;
@@ -261,34 +287,34 @@ void note_sample(Engine *engine, Note *note, float *left, float *right) {
     inc = (TWO_PI * note->freq) / SR;
     open = note->wide > 1e-4f;
     ensure_wave_table();
-    if (open) {
+    if (!open) {
+        /* Center voice only. Weight is 1, so the unison norm and the detune pow drop out. */
+        mid = shape_note(advance_osc(note, 1, inc, note->sync, note->bend, note->wave), note->fold, note->drive);
+    } else {
         indexes[0] = 0;
         indexes[1] = 1;
         indexes[2] = 2;
         count = 3;
-    } else {
-        indexes[0] = 1;
-        count = 1;
+        for (i = 0; i < count; i++) {
+            float weight = unison_weight(note->wide, indexes[i]);
+            power += weight * weight;
+        }
+        norm = 1.0f / sqrtf(power);
+        for (i = 0; i < count; i++) {
+            int index = indexes[i];
+            float weight = unison_weight(note->wide, index);
+            float cents = unison_cents(note->wide, index);
+            float ratio = cents == 0.0f ? 1.0f : powf(2.0f, cents / 1200.0f);
+            float shaped = shape_note(advance_osc(note, index, inc * ratio, note->sync, note->bend, note->wave), note->fold, note->drive);
+            float scaled = shaped * weight;
+            mid += scaled;
+            side += scaled * unison_pan(note->wide, index);
+        }
+        mid *= norm;
+        side *= norm;
     }
-    for (i = 0; i < count; i++) {
-        float weight = unison_weight(note->wide, indexes[i]);
-        power += weight * weight;
-    }
-    norm = 1.0f / sqrtf(power);
-    for (i = 0; i < count; i++) {
-        int index = indexes[i];
-        float weight = unison_weight(note->wide, index);
-        float cents = unison_cents(note->wide, index);
-        float ratio = cents == 0.0f ? 1.0f : powf(2.0f, cents / 1200.0f);
-        float shaped = shape_note(advance_osc(note, index, inc * ratio, note->sync, note->bend, note->wave), note->fold, note->drive);
-        float scaled = shaped * weight;
-        mid += scaled;
-        side += scaled * unison_pan(note->wide, index);
-    }
-    mid *= norm;
-    side *= norm;
     note->filter_env = melody_contour((float)note->age, (float)note->gate, note->attack, note->legato, note->from_contour);
-    resonated = filter_sample(&note->low, &note->band, mid, melody_cutoff(note->cutoff, note->env_amt, note->filter_env), note->resonance);
+    resonated = filter_sample(&note->low, &note->band, &note->coef, mid, melody_cutoff(note->cutoff, note->env_amt, note->filter_env), note->resonance);
     level = melody_level((float)note->age, (float)note->gate, note->attack, note->sustain, melody_release_seconds(note->release), note->legato, note->from_amp);
     note->env = level;
     note->age += 1;

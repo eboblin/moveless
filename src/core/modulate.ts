@@ -46,6 +46,15 @@ export function evalModulated(m: Modulated, step: number): number {
 }
 
 /**
+ * Level baked into a note. A drawn pattern is read at the step.
+ * A voice pattern stays at the centre: the voice ducks from the lane that already played.
+ */
+export function velocityLevel(m: Modulated, step: number): number {
+  if (m.pattern < 0) return clamp01(m.value);
+  return evalModulated(m, step);
+}
+
+/**
  * Live voice modulator. Amount is three times the envelope, then clamped:
  * past full scale more of the curve sits at 1. The screen draws this same number.
  */

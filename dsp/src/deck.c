@@ -1127,8 +1127,8 @@ float deck_drive(float input, float drive) {
 
 void deck_tone_color(Engine *engine, float *l, float *r) {
     float *t = engine->deck_tone;
-    *l = deck_drive(filter_sample(&engine->tone_flt_l[0], &engine->tone_flt_l[1],
+    *l = deck_drive(filter_sample(&engine->tone_flt_l[0], &engine->tone_flt_l[1], &engine->tone_cache_l,
         deck_isolate(engine->tone_lo_l, engine->tone_hi_l, *l, t[3], t[4], t[5]), t[0], t[1]), t[2]);
-    *r = deck_drive(filter_sample(&engine->tone_flt_r[0], &engine->tone_flt_r[1],
+    *r = deck_drive(filter_sample(&engine->tone_flt_r[0], &engine->tone_flt_r[1], &engine->tone_cache_r,
         deck_isolate(engine->tone_lo_r, engine->tone_hi_r, *r, t[3], t[4], t[5]), t[0], t[1]), t[2]);
 }

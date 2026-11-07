@@ -14,7 +14,7 @@ import { mixFieldValues } from "./fields.ts";
 import { hash01 } from "./hash.ts";
 import { applyFollowMidi, chordTonePitchClasses, degreeToMidi, generateHarmony, harmonyAt, pitchClassName, scaleOf } from "./harmony.ts";
 import { latchStamp } from "./latch.ts";
-import { bipolarFromUnit, evalModulated, hearVoices, soundMacro, voiceLane, withMacro } from "./modulate.ts";
+import { bipolarFromUnit, evalModulated, hearVoices, soundMacro, velocityLevel, voiceLane, withMacro } from "./modulate.ts";
 import { laneHeard } from "./journal.ts";
 import { macroOffset } from "./pages.ts";
 import { envelopeTable, readEnvelope, type EnvelopeTable } from "../dsp/envelope.ts";
@@ -380,13 +380,9 @@ function takeLane(
     take(box.ratchet.rate);
     take(box.ratchet.fade);
     take(box.ratchet.tone);
-    take(box.gen1.velocity);
-    take(box.gen2.velocity);
   }
   if (isPitched(id)) {
     const box = lane as PitchedLane;
-    take(box.gen1.velocity);
-    take(box.gen2.velocity);
     take(box.pitch);
     take(box.octave);
     take(box.length);
@@ -395,7 +391,6 @@ function takeLane(
   }
   if (id === "chords") {
     const box = lane as ChordLane;
-    take(box.gen1.velocity);
     take(box.tone);
     take(box.octave);
     take(box.spread);
@@ -403,7 +398,6 @@ function takeLane(
     take(box.rate);
     take(box.gate);
     take(box.size);
-    take(box.velocity);
     take(box.probability);
   }
 }
@@ -841,7 +835,7 @@ function placeSlice(
       sample,
       sampleOffset: sampleOffset(sample),
       note,
-      velocity: evalModulated(withMacro(lane.velocity, macro(macros, "velocity")), tick / SIXTEENTH_TICKS),
+      velocity: velocityLevel(withMacro(lane.velocity, macro(macros, "velocity")), tick / SIXTEENTH_TICKS),
       lengthTicks,
       step: Math.floor(tick / SIXTEENTH_TICKS),
       sound: rendered,

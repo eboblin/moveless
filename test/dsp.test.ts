@@ -3,12 +3,12 @@ import { describe, it } from "node:test";
 import { clamp01, SAMPLE_RATE, SIXTEENTH_TICKS, tickToSample } from "../src/core/clock.ts";
 import { assembleDeck, defaultDeck } from "../src/core/deck.ts";
 import { defaultProject } from "../src/core/defaults.ts";
-import { evalModulated } from "../src/core/modulate.ts";
+import { evalModulated, modulated } from "../src/core/modulate.ts";
 import { applyMorph, handoffGain, morphHandoffs } from "../src/core/morph.ts";
 import { clone } from "../src/core/clone.ts";
 import { launchScene, record } from "../src/core/performance.ts";
 import { mapFilter, mapKick, mapSend, mapSound } from "../src/dsp/map.ts";
-import { eventsInBlock, phraseLoop, soundMotions } from "../src/dsp/schedule.ts";
+import { eventsInBlock, formatDucks, laneDucks, phraseLoop, soundMotions } from "../src/dsp/schedule.ts";
 import { envelopeTable, laneEnvelopeAt, melodyContour, melodyLevel, readEnvelope } from "../src/dsp/envelope.ts";
 import { applyDeckCommand, applyDeckTone, createEngine, filterSample, formatBus, glideSeconds, loadPhrase, melodyCutoff, meterPage, packBlock, packPhrase, packPhraseBody, parseMeterPage, placeClock, renderBlock, renderClock, renderDryBlock } from "../src/dsp/voice.ts";
 import type { BlockEvent } from "../src/dsp/schedule.ts";
@@ -507,6 +507,30 @@ describe("dsp adapter", () => {
     renderClock(engine);
     loadPhrase(engine, engine.phrase, tempo, false);
     assert.equal(held.age, age + 128);
+  });
+
+  it("keeps another lane's oscillator when the grid changes under the playhead", () => {
+    const tempo = 120;
+    const loop = tickToSample(16 * SIXTEENTH_TICKS, tempo) * 4;
+    const long = 16 * SIXTEENTH_TICKS * 4;
+    const tone = (lane: "bass" | "lead", note: number) => ({
+      sample: 0, loop, lane, note, velocity: 100, lengthTicks: long, params: [],
+    });
+    const engine = createEngine();
+    loadPhrase(engine, [tone("bass", 40), tone("lead", 64)], tempo, true);
+    renderClock(engine, 2048);
+    const lead = engine.notes.find((note) => note.on && note.pitch === 64);
+    assert.ok(lead);
+    const phase = lead.phase[1];
+    const age = lead.age;
+    assert.ok(age > 1000);
+    loadPhrase(engine, [tone("bass", 41), tone("lead", 64)], tempo, false);
+    assert.equal(lead.pitch, 64);
+    assert.equal(lead.phase[1], phase);
+    assert.equal(lead.age, age);
+    assert.ok(lead.left > 0);
+    assert.ok(engine.notes.some((note) => note.on && note.pitch === 41));
+    assert.equal(engine.notes.some((note) => note.on && note.pitch === 40 && note.left > 0), false);
   });
 
   it("keeps default bass audible through a slow attack", () => {
@@ -1151,6 +1175,102 @@ describe("dsp adapter", () => {
   it("packs the bus after the fx trailer", () => {
     const packed = packPhraseBody([], [], "1.0000", formatBus({ glue: 0, pump: 1, wide: 0.5, tilt: -0.25 }));
     assert.equal(packed, "@1.0000^0.0000,1.0000,0.5000,-0.2500");
+  });
+
+  it("packs a voice velocity after the gain trailer", () => {
+    const packed = packPhraseBody([], [], "", "", "", formatDucks([{ lane: 4, source: 0, value: 0.8, amount: -0.5 }]));
+    assert.equal(packed, "*4,0,0.8000,-0.5000");
+  });
+
+  it("collects a voice velocity and skips a drawn one", () => {
+    const project = defaultProject();
+    project.working.bass.gen1.velocity = modulated(0.8, -1, 4, -0.5);
+    project.working.bass.gen2.velocity = modulated(0.3, 2, 8, 0.4);
+    project.working.chords.velocity = modulated(0.6, -2, 4, 0.25);
+    const taps = laneDucks(project);
+    assert.deepEqual(taps, [
+      { lane: 4, source: 0, value: 0.8, amount: -0.5 },
+      { lane: 6, source: 1, value: 0.6, amount: 0.25 },
+    ]);
+  });
+
+  it("ducks a held note from the kick that already sounded, then lets it back", () => {
+    const tempo = 120;
+    const loop = tickToSample(SIXTEENTH_TICKS * 16, tempo);
+    const kick = {
+      sample: 0,
+      loop,
+      lane: "kick" as const,
+      note: 36,
+      velocity: 127,
+      lengthTicks: 48,
+      params: mapSound("kick", { decay: 0 }),
+    };
+    const bass = {
+      sample: 0,
+      loop,
+      lane: "bass" as const,
+      note: 40,
+      velocity: 110,
+      lengthTicks: 16 * 48,
+      params: mapSound("bass", { attack: 0, release: 0.2, sustain: 1 }),
+    };
+    const open = createEngine();
+    const ducked = createEngine();
+    loadPhrase(open, [kick, bass], tempo, true);
+    loadPhrase(ducked, [kick, bass], tempo, true, [], [], [{ lane: 4, source: 0, value: 1, amount: -1 }]);
+    const dry = renderClock(open, SAMPLE_RATE);
+    const wet = renderClock(ducked, SAMPLE_RATE);
+    const during = diffEnergy(dry, wet, 400, 1200);
+    const after = diffEnergy(dry, wet, 8000, 12000);
+    assert.ok(during > after * 20);
+    assert.ok(energy(wet, 400, 1200) < energy(dry, 400, 1200));
+  });
+
+  it("follows a ducked lane, so a note behind the bass does not hear the kick", () => {
+    const tempo = 120;
+    const loop = tickToSample(SIXTEENTH_TICKS * 16, tempo);
+    const kick = {
+      sample: 0,
+      loop,
+      lane: "kick" as const,
+      note: 36,
+      velocity: 127,
+      lengthTicks: 48,
+      params: mapSound("kick", { decay: 0 }),
+    };
+    const bass = {
+      sample: 0,
+      loop,
+      lane: "bass" as const,
+      note: 40,
+      velocity: 110,
+      lengthTicks: 16 * 48,
+      params: mapSound("bass", { attack: 0, release: 0.2, sustain: 1 }),
+    };
+    const lead = {
+      sample: 0,
+      loop,
+      lane: "lead" as const,
+      note: 64,
+      velocity: 100,
+      lengthTicks: 16 * 48,
+      params: mapSound("lead", { attack: 0, release: 0.2, sustain: 1 }),
+    };
+    const fromKick = createEngine();
+    const fromBass = createEngine();
+    loadPhrase(fromKick, [kick, bass, lead], tempo, true, [], [], [
+      { lane: 4, source: 0, value: 1, amount: -1 },
+      { lane: 5, source: 0, value: 1, amount: -1 },
+    ]);
+    loadPhrase(fromBass, [kick, bass, lead], tempo, true, [], [], [
+      { lane: 4, source: 0, value: 1, amount: -1 },
+      { lane: 5, source: 4, value: 1, amount: -1 },
+    ]);
+    const kicked = renderClock(fromKick, SAMPLE_RATE);
+    const chained = renderClock(fromBass, SAMPLE_RATE);
+    assert.ok(energy(chained, 400, 1200) > energy(kicked, 400, 1200));
+    assert.ok(energy(kicked, 8000, 14000) > energy(chained, 8000, 14000) * 1.5);
   });
 
   it("ducks bass on a kick and lets it back across an eighth", () => {

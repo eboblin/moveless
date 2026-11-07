@@ -1,5 +1,5 @@
-import { FRAMES_PER_BLOCK, SIXTEENTH_TICKS, tickToSample } from "../core/clock.ts";
-import { soundMacro, withMacro } from "../core/modulate.ts";
+import { FRAMES_PER_BLOCK, clamp01, SIXTEENTH_TICKS, tickToSample } from "../core/clock.ts";
+import { soundMacro, voiceLane, withMacro } from "../core/modulate.ts";
 import { generatePhrase } from "../core/phrase.ts";
 import { laneHeard } from "../core/journal.ts";
 import { LANES, type LaneId, type LaneSend, type Modulated, type Phrase, type Project } from "../core/types.ts";
@@ -135,4 +135,41 @@ export function eventsInBlock(project: Project, tick: number): BlockEvent[] {
     }
   }
   return out;
+}
+
+/** One voice pattern on a lane's volume. The engine multiplies by what that lane has already played. */
+export interface DuckTap {
+  lane: number;
+  source: number;
+  value: number;
+  amount: number;
+}
+
+/** Voice patterns on velocity. A drawn pattern stays in the note. Chords use their own velocity, not the generator's. */
+export function laneDucks(project: Project): DuckTap[] {
+  const out: DuckTap[] = [];
+  for (const id of LANES) {
+    const macros = project.lock[id] ? {} : project.macros;
+    const offset = soundMacro("velocity", macros);
+    const knobs = id === "chords"
+      ? [project.working.chords.velocity]
+      : [project.working[id].gen1.velocity, project.working[id].gen2.velocity];
+    for (const knob of knobs) {
+      const heard = withMacro(knob, offset);
+      const source = voiceLane(heard.pattern);
+      if (!source || heard.amount === 0) continue;
+      out.push({
+        lane: LANES.indexOf(id),
+        source: LANES.indexOf(source),
+        value: clamp01(heard.value),
+        amount: heard.amount,
+      });
+    }
+  }
+  return out;
+}
+
+export function formatDucks(ducks: readonly DuckTap[]): string {
+  if (!ducks.length) return "";
+  return ducks.map((duck) => `${duck.lane},${duck.source},${duck.value.toFixed(4)},${duck.amount.toFixed(4)}`).join(";");
 }

@@ -82,11 +82,12 @@ export function melodyAttackSamples(gate: number, attack: number): number {
 }
 
 /** 1 at u = 0, 0 at u = 1. The drop is steep at the start. */
+const MELODY_W1 = Math.exp(-MELODY_FALL);
+
 function melodyFall(from: number, to: number, u: number): number {
   const t = u < 0 ? 0 : u > 1 ? 1 : u;
   const w = Math.exp(-MELODY_FALL * t);
-  const w1 = Math.exp(-MELODY_FALL);
-  return to + (from - to) * ((w - w1) / (1 - w1));
+  return to + (from - to) * ((w - MELODY_W1) / (1 - MELODY_W1));
 }
 
 /**
@@ -256,19 +257,94 @@ export function envelopeTable(events: readonly EnvelopeHit[], lane: LaneId, temp
   const values = new Float32Array(n);
   for (const event of events) {
     if (event.lane !== lane) continue;
-    const shape = shapeOf(event, tempo);
     const origin = ((event.sample % loop) + loop) % loop;
-    const horizon = shapeHorizon(shape, loop);
-    for (let age = 0; age <= horizon; age += step) {
-      const level = shapeLevel(shape, age);
-      if (age > 0 && level <= 0) break;
-      const bin = Math.floor(((origin + age) % loop) / step);
-      if (bin < 0 || bin >= n) continue;
-      const prev = values[bin] ?? 0;
-      if (level > prev) values[bin] = level;
-    }
+    paintShape(values, n, loop, step, origin, shapeOf(event, tempo));
   }
   return { loop, hop: step, values };
+}
+
+/** Loudest level into one hop. A silent sample does not pull the bin down. */
+function depositEnv(values: Float32Array, n: number, loop: number, step: number, origin: number, age: number, level: number): void {
+  if (!(level > 0)) return;
+  const bin = Math.floor((((origin + age) % loop) + loop) % loop / step);
+  if (bin < 0 || bin >= n) return;
+  const prev = values[bin] ?? 0;
+  if (level > prev) values[bin] = level;
+}
+
+/**
+ * One exp per decay, then a multiply per hop. Same curve as walking `shapeLevel`,
+ * without an exp on every hop of a long tail.
+ */
+function paintShape(values: Float32Array, n: number, loop: number, step: number, origin: number, shape: EnvelopeShape): void {
+  const horizon = shapeHorizon(shape, loop);
+  const hop = Math.max(1, step);
+  if (shape.kind !== 2) {
+    const seconds = shape.kind === 1 ? [shape.a, shape.b, shape.c] : [shape.a];
+    const level = seconds.map((sec) => {
+      if (!(shape.amp > 0) || !(sec > 0)) return null;
+      const tau = Math.max(1, sec * SAMPLE_RATE);
+      return { value: shape.amp, k: Math.exp(-hop / tau), floor: shape.amp * FLOOR };
+    });
+    for (let age = 0; age <= horizon; age += hop) {
+      let best = 0;
+      for (const cursor of level) {
+        if (!cursor) continue;
+        const v = cursor.value;
+        cursor.value *= cursor.k;
+        if (v >= cursor.floor && v > best) best = v;
+      }
+      if (age > 0 && best <= 0) break;
+      depositEnv(values, n, loop, hop, origin, age, best);
+    }
+    return;
+  }
+  const span = Math.max(1, shape.hold);
+  const sus = clamp01(shape.a);
+  const rise = melodyAttackSamples(span, shape.attack);
+  const room = Math.max(1, span - rise);
+  const fallK = Math.exp((-MELODY_FALL * hop) / room);
+  const den = 1 - MELODY_W1;
+  let w = 0;
+  let fallOn = false;
+  const end = rise >= span ? 1 : sus;
+  const tau = Math.max(1, shape.release * SAMPLE_RATE);
+  const relK = Math.exp(-hop / tau);
+  const relFloor = end * FLOOR;
+  let rel = 0;
+  let relOn = false;
+  for (let age = 0; age <= horizon; age += hop) {
+    let unit = 0;
+    if (age < span) {
+      if (age < rise) {
+        const up = (age + 1) / rise;
+        unit = up > 1 ? 1 : up;
+      } else if (!fallOn) {
+        let u = (age - rise + 1) / room;
+        if (u < 0) u = 0;
+        if (u > 1) u = 1;
+        w = Math.exp(-MELODY_FALL * u);
+        fallOn = true;
+        unit = sus + (1 - sus) * ((w - MELODY_W1) / den);
+      } else {
+        w *= fallK;
+        if (w < MELODY_W1) w = MELODY_W1;
+        unit = sus + (1 - sus) * ((w - MELODY_W1) / den);
+      }
+    } else if (!relOn) {
+      rel = end * Math.exp(-(age - span + 1) / tau);
+      relOn = true;
+      if (rel < relFloor) break;
+      unit = rel;
+    } else {
+      rel *= relK;
+      if (rel < relFloor) break;
+      unit = rel;
+    }
+    const heard = shape.amp * unit;
+    if (age > 0 && heard <= 0) break;
+    depositEnv(values, n, loop, hop, origin, age, heard);
+  }
 }
 
 /** Step-hold. A sample inside a hop keeps the level painted at the hop start. */

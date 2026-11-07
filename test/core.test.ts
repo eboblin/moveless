@@ -497,6 +497,20 @@ describe("euclid generator", () => {
     for (const event of kicks) assert.ok(event.sound.pitch > 0.35);
   });
 
+  it("keeps a voice-followed velocity at its centre", () => {
+    const project = bar(defaultProject());
+    project.working.kick.gen1 = { ...project.working.kick.gen1, length: 16, hits: 4, rotate: 0, probability: 1 };
+    project.working.kick.gen2.hits = 0;
+    project.working.bass.gen1 = { ...project.working.bass.gen1, length: 16, hits: 1, rotate: 0, probability: 1 };
+    project.working.bass.gen2.hits = 0;
+    project.working.bass.gen1.velocity = modulated(0.4, -1, 4, 1);
+    project.working.bass.filter.cutoff = modulated(0.2, -1, 4, 1);
+    const notes = generatePhrase(project).lanes.bass;
+    assert.equal(notes.length, 1);
+    assert.equal(notes[0]?.velocity, 0.4);
+    assert.ok((notes[0]?.filter.cutoff ?? 0) > 0.2);
+  });
+
   it("reads a voice envelope at the generator step", () => {
     const project = bar(defaultProject());
     project.working.kick.gen1.hits = 0;

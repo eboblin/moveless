@@ -86,6 +86,12 @@ enum {
     P_ENV
 };
 
+/* Coefficients of one filter. Reused while cutoff and resonance hold still. */
+typedef struct {
+    float cut, res, a1, a2, a3, k, trim;
+    int lp, on;
+} FltCache;
+
 typedef struct {
     int on;
     int lane;
@@ -95,6 +101,7 @@ typedef struct {
     float freq, decay, noise_decay, bend_time, bend;
     float body, noise, tone, click, drive, fm, ratio, ring, pos, damp;
     float cutoff, resonance, reverb, delay, nlp, nhp, flt, band;
+    FltCache coef;
     float env_k, noise_k, pitch_k, click_k, gain;
     int loop;
     float haas[HAAS_N];
@@ -106,6 +113,7 @@ typedef struct {
     float phase[3], slave[3], env, freq;
     float wave, bend, sync, fold, drive, wide;
     float cutoff, resonance, reverb, delay, attack, release, gain, low, band;
+    FltCache coef;
     float target, glide, sustain, env_amt, filter_env, from_amp, from_contour;
     int age, left, gate, lane, pitch, loop, claim, legato;
     float haas[HAAS_N];
@@ -219,6 +227,8 @@ typedef struct {
     float tone_hi_r[2];
     float tone_flt_l[2];
     float tone_flt_r[2];
+    FltCache tone_cache_l;
+    FltCache tone_cache_r;
     int deck_seed;
     float deck_bar;
     float *deck_peak_l;
@@ -228,6 +238,14 @@ typedef struct {
     float lane_freq[LANE_COUNT];
     int arm_serial;
     int arm_clock;
+    /* Voice pattern on velocity. Source -1 is off. Two taps cover both generators. */
+    int duck_source[7][2];
+    float duck_value[7][2];
+    float duck_amount[7][2];
+    int duck_n[7];
+    /* Peak of the lane before its own duck, and after the duck and the pump. */
+    float dry_env[7];
+    float wet_env[7];
     /* Linear followers for the mixer strips. Index 7 is the heard master. */
     float meter_level[METER_N];
     float meter_peak[METER_N];
@@ -351,8 +369,9 @@ int begin_arm(Engine *engine);
 Note *glide_voice(Engine *engine, int lane, int pitch, int serial);
 void paint_note(Note *note, int note_num, int velocity, int samples, const char *params, int lane, int loop);
 Note *arm_note(Engine *engine, int note_num, int velocity, int ticks, const char *params, int lane, int loop);
+Note *arm_fresh(Engine *engine, Note *note, int note_num, int velocity, int ticks, const char *params, int lane, int loop);
 float clip_peak(float x);
-float filter_sample(float *low, float *band, float input, float cutoff, float resonance);
+float filter_sample(float *low, float *band, FltCache *coef, float input, float cutoff, float resonance);
 float wrap_phase(float phase);
 Spectrum spec_row(const float *table, int index);
 Spectrum shelf_spec(const float *table, const float *centers, int n, float t);

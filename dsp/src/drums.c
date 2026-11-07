@@ -218,36 +218,59 @@ float clip_peak(float x) {
 /* 0.5 is dry. Below that a resonant high-pass, above it a resonant low-pass.
    Distance from center is squared. Resonance is the peak on that corner (Q up to 14). */
 
-float filter_sample(float *low, float *band, float input, float cutoff, float resonance) {
+float filter_sample(float *low, float *band, FltCache *coef, float input, float cutoff, float resonance) {
     float offset = cutoff - 0.5f;
     float amount = fabsf(offset) * 2.0f;
+    float shaped, hz, reso, q, g, k, a1, a2, a3, trim;
+    int lp;
+    float v3, v1, v2, raw;
     if (amount > 1.0f) amount = 1.0f;
     if (amount < 1e-4f) {
         *low = 0;
         *band = 0;
+        if (coef) coef->on = 0;
         return input;
     }
-    float shaped = amount * amount;
-    int lp = offset > 0.0f;
-    float hz = lp ? 12000.0f * powf(90.0f / 12000.0f, shaped) : 40.0f * powf(7000.0f / 40.0f, shaped);
-    float reso = resonance;
-    if (reso < 0.0f) reso = 0.0f;
-    if (reso > 1.0f) reso = 1.0f;
-    float q = 0.707f * powf(14.0f / 0.707f, reso);
-    float nyq = SR * 0.45f;
-    if (hz > nyq) hz = nyq;
-    float g = tanf((TWO_PI * 0.5f) * hz / SR);
-    float k = 1.0f / q;
-    float a1 = 1.0f / (1.0f + g * (g + k));
-    float a2 = g * a1;
-    float a3 = g * a2;
-    float v3 = input - *low;
-    float v1 = a1 * *band + a2 * v3;
-    float v2 = *low + a2 * *band + a3 * v3;
+    if (coef && coef->on && coef->cut == cutoff && coef->res == resonance) {
+        a1 = coef->a1;
+        a2 = coef->a2;
+        a3 = coef->a3;
+        k = coef->k;
+        trim = coef->trim;
+        lp = coef->lp;
+    } else {
+        shaped = amount * amount;
+        lp = offset > 0.0f;
+        hz = lp ? 12000.0f * powf(90.0f / 12000.0f, shaped) : 40.0f * powf(7000.0f / 40.0f, shaped);
+        reso = resonance;
+        if (reso < 0.0f) reso = 0.0f;
+        if (reso > 1.0f) reso = 1.0f;
+        q = 0.707f * powf(14.0f / 0.707f, reso);
+        if (hz > SR * 0.45f) hz = SR * 0.45f;
+        g = tanf((TWO_PI * 0.5f) * hz / SR);
+        k = 1.0f / q;
+        a1 = 1.0f / (1.0f + g * (g + k));
+        a2 = g * a1;
+        a3 = g * a2;
+        trim = lp ? 1.0f + shaped * 0.5f : 1.0f + shaped * 2.5f;
+        if (coef) {
+            coef->on = 1;
+            coef->cut = cutoff;
+            coef->res = resonance;
+            coef->a1 = a1;
+            coef->a2 = a2;
+            coef->a3 = a3;
+            coef->k = k;
+            coef->trim = trim;
+            coef->lp = lp;
+        }
+    }
+    v3 = input - *low;
+    v1 = a1 * *band + a2 * v3;
+    v2 = *low + a2 * *band + a3 * v3;
     *band = 2.0f * v1 - *band;
     *low = 2.0f * v2 - *low;
-    float raw = lp ? v2 : input - k * v1 - v2;
-    float trim = lp ? 1.0f + shaped * 0.5f : 1.0f + shaped * 2.5f;
+    raw = lp ? v2 : input - k * v1 - v2;
     return clip_peak(raw * trim);
 }
 
@@ -476,7 +499,7 @@ void drum_sample(Engine *engine, Drum *drum, float *left, float *right) {
         mid = shape_drive(mid, amount);
         side = shape_drive(side, amount);
     }
-    filtered = filter_sample(&drum->flt, &drum->band, mid, drum->cutoff, drum->resonance);
+    filtered = filter_sample(&drum->flt, &drum->band, &drum->coef, mid, drum->cutoff, drum->resonance);
     drum->env *= drum->env_k;
     drum->noise_env *= drum->noise_k;
     drum->pitch_env *= drum->pitch_k;

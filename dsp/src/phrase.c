@@ -61,6 +61,28 @@ void apply_handoff(Engine *engine, char *text) {
     }
 }
 
+static void apply_ducks(Engine *engine, char *text) {
+    for (int lane = 0; lane < 7; lane++) engine->duck_n[lane] = 0;
+    char *cursor = text;
+    while (cursor && *cursor) {
+        char *semi = strchr(cursor, ';');
+        if (semi) *semi = 0;
+        int lane = 0, source = 0;
+        float value = 0, amount = 0;
+        if (sscanf(cursor, "%d,%d,%f,%f", &lane, &source, &value, &amount) == 4
+            && lane >= 0 && lane < 7 && source >= 0 && source < 7) {
+            int n = engine->duck_n[lane];
+            if (n < 2) {
+                engine->duck_source[lane][n] = source;
+                engine->duck_value[lane][n] = value < 0.0f ? 0.0f : (value > 1.0f ? 1.0f : value);
+                engine->duck_amount[lane][n] = amount;
+                engine->duck_n[lane] = n + 1;
+            }
+        }
+        cursor = semi ? semi + 1 : NULL;
+    }
+}
+
 void ingest_phrase(Engine *engine) {
     char *text = engine->phrase_text;
     engine->phrase_pending = 0;
@@ -82,6 +104,8 @@ void ingest_phrase(Engine *engine) {
         if (engine->deck_peak_l) memset(engine->deck_peak_l, 0, (size_t)DECK_PEAKS * sizeof(float));
         if (engine->deck_peak_r) memset(engine->deck_peak_r, 0, (size_t)DECK_PEAKS * sizeof(float));
         fx_clear(engine);
+        memset(engine->dry_env, 0, sizeof engine->dry_env);
+        memset(engine->wet_env, 0, sizeof engine->wet_env);
     }
     engine->phrase_on = 1;
     engine->phrase_count = 0;
@@ -90,6 +114,13 @@ void ingest_phrase(Engine *engine) {
         engine->lanes[lane].still_count = 0;
     }
     char *cursor = body + 1;
+    char *ducks = strchr(cursor, '*');
+    if (ducks) {
+        *ducks = 0;
+        apply_ducks(engine, ducks + 1);
+    } else {
+        for (int lane = 0; lane < 7; lane++) engine->duck_n[lane] = 0;
+    }
     char *hand = strchr(cursor, '~');
     if (hand) {
         *hand = 0;
@@ -174,20 +205,96 @@ unsigned phrase_timing_sig(const Engine *engine) {
     return h;
 }
 
+static int kept_has(Note **kept, int n, const Note *note) {
+    for (int i = 0; i < n; i++) if (kept[i] == note) return 1;
+    return 0;
+}
+
+/* A voice already inside this pitch. Re-arming it would zero the phase. */
+static Note *same_pitch(Engine *engine, int lane, int pitch, Note **kept, int kept_n) {
+    for (int i = 0; i < NOTES; i++) {
+        Note *note = &engine->notes[i];
+        if (!note->on || note->lane != lane || note->pitch != pitch || note->left <= 0 || note->age <= 0) continue;
+        if (kept_has(kept, kept_n, note)) continue;
+        return note;
+    }
+    return NULL;
+}
+
+/* Old pitch on this lane, else a free voice, else a voice that is already
+ * releasing. A held note on another lane stays where it is. */
+static Note *take_slot(Engine *engine, int lane, Note **kept, int kept_n) {
+    Note *free_voice = NULL;
+    Note *same = NULL;
+    Note *quiet = NULL;
+    for (int i = 0; i < NOTES; i++) {
+        Note *note = &engine->notes[i];
+        if (kept_has(kept, kept_n, note)) continue;
+        if (!note->on) {
+            if (!free_voice) free_voice = note;
+            continue;
+        }
+        if (note->age == 0) continue;
+        if (note->lane == lane && note->left > 0) {
+            if (!same || note->age > same->age) same = note;
+        } else if (note->left <= 0) {
+            if (!quiet || note_amp(note) < note_amp(quiet)) quiet = note;
+        }
+    }
+    if (same) return same;
+    if (free_voice) return free_voice;
+    return quiet;
+}
+
 void catch_holding(Engine *engine) {
     float tempo = engine->tempo > 1.0f ? engine->tempo : 120.0f;
+    Note *kept[NOTES];
+    int kept_n = 0;
+    int fresh_at[32];
+    int fresh_left[32];
+    int fresh_n = 0;
+    int serial;
     for (int e = 0; e < engine->phrase_count; e++) {
         PhraseEv *hit = &engine->phrase[e];
+        int loop, pos, start, dur, elapsed;
+        Note *have;
         if (hit->lane < DRUMS) continue;
-        int loop = hit->loop > 0 ? hit->loop : 1;
-        int pos = engine->clock % loop;
-        int start = hit->sample % loop;
-        int dur = (int)((hit->ticks * SR * 60.0f) / (tempo * 192.0f));
+        loop = hit->loop > 0 ? hit->loop : 1;
+        pos = engine->clock % loop;
+        start = hit->sample % loop;
+        dur = (int)((hit->ticks * SR * 60.0f) / (tempo * 192.0f));
         if (dur < 1) dur = 1;
-        int elapsed = pos - start;
+        elapsed = pos - start;
         if (elapsed < 0) elapsed += loop;
         if (elapsed <= 0 || elapsed >= dur) continue;
-        Note *note = arm_note(engine, hit->note, hit->velocity, hit->ticks, hit->params, hit->lane, loop);
-        note->left = dur - elapsed;
+        have = same_pitch(engine, hit->lane, hit->note, kept, kept_n);
+        if (have) {
+            if (kept_n < NOTES) kept[kept_n++] = have;
+            continue;
+        }
+        if (fresh_n < 32) {
+            fresh_at[fresh_n] = e;
+            fresh_left[fresh_n] = dur - elapsed;
+            fresh_n++;
+        }
+    }
+    serial = begin_arm(engine);
+    for (int k = 0; k < kept_n; k++) kept[k]->claim = serial;
+    for (int n = 0; n < fresh_n; n++) {
+        PhraseEv *hit = &engine->phrase[fresh_at[n]];
+        int loop = hit->loop > 0 ? hit->loop : 1;
+        float glide = read_param(hit->params, "glide", 0.0f);
+        Note *prior = glide > 1e-4f ? glide_voice(engine, hit->lane, hit->note, serial) : NULL;
+        Note *note = NULL;
+        if (prior && prior->left > 0 && !kept_has(kept, kept_n, prior))
+            note = arm_note(engine, hit->note, hit->velocity, hit->ticks, hit->params, hit->lane, loop);
+        else {
+            Note *slot = take_slot(engine, hit->lane, kept, kept_n);
+            if (!slot) continue;
+            note = arm_fresh(engine, slot, hit->note, hit->velocity, hit->ticks, hit->params, hit->lane, loop);
+        }
+        if (!note) continue;
+        note->left = fresh_left[n];
+        if (kept_n < NOTES) kept[kept_n++] = note;
     }
 }

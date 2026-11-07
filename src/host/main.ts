@@ -5,7 +5,7 @@ import { advance, clampJournalPage, heardFx, journalPageCount, sameHeard, wander
 import { morphHandoffs } from "../core/morph.ts";
 import { generatePhrase } from "../core/phrase.ts";
 import { loadStoredProject, saveStoredProject, type HostFiles, type StoredUi } from "../core/persist.ts";
-import { phraseLoop, soundMotions } from "../dsp/schedule.ts";
+import { formatDucks, laneDucks, phraseLoop, soundMotions } from "../dsp/schedule.ts";
 import { formatFx } from "../dsp/fx.ts";
 import { assembleDeck, behaviorOf, formatDeckCommand, isDeckGroup } from "../core/deck.ts";
 import { formatBus, formatGainSpans, packPhraseBody, parseMeterPage } from "../dsp/voice.ts";
@@ -197,6 +197,7 @@ function syncVoice(reset: boolean): void {
       formatFx(heardFx(session.project), session.project.global.bar),
       formatBus(session.project.bus),
       gains,
+      formatDucks(laneDucks(session.project)),
     );
     sent.gain = gains;
     phraseProject = session.project;

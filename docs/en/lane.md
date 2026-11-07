@@ -28,7 +28,7 @@ Almost every lane parameter is set by four encoders in a row: **v**alue, **p**at
 
 Touch any of the four, and the envelope is drawn over the notes on the loop picture, scaled to the loop. The start of each cycle is marked by two pixels along the top. That way you can see where the hits land.
 
-The envelope is read at the moment of the event: a note takes its pitch, volume, and length on its own step. But the sound parameters (timbre, filter, sends) the voice reads the whole time the note is sounding, so they drift inside the note.
+The envelope is read at the moment of the event: a note takes its pitch, volume, and length on its own step. When volume listens to a lane, the picture still draws that shape ahead of time, and the voice follows what that lane has already played. The sound parameters (timbre, filter, sends) the voice reads the whole time the note is sounding, so they drift inside the note.
 
 ## Euclid
 

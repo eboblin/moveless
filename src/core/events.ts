@@ -1,6 +1,6 @@
 import { clamp01 } from "./clock.ts";
 import { hash01 } from "./hash.ts";
-import { evalModulated, withMacro } from "./modulate.ts";
+import { velocityLevel, withMacro } from "./modulate.ts";
 import type { EuclidGen, LaneId } from "./types.ts";
 
 export interface Hit {
@@ -65,7 +65,7 @@ export function generateHits(gen1: EuclidGen, gen2: EuclidGen, steps: number): H
 /**
  * Probability is the last gate: each ratchet and each repeat rolls on its own,
  * keyed by the source step. The velocity curve is read after count/rate,
- * at the step the note was actually placed.
+ * at the step the note was actually placed. A voice pattern contributes its centre.
  */
 export function keptVelocity(
   gen1: EuclidGen,
@@ -87,7 +87,7 @@ export function keptVelocity(
     if (probability <= 0) continue;
     if (probability < 1 && hash01(seed, lane, which, "prob", step, index) >= probability) continue;
     any = true;
-    velocity = Math.max(velocity, evalModulated(withMacro(gen.velocity, velocityMacro), at));
+    velocity = Math.max(velocity, velocityLevel(withMacro(gen.velocity, velocityMacro), at));
   }
   return any ? velocity : null;
 }

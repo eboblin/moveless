@@ -142,9 +142,11 @@ float melody_attack_samples(float gate, float attack) {
 /* 1 at u = 0, 0 at u = 1. The drop is steep at the start. */
 
 float melody_fall(float from, float to, float u) {
+    static float w1 = 0.0f;
     float t = u < 0.0f ? 0.0f : (u > 1.0f ? 1.0f : u);
-    float w = expf(-MELODY_FALL * t);
-    float w1 = expf(-MELODY_FALL);
+    float w;
+    if (w1 == 0.0f) w1 = expf(-MELODY_FALL);
+    w = expf(-MELODY_FALL * t);
     return to + (from - to) * ((w - w1) / (1.0f - w1));
 }
 
@@ -310,6 +312,114 @@ unsigned envelope_stamp(const Engine *engine) {
     return h;
 }
 
+static void deposit_env(float *bins, int n, int loop, int hop, int origin, int age, float level) {
+    int phase, bin;
+    if (!(level > 0.0f)) return;
+    phase = origin + age;
+    if (loop > 0) phase %= loop;
+    if (phase < 0) phase += loop;
+    bin = hop > 0 ? phase / hop : 0;
+    if (bin >= 0 && bin < n && level > bins[bin]) bins[bin] = level;
+}
+
+/* One exp per decay, then a multiply per hop. The closed form is amp·e^(−age/τ). */
+
+static void paint_shape(float *bins, int n, int loop, int hop, int origin, const EnvShape *s) {
+    int horizon = shape_horizon(s, loop);
+    int age;
+    if (hop < 1) hop = 1;
+    if (s->kind != 2) {
+        double amp = s->amp;
+        double sec[3];
+        double level[3], coef[3], floor_at[3];
+        int live[3];
+        int count = s->kind == 1 ? 3 : 1;
+        int i;
+        sec[0] = s->a;
+        sec[1] = s->b;
+        sec[2] = s->c;
+        for (i = 0; i < count; i++) {
+            double tau;
+            live[i] = amp > 0.0 && sec[i] > 0.0;
+            level[i] = 0.0;
+            coef[i] = 1.0;
+            floor_at[i] = 0.0;
+            if (!live[i]) continue;
+            tau = sec[i] * (double)SR;
+            if (tau < 1.0) tau = 1.0;
+            level[i] = amp;
+            coef[i] = exp(-(double)hop / tau);
+            floor_at[i] = amp * 0.02;
+        }
+        for (age = 0; age <= horizon; age += hop) {
+            double best = 0.0;
+            for (i = 0; i < count; i++) {
+                double v;
+                if (!live[i]) continue;
+                v = level[i];
+                level[i] *= coef[i];
+                if (v < floor_at[i]) v = 0.0;
+                if (v > best) best = v;
+            }
+            if (age > 0 && best <= 0.0) break;
+            deposit_env(bins, n, loop, hop, origin, age, (float)best);
+        }
+        return;
+    }
+    {
+        double span = s->hold < 1.0f ? 1.0 : (double)s->hold;
+        double sus = s->a < 0.0f ? 0.0 : (s->a > 1.0f ? 1.0 : (double)s->a);
+        double rise = melody_attack_samples((float)span, s->attack);
+        double start = rise;
+        double room = span - start;
+        double w1, den, fall_k, w = 0.0, rel = 0.0, rel_k, rel_floor, end, tau, amp;
+        int fall_on = 0, rel_on = 0;
+        if (room < 1.0) room = 1.0;
+        w1 = exp(-(double)MELODY_FALL);
+        den = 1.0 - w1;
+        fall_k = exp(-(double)MELODY_FALL * (double)hop / room);
+        end = rise >= span ? 1.0 : sus;
+        tau = s->release * (double)SR;
+        if (tau < 1.0) tau = 1.0;
+        rel_k = exp(-(double)hop / tau);
+        rel_floor = end * 0.02;
+        amp = s->amp;
+        for (age = 0; age <= horizon; age += hop) {
+            double unit = 0.0;
+            float level;
+            if ((double)age < span) {
+                if ((double)age < rise) {
+                    double up = ((double)age + 1.0) / rise;
+                    unit = up > 1.0 ? 1.0 : up;
+                } else {
+                    double u;
+                    if (!fall_on) {
+                        u = ((double)age - start + 1.0) / room;
+                        if (u < 0.0) u = 0.0;
+                        if (u > 1.0) u = 1.0;
+                        w = exp(-(double)MELODY_FALL * u);
+                        fall_on = 1;
+                    } else {
+                        w *= fall_k;
+                        if (w < w1) w = w1;
+                    }
+                    unit = sus + (1.0 - sus) * ((w - w1) / den);
+                }
+            } else {
+                if (!rel_on) {
+                    rel = end * exp(-((double)age - span + 1.0) / tau);
+                    rel_on = 1;
+                } else rel *= rel_k;
+                if (rel < rel_floor) break;
+                unit = rel;
+            }
+            level = (float)(amp * unit);
+            if (age > 0 && level <= 0.0f) break;
+            deposit_env(bins, n, loop, hop, origin, age, level);
+        }
+    }
+}
+
 /** Paint each referenced lane once. A per-sample scan of the phrase overran the block. */
 
 void bake_envelopes(Engine *engine) {
@@ -353,23 +463,12 @@ void bake_envelopes(Engine *engine) {
         for (e = 0; e < engine->phrase_count; e++) {
             PhraseEv *hit = &engine->phrase[e];
             EnvShape shape;
-            int origin, horizon, age;
+            int origin;
             if (hit->lane != lane) continue;
             shape_of(hit, tempo, &shape);
             origin = hit->sample % loop;
             if (origin < 0) origin += loop;
-            horizon = shape_horizon(&shape, loop);
-            for (age = 0; age <= horizon; age += hop) {
-                float level = shape_level(&shape, (float)age);
-                int phase, bin;
-                if (age > 0 && level <= 0.0f) break;
-                phase = origin + age;
-                if (loop > 0) phase %= loop;
-                if (phase < 0) phase += loop;
-                bin = phase / hop;
-                if (bin >= 0 && bin < n && level > engine->env[lane][bin])
-                    engine->env[lane][bin] = level;
-            }
+            paint_shape(engine->env[lane], n, loop, hop, origin, &shape);
         }
     }
     engine->env_stamp = stamp;
