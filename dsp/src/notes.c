@@ -60,7 +60,8 @@ float advance_osc(Note *note, int index, float inc, float sync, float bend, floa
         u = *phase / TWO_PI;
         read_freq = (inc * SR) / TWO_PI;
     }
-    return read_wave(read_freq, wave, bend_unit(u, bend));
+    wave_fix(&note->osc[index], read_freq, wave);
+    return wave_read(&note->osc[index], bend_unit(u, bend));
 }
 
 void apply_note(Note *note, int param, float unit) {
@@ -279,37 +280,38 @@ void slew_note(Note *note) {
 void note_sample(Engine *engine, Note *note, float *left, float *right) {
     float inc;
     int open;
-    int indexes[3];
-    int count, i;
-    float power = 0.0f, norm, mid = 0.0f, side = 0.0f, resonated, level, gain, sided;
+    float norm, mid = 0.0f, side = 0.0f, resonated, level, gain, sided;
     int quiet;
     slew_note(note);
     inc = (TWO_PI * note->freq) / SR;
     open = note->wide > 1e-4f;
-    ensure_wave_table();
     if (!open) {
         /* Center voice only. Weight is 1, so the unison norm and the detune pow drop out. */
         mid = shape_note(advance_osc(note, 1, inc, note->sync, note->bend, note->wave), note->fold, note->drive);
     } else {
-        indexes[0] = 0;
-        indexes[1] = 1;
-        indexes[2] = 2;
-        count = 3;
-        for (i = 0; i < count; i++) {
-            float weight = unison_weight(note->wide, indexes[i]);
-            power += weight * weight;
+        /* Three readers. The detune ratio and the mip stay put until wide, wave or frequency moves. */
+        float w, cents, shaped, scaled;
+        if (note->wide_key != note->wide) {
+            w = note->wide * note->wide;
+            cents = note->wide * UNI_CENTS;
+            note->side_w = w;
+            note->uni_norm = 1.0f / sqrtf(1.0f + 2.0f * w * w);
+            note->ratio_lo = powf(2.0f, -cents / 1200.0f);
+            note->ratio_hi = powf(2.0f, cents / 1200.0f);
+            note->wide_key = note->wide;
         }
-        norm = 1.0f / sqrtf(power);
-        for (i = 0; i < count; i++) {
-            int index = indexes[i];
-            float weight = unison_weight(note->wide, index);
-            float cents = unison_cents(note->wide, index);
-            float ratio = cents == 0.0f ? 1.0f : powf(2.0f, cents / 1200.0f);
-            float shaped = shape_note(advance_osc(note, index, inc * ratio, note->sync, note->bend, note->wave), note->fold, note->drive);
-            float scaled = shaped * weight;
-            mid += scaled;
-            side += scaled * unison_pan(note->wide, index);
-        }
+        w = note->side_w;
+        norm = note->uni_norm;
+        shaped = shape_note(advance_osc(note, 1, inc, note->sync, note->bend, note->wave), note->fold, note->drive);
+        mid = shaped;
+        shaped = shape_note(advance_osc(note, 0, inc * note->ratio_lo, note->sync, note->bend, note->wave), note->fold, note->drive);
+        scaled = shaped * w;
+        mid += scaled;
+        side += scaled * (-UNI_PAN);
+        shaped = shape_note(advance_osc(note, 2, inc * note->ratio_hi, note->sync, note->bend, note->wave), note->fold, note->drive);
+        scaled = shaped * w;
+        mid += scaled;
+        side += scaled * UNI_PAN;
         mid *= norm;
         side *= norm;
     }

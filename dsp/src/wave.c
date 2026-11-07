@@ -76,50 +76,76 @@ void ensure_wave_table(void) {
     wave_ready = 1;
 }
 
-/* Same-phase sine under a low note. Half sine at 50 Hz, gone by 200 Hz, along log2. */
-
-float body_mix(float raw, float freq, float u) {
-    float hz = freq > 1.0f ? freq : 1.0f;
-    float body = (log2f(200.0f) - log2f(hz)) / 2.0f;
-    float w;
-    if (body <= 1e-4f) return raw;
-    if (body > 1.0f) body = 1.0f;
-    w = 0.5f * body;
-    return raw * (1.0f - w) + sinf(TWO_PI * u) * w;
-}
-
 float read_cycle(int mip, int frame, float u) {
     float pos = u * (float)WT_CYCLE;
-    int i0 = (int)floorf(pos) % WT_CYCLE;
-    float frac = pos - floorf(pos);
-    int i1 = (i0 + 1) % WT_CYCLE;
-    int base = (mip * WT_FRAMES + frame) * WT_CYCLE;
-    float a = wave_table[base + i0];
-    float b = wave_table[base + i1];
+    int i0 = (int)pos;
+    float frac = pos - (float)i0;
+    int i1;
+    int base;
+    float a, b;
+    if (i0 >= WT_CYCLE) {
+        i0 = 0;
+        frac = 0.0f;
+    } else if (i0 < 0) {
+        i0 = 0;
+        frac = 0.0f;
+    }
+    i1 = i0 + 1;
+    if (i1 >= WT_CYCLE) i1 = 0;
+    base = (mip * WT_FRAMES + frame) * WT_CYCLE;
+    a = wave_table[base + i0];
+    b = wave_table[base + i1];
     return a + (b - a) * frac;
 }
 
-float read_wave(float freq, float wave, float u) {
-    float fit = (SR * 0.45f) / (freq > 1.0f ? freq : 1.0f);
-    float mip_f, pos, ff, s0, s1;
-    int m0, m1, top, f0;
+/* Mip, frame and the low-note body weight. Callers keep the result while freq and wave stay put. */
+
+void wave_fix(WaveFix *fix, float freq, float wave) {
+    float fit, mip_f, pos, hz, body;
+    int top;
+    if (fix->ready && fix->freq == freq && fix->wave == wave) return;
+    fit = (SR * 0.45f) / (freq > 1.0f ? freq : 1.0f);
     if (fit < 1.0f) fit = 1.0f;
     if (fit > (float)WT_HARM) fit = (float)WT_HARM;
     mip_f = logf((float)WT_HARM / fit) / logf(2.0f);
-    m0 = (int)floorf(mip_f);
-    if (m0 < 0) m0 = 0;
-    if (m0 > WT_MIPS - 1) m0 = WT_MIPS - 1;
-    top = m0 >= WT_MIPS - 1;
-    m1 = top ? m0 : m0 + 1;
+    fix->m0 = (int)floorf(mip_f);
+    if (fix->m0 < 0) fix->m0 = 0;
+    if (fix->m0 > WT_MIPS - 1) fix->m0 = WT_MIPS - 1;
+    top = fix->m0 >= WT_MIPS - 1;
+    fix->m1 = top ? fix->m0 : fix->m0 + 1;
+    fix->mf = (top || mip_f - (float)fix->m0 < 1e-4f) ? 0.0f : mip_f - (float)fix->m0;
     pos = wave < 0.0f ? 0.0f : (wave > 1.0f ? 1.0f : wave);
     pos *= (float)(WT_FRAMES - 1);
-    f0 = (int)floorf(pos);
-    if (f0 >= WT_FRAMES - 1) f0 = WT_FRAMES - 2;
-    ff = pos - (float)f0;
-    s0 = read_cycle(m0, f0, u) * (1.0f - ff) + read_cycle(m0, f0 + 1, u) * ff;
-    if (!(top || mip_f - (float)m0 < 1e-4f)) {
-        s1 = read_cycle(m1, f0, u) * (1.0f - ff) + read_cycle(m1, f0 + 1, u) * ff;
-        s0 = s0 + (s1 - s0) * (mip_f - (float)m0);
+    fix->f0 = (int)floorf(pos);
+    if (fix->f0 >= WT_FRAMES - 1) fix->f0 = WT_FRAMES - 2;
+    fix->ff = pos - (float)fix->f0;
+    if (freq >= 200.0f) fix->body = 0.0f;
+    else {
+        hz = freq > 1.0f ? freq : 1.0f;
+        body = (log2f(200.0f) - log2f(hz)) / 2.0f;
+        if (body <= 1e-4f) body = 0.0f;
+        else if (body > 1.0f) body = 1.0f;
+        fix->body = 0.5f * body;
     }
-    return body_mix(s0, freq, u);
+    fix->freq = freq;
+    fix->wave = wave;
+    fix->ready = 1;
+}
+
+float wave_read(const WaveFix *fix, float u) {
+    float s0 = read_cycle(fix->m0, fix->f0, u) * (1.0f - fix->ff) + read_cycle(fix->m0, fix->f0 + 1, u) * fix->ff;
+    float s1;
+    if (fix->mf > 0.0f) {
+        s1 = read_cycle(fix->m1, fix->f0, u) * (1.0f - fix->ff) + read_cycle(fix->m1, fix->f0 + 1, u) * fix->ff;
+        s0 = s0 + (s1 - s0) * fix->mf;
+    }
+    if (fix->body <= 0.0f) return s0;
+    return s0 * (1.0f - fix->body) + sinf(TWO_PI * u) * fix->body;
+}
+
+float read_wave(float freq, float wave, float u) {
+    WaveFix fix;
+    fix.ready = 0;
+    wave_fix(&fix, freq, wave);
+    return wave_read(&fix, u);
 }

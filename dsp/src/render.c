@@ -195,6 +195,7 @@ void render(Engine *engine, int16_t *out, int frames) {
         __asm__ volatile("msr fpcr, %0" :: "r"(fpcr));
     }
 #endif
+    ensure_wave_table();
     /* Events in this message belong at the start of the block. Sample offsets
      * are applied by triggering before the frame loop only when offset is 0,
      * and during the loop otherwise. consume parses all events up front, so

@@ -109,9 +109,17 @@ typedef struct {
 } Drum;
 
 typedef struct {
+    float freq, wave, mf, ff, body;
+    int m0, m1, f0, ready;
+} WaveFix;
+
+typedef struct {
     int on;
     float phase[3], slave[3], env, freq;
     float wave, bend, sync, fold, drive, wide;
+    /* Unison ratios and the wavetable cursor. Rebuilt when wide, wave or frequency changes. */
+    float wide_key, side_w, uni_norm, ratio_lo, ratio_hi;
+    WaveFix osc[3];
     float cutoff, resonance, reverb, delay, attack, release, gain, low, band;
     FltCache coef;
     float target, glide, sustain, env_amt, filter_env, from_amp, from_contour;
@@ -306,9 +314,10 @@ float anchor_amp(int kind, int k);
 float amp_at(float p, int k);
 float harm_window(int k, int max_h);
 void ensure_wave_table(void);
-float body_mix(float raw, float freq, float u);
 float read_cycle(int mip, int frame, float u);
 float read_wave(float freq, float wave, float u);
+void wave_fix(WaveFix *fix, float freq, float wave);
+float wave_read(const WaveFix *fix, float u);
 float bend_unit(float u, float bend);
 float unison_phase(int pitch, int lane, int sample, int copy);
 float unison_weight(float wide, int index);

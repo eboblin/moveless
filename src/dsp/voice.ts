@@ -223,6 +223,23 @@ interface DrumVoice {
   haasI: number;
 }
 
+/** Wavetable cursor. Rebuilt when frequency or wave changes, then read per sample. */
+interface WaveFix {
+  freq: number;
+  wave: number;
+  m0: number;
+  m1: number;
+  f0: number;
+  mf: number;
+  ff: number;
+  body: number;
+  ready: boolean;
+}
+
+function emptyWave(): WaveFix {
+  return { freq: 0, wave: 0, m0: 0, m1: 0, f0: 0, mf: 0, ff: 0, body: 0, ready: false };
+}
+
 interface NoteVoice {
   on: boolean;
   /** Master phase of the center reader and the two unison sides. */
@@ -247,6 +264,13 @@ interface NoteVoice {
   fold: number;
   drive: number;
   wide: number;
+  /** Unison ratios. Rebuilt when `wide` changes. */
+  wideKey: number;
+  sideW: number;
+  uniNorm: number;
+  ratioLo: number;
+  ratioHi: number;
+  osc: WaveFix[];
   /** Pitch glide time, 0..1. Zero jumps. */
   glide: number;
   /** Level the body reaches at the end of the gate. 0 dies with the note, 1 holds. */
@@ -1310,19 +1334,28 @@ function noteSample(engine: Engine, note: NoteVoice): [number, number] {
   if (!open) {
     mid = shapeNote(advanceOsc(note, 1, inc, note.sync, note.bend, note.wave), note.fold, note.drive);
   } else {
-    const indexes = [0, 1, 2];
-    let power = 0;
-    for (const index of indexes) power += unisonWeight(note.wide, index) ** 2;
-    const norm = 1 / Math.sqrt(power);
-    for (const index of indexes) {
-      const weight = unisonWeight(note.wide, index);
-      const cents = unisonCents(note.wide, index);
-      const ratio = cents === 0 ? 1 : 2 ** (cents / 1200);
-      const shaped = shapeNote(advanceOsc(note, index, inc * ratio, note.sync, note.bend, note.wave), note.fold, note.drive);
-      const scaled = shaped * weight;
-      mid += scaled;
-      side += scaled * unisonPan(note.wide, index);
+    // Three readers. The detune ratio and the mip stay put until wide, wave or frequency moves.
+    if (note.wideKey !== note.wide) {
+      const w = note.wide * note.wide;
+      const cents = note.wide * UNI_CENTS;
+      note.sideW = w;
+      note.uniNorm = 1 / Math.sqrt(1 + 2 * w * w);
+      note.ratioLo = 2 ** (-cents / 1200);
+      note.ratioHi = 2 ** (cents / 1200);
+      note.wideKey = note.wide;
     }
+    const w = note.sideW;
+    const norm = note.uniNorm;
+    let shaped = shapeNote(advanceOsc(note, 1, inc, note.sync, note.bend, note.wave), note.fold, note.drive);
+    mid = shaped;
+    shaped = shapeNote(advanceOsc(note, 0, inc * note.ratioLo, note.sync, note.bend, note.wave), note.fold, note.drive);
+    let scaled = shaped * w;
+    mid += scaled;
+    side += scaled * -UNI_PAN;
+    shaped = shapeNote(advanceOsc(note, 2, inc * note.ratioHi, note.sync, note.bend, note.wave), note.fold, note.drive);
+    scaled = shaped * w;
+    mid += scaled;
+    side += scaled * UNI_PAN;
     mid *= norm;
     side *= norm;
   }
@@ -1410,62 +1443,58 @@ const WAVE_TABLE = buildWaveTable();
 
 function readCycle(mip: number, frame: number, u: number): number {
   const pos = u * WT_CYCLE;
-  const i0 = Math.floor(pos) % WT_CYCLE;
-  const frac = pos - Math.floor(pos);
-  const i1 = (i0 + 1) % WT_CYCLE;
+  let i0 = pos | 0;
+  let frac = pos - i0;
+  if (i0 >= WT_CYCLE || i0 < 0) {
+    i0 = 0;
+    frac = 0;
+  }
+  const i1 = i0 + 1 >= WT_CYCLE ? 0 : i0 + 1;
   const base = (mip * WT_FRAMES + frame) * WT_CYCLE;
   const a = WAVE_TABLE[base + i0];
   const b = WAVE_TABLE[base + i1];
   return a + (b - a) * frac;
 }
 
-function readWave(freq: number, wave: number, u: number): number {
+/** Mip, frame and the low-note body weight. Callers keep the result while freq and wave stay put. */
+function waveFix(fix: WaveFix, freq: number, wave: number): void {
+  if (fix.ready && fix.freq === freq && fix.wave === wave) return;
   const fit = Math.min(WT_HARM, Math.max(1, (SAMPLE_RATE * 0.45) / Math.max(freq, 1)));
   const mipF = Math.log2(WT_HARM / fit);
   let m0 = Math.floor(mipF);
   if (m0 < 0) m0 = 0;
   if (m0 > WT_MIPS - 1) m0 = WT_MIPS - 1;
   const top = m0 >= WT_MIPS - 1;
-  const m1 = top ? m0 : m0 + 1;
-  const mf = top ? 0 : mipF - m0;
   const pos = Math.max(0, Math.min(1, wave)) * (WT_FRAMES - 1);
   let f0 = Math.floor(pos);
   if (f0 >= WT_FRAMES - 1) f0 = WT_FRAMES - 2;
-  const ff = pos - f0;
-  const s0 = readCycle(m0, f0, u) * (1 - ff) + readCycle(m0, f0 + 1, u) * ff;
-  const raw = mf < 1e-4 ? s0 : s0 + (readCycle(m1, f0, u) * (1 - ff) + readCycle(m1, f0 + 1, u) * ff - s0) * mf;
-  return bodyMix(raw, freq, u);
+  let body = 0;
+  if (freq < 200) {
+    const hz = Math.max(freq, 1);
+    const span = (Math.log2(200) - Math.log2(hz)) / 2;
+    if (span > 1e-4) body = 0.5 * Math.min(1, span);
+  }
+  fix.freq = freq;
+  fix.wave = wave;
+  fix.m0 = m0;
+  fix.m1 = top ? m0 : m0 + 1;
+  fix.f0 = f0;
+  fix.mf = top || mipF - m0 < 1e-4 ? 0 : mipF - m0;
+  fix.ff = pos - f0;
+  fix.body = body;
+  fix.ready = true;
 }
 
-/**
- * Same-phase sine under a low note. The mix is half sine at 50 Hz and gone
- * by 200 Hz, along log2. Weights already keep the RMS near the dry wave.
- */
-function bodyMix(raw: number, freq: number, u: number): number {
-  const body = (Math.log2(200) - Math.log2(Math.max(freq, 1))) / 2;
-  if (body <= 1e-4) return raw;
-  const w = 0.5 * Math.min(1, body);
-  return raw * (1 - w) + Math.sin(TWO_PI * u) * w;
+function waveRead(fix: WaveFix, u: number): number {
+  const s0 = readCycle(fix.m0, fix.f0, u) * (1 - fix.ff) + readCycle(fix.m0, fix.f0 + 1, u) * fix.ff;
+  const raw = fix.mf > 0 ? s0 + (readCycle(fix.m1, fix.f0, u) * (1 - fix.ff) + readCycle(fix.m1, fix.f0 + 1, u) * fix.ff - s0) * fix.mf : s0;
+  if (fix.body <= 0) return raw;
+  return raw * (1 - fix.body) + Math.sin(TWO_PI * u) * fix.body;
 }
 
 function bendUnit(u: number, bend: number): number {
   if (bend <= 1e-4 || u <= 0) return u;
   return u ** (1 + bend * bend * 3);
-}
-
-function unisonWeight(wide: number, index: number): number {
-  if (wide <= 1e-4 || index === 1) return 1;
-  return wide * wide;
-}
-
-function unisonCents(wide: number, index: number): number {
-  if (wide <= 1e-4 || index === 1) return 0;
-  return (index === 0 ? -wide : wide) * UNI_CENTS;
-}
-
-function unisonPan(wide: number, index: number): number {
-  if (wide <= 1e-4 || index === 1) return 0;
-  return (index === 0 ? -UNI_PAN : UNI_PAN);
 }
 
 /** Low 32 bits of a product. Matches the uint32_t multiply in dsp/src. */
@@ -1519,7 +1548,9 @@ function advanceOsc(
     u = phase / TWO_PI;
     readFreq = (inc * SAMPLE_RATE) / TWO_PI;
   }
-  return readWave(readFreq, wave, bendUnit(u, bend));
+  const fix = note.osc[index];
+  waveFix(fix, readFreq, wave);
+  return waveRead(fix, bendUnit(u, bend));
 }
 
 function shapeDrive(sample: number, drive: number): number {
@@ -2191,6 +2222,7 @@ function emptyNote(): NoteVoice {
   return {
     on: false, phase: [0, 0, 0], slave: [0, 0, 0], env: 0, age: 0, left: 0, gate: 1, legato: false, fromAmp: 0, fromContour: 0, freq: 0,
     wave: 0.36, bend: 0, sync: 0, fold: 0, drive: 0, wide: 0,
+    wideKey: -1, sideW: 0, uniNorm: 1, ratioLo: 1, ratioHi: 1, osc: [emptyWave(), emptyWave(), emptyWave()],
     glide: 0, sustain: 1, envAmt: 0, filterEnv: 0, target: 0, claim: 0,
     cutoff: 0.5, resonance: 0, reverb: 0, delay: 0, attack: 0, release: 0.4, gain: 0,
     low: 0, band: 0, lane: 0, pitch: 0, loop: 0,
