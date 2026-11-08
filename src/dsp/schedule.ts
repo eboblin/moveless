@@ -74,7 +74,7 @@ export function soundMotions(project: Project, phrase?: Phrase): Motion[] {
     const macros = project.lock[lane] ? {} : project.macros;
     const sound = project.working[lane].sound;
     for (const id of Object.keys(sound)) {
-      if (id === "pitch" || id === "sample") continue;
+      if (id === "pitch" || id === "sample" || id === "instrument") continue;
       const mapped = mapSound(lane, { [id]: 0 })[0];
       if (!mapped) continue;
       pushMotion(out, lane, mapped.id, withMacro(sound[id], soundMacro(id, macros)), loop);

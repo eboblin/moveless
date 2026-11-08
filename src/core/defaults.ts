@@ -143,6 +143,7 @@ function sound(lane: LaneId): Record<string, ReturnType<typeof modulated>> {
   const out: Record<string, ReturnType<typeof modulated>> = {};
   for (const id of ids) out[id] = home(values[id] ?? 0.5);
   out.sample = home(0);
+  out.instrument = home(0);
   // Bend left the melody page. Keeping the key lets an old scene still warp the wave.
   if (lane === "bass" || lane === "lead" || lane === "chords") out.bend = home(SOUND_VALUE[lane].bend ?? 0);
   return out;

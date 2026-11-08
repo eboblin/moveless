@@ -1,5 +1,5 @@
 import { DECK_GROUPS, deckSlots, defaultDeck, rowKnobName, slotKnobName, type DeckGroup, type DeckKnobs, type DeckSlot } from "./deck.ts";
-import { sampleDetents, sampleStep } from "./samples.ts";
+import { categoryDetents, categoryStep, instrumentDetents, instrumentStep } from "./samples.ts";
 import {
   LANE_CODE,
   LANES,
@@ -7,6 +7,7 @@ import {
   STEPS,
   isDrum,
   isLane,
+  isVoice,
   isPitched,
   laneFamily,
   type ContextId,
@@ -21,7 +22,7 @@ import {
 export type MorphKind = "lerp" | "switch";
 export type KnobStore = "lane" | "progression" | "global" | "mixer" | "macro" | "bus" | "deck";
 /** How the screen draws a knob. `number` is the plain 0..99 cell. */
-export type KnobDisplay = "number" | "pitch" | "octave" | "note" | "scale" | "division" | "chordTone" | "slice" | "count" | "time" | "fade" | "rollTone" | "span" | "spread" | "flow" | "sample";
+export type KnobDisplay = "number" | "pitch" | "octave" | "note" | "scale" | "division" | "chordTone" | "slice" | "count" | "time" | "fade" | "rollTone" | "span" | "spread" | "flow" | "sample" | "instrument";
 
 export interface Binding {
   path: string;
@@ -417,13 +418,18 @@ function lengthPage(): Page {
   ]);
 }
 
-/** One VPCA after the timbre pairs. Value steps one library entry and morphs by switch. */
+/** Category locks the family. Instrument walks that family's recordings. Both values morph by switch. */
 function samplePage(lane: LaneId): Page {
-  const step = sampleStep(lane);
-  const field: FieldSpec = { label: "SAMPLE", weight: 2, display: "sample", step, detent: sampleDetents(lane), macro: [] };
-  const item = page("sample", "SAMPLE", ["SAMPLE", null], "sound", vpca("sound.sample", field, "sound"));
-  const value = item.bindings[0];
-  if (value) value.morph = "switch";
+  const category: FieldSpec = { label: "CATEGORY", weight: 2, display: "sample", step: categoryStep(lane), detent: categoryDetents(lane), macro: [] };
+  const instrument: FieldSpec = { label: "INSTRUMENT", weight: 2, display: "instrument", step: 1, detent: [0], macro: [] };
+  const item = page("sample", "SAMPLE", ["CATEGORY", "INSTRUMENT"], "sound", [
+    ...vpca("sound.sample", category, "sound"),
+    ...vpca("sound.instrument", instrument, "sound"),
+  ]);
+  const left = item.bindings[0];
+  const right = item.bindings[4];
+  if (left) left.morph = "switch";
+  if (right) right.morph = "switch";
   return item;
 }
 
@@ -809,6 +815,30 @@ function hideVoiceCycles(project: Project, context: ContextId, page: Page): Page
   return hidden ? { ...page, bindings } : page;
 }
 
+/** Instrument step and detents follow the category the lane is sitting on. */
+export function tuneSampleBinding(project: Project, context: LaneId, binding: Binding): Binding {
+  if (binding.path === "sound.sample.value") {
+    return { ...binding, step: categoryStep(context), detents: categoryDetents(context) };
+  }
+  if (binding.path === "sound.instrument.value") {
+    const category = workingNumber(project, `${context}.sound.sample.value`) ?? 0;
+    return { ...binding, step: instrumentStep(context, category), detents: instrumentDetents(context, category) };
+  }
+  return binding;
+}
+
+function tuneSamplePage(project: Project, context: ContextId, item: Page): Page {
+  if (!isVoice(context) || item.id !== "sample") return item;
+  let changed = false;
+  const bindings = item.bindings.map((binding) => {
+    if (!binding) return binding;
+    const next = tuneSampleBinding(project, context, binding);
+    if (next !== binding) changed = true;
+    return next;
+  });
+  return changed ? { ...item, bindings } : item;
+}
+
 /**
  * Page the caller is showing. A voice pattern hides its cycle slot.
  * Mixer and DJ FX are not context pages; their knobs come from `mixerPage` and `deckPage`.
@@ -817,7 +847,7 @@ export function livePage(project: Project, context: ContextId, index: number): P
   const pages = pagesFor(context);
   const item = pages[Math.min(Math.max(0, index), Math.max(0, pages.length - 1))];
   if (!item) return undefined;
-  return hideVoiceCycles(project, context, item);
+  return tuneSamplePage(project, context, hideVoiceCycles(project, context, item));
 }
 
 /** Name the jog overlay prints. Mixer and DJ FX keep a fixed word even when the deck group changes. */

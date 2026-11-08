@@ -10,7 +10,7 @@ import { DIGIT_H, displayAmount, divisionCell, type BigAmount, type DisplayAmoun
 import { readControl } from "./controls.ts";
 import { bindingFor, deckPage, livePage, mixerPage, pageTitle, pagesFor, type Binding, type Page } from "../core/pages.ts";
 import { type BankView } from "../core/bank.ts";
-import { sampleCount, sampleIndex, sampleLabel } from "../core/samples.ts";
+import { instrumentLabel, instrumentNumber, sampleCount, sampleIndex, sampleLabel } from "../core/samples.ts";
 import { focusVisible, macroReturnValue, PAGE_TITLE_SLIDE_MS, screenPlace, type CaptureLine, type RandomizeLine, type UiState } from "./state.ts";
 import { lettersWidth, plotLetters } from "./letters.ts";
 import { readEnvelope } from "../dsp/envelope.ts";
@@ -1298,6 +1298,10 @@ function figureHeader(project: Project, context: ContextId, binding: Binding, st
     case "sample":
       if (context === "fx" || context === "aux") return null;
       return sampleLabel(context, readControl(project, context, binding.path));
+    case "instrument": {
+      if (context === "fx" || context === "aux") return null;
+      return instrumentLabel(context, readControl(project, context, "sound.sample.value"), readControl(project, context, binding.path));
+    }
     case "spread":
     case "flow": {
       if (context !== "chords") return null;
@@ -1328,6 +1332,12 @@ function knobAmount(project: Project, context: ContextId, binding: Binding, ui: 
     case "sample": {
       if (context === "fx" || context === "aux") break;
       const n = sampleIndex(readControl(project, context, binding.path), sampleCount(context));
+      if (n <= 99) return { kind: "big", n, negative: false };
+      return { kind: "wide", text: String(n), negative: false };
+    }
+    case "instrument": {
+      if (context === "fx" || context === "aux") break;
+      const n = instrumentNumber(context, readControl(project, context, "sound.sample.value"), readControl(project, context, binding.path));
       if (n <= 99) return { kind: "big", n, negative: false };
       return { kind: "wide", text: String(n), negative: false };
     }

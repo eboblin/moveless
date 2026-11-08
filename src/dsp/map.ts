@@ -90,14 +90,14 @@ const DRUM_KEYS: Record<DrumId, readonly string[]> = {
 
 function pushSound(out: EngineParam[], table: Record<string, string>, prefix: string, keys: readonly string[], sound: Record<string, number>): void {
   for (const id of keys) {
-    if (id === "sample") continue;
+    if (id === "sample" || id === "instrument") continue;
     const value = sound[id];
     if (typeof value !== "number") continue;
     const mapped = table[id] ?? id;
     out.push({ id: prefix ? `${prefix}_${mapped}` : mapped, value: clamp(value) });
   }
   for (const id in sound) {
-    if (id === "sample" || Object.prototype.hasOwnProperty.call(table, id)) continue;
+    if (id === "sample" || id === "instrument" || Object.prototype.hasOwnProperty.call(table, id)) continue;
     const value = sound[id];
     if (typeof value !== "number") continue;
     out.push({ id: prefix ? `${prefix}_${id}` : id, value: clamp(value) });

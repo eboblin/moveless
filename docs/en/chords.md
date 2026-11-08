@@ -26,7 +26,7 @@ Tone with a pattern and an amount is the arpeggiator: the shape walks the voice 
 
 ## Blue: sound
 
-The same five pages as [bass and lead](bass-and-lead.md): wave / glide, sync / fold, drive / wide, attack / sustain, release / flt env. SAMPLE follows them and uses the same GM list. Each note of a chord reads its own zone of that preset.
+The same five pages as [bass and lead](bass-and-lead.md): wave / glide, sync / fold, drive / wide, attack / sustain, release / flt env. SAMPLE follows them and uses the same GM list, family then program. Each note of a chord reads its own zone of that preset.
 
 Wide is especially useful here: in a block it spreads the copies and makes the pad wide.
 

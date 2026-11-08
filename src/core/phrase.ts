@@ -17,6 +17,7 @@ import { latchStamp } from "./latch.ts";
 import { bipolarFromUnit, evalModulated, hearVoices, soundMacro, velocityLevel, voiceLane, withMacro } from "./modulate.ts";
 import { laneHeard } from "./journal.ts";
 import { macroOffset } from "./pages.ts";
+import { flatSampleUnit } from "./samples.ts";
 import { envelopeTable, readEnvelope, type EnvelopeTable } from "../dsp/envelope.ts";
 import {
   attachTables,
@@ -518,8 +519,13 @@ function bindSound(sound: SoundKnobs, macros: Record<string, number>): (step: nu
   return (step) => evalSound(sound, keys, step, macros);
 }
 
-function soundValues(sound: SoundKnobs, step: number, macros: Record<string, number>): Record<string, number> {
-  return cachedSound(sound, macros, () => bindSound(sound, macros))(step);
+function soundValues(lane: LaneId, sound: SoundKnobs, step: number, macros: Record<string, number>): Record<string, number> {
+  const heard = cachedSound(sound, macros, () => bindSound(sound, macros))(step);
+  if (typeof heard.sample !== "number") return heard;
+  const next = { ...heard };
+  next.sample = flatSampleUnit(lane, heard.sample, heard.instrument ?? 0);
+  delete next.instrument;
+  return next;
 }
 
 function filterValues(filter: LaneFilter, step: number, macros: Record<string, number>): TimedEvent["filter"] {
@@ -634,7 +640,7 @@ function drumEvents(lane: DrumLane, id: DrumId, global: GlobalSettings, macros: 
       const at = hit.step + extra / SIXTEENTH_TICKS;
       const velocity = keptVelocity(lane.gen1, lane.gen2, hit.generators, global.seed, id, hit.step, i, macro(macros, "velocity"), macro(macros, "probability"), at);
       if (velocity === null) continue;
-      const heard = soundValues(lane.sound, at, macros);
+      const heard = soundValues(id, lane.sound, at, macros);
       const sound = shaped ? { ...heard } : heard;
       const note = shaped ? shapeRoll(id, sound, rollOctaves(tone, t, rise), level) : DRUM_NOTE[id];
       const filter = filterValues(lane.filter, at, macros);
@@ -684,7 +690,7 @@ function pitchedEvents(
       const harm = harmonyAt(harmony, tick);
       const chordPcs = harm ? chordTonePitchClasses(harm, scale, rootPc) : [];
       const note = Math.max(0, Math.min(127, Math.round(applyFollowMidi(desiredMidi, lane.follow, chordPcs))));
-      const sound = soundValues(lane.sound, at, macros);
+      const sound = soundValues(id, lane.sound, at, macros);
       const filter = filterValues(lane.filter, at, macros);
       const send = sendValues(lane.send, at, macros);
       out.push(place(hit.step, extra, global, id, note, velocity, lengthTicks, sound, filter, send));
@@ -825,7 +831,7 @@ function placeSlice(
     };
   }, rateAt, (tick, note) => rollChance(chanceAt(lane, macros, tick / SIXTEENTH_TICKS), global.seed, "note", tick, note));
   for (const { note, tick, lengthTicks } of hits) {
-    const rendered = soundValues(sound, tick / SIXTEENTH_TICKS, macros);
+    const rendered = soundValues("chords", sound, tick / SIXTEENTH_TICKS, macros);
     const heard = filterValues(filter, tick / SIXTEENTH_TICKS, macros);
     const sent = sendValues(send, tick / SIXTEENTH_TICKS, macros);
     const sample = tickToSample(tick, global.tempo);
@@ -870,4 +876,4 @@ function rateAlong(lane: ChordLane, macros: Record<string, number>): (tick: numb
   };
 }
 
-type ChordLaneSound = Parameters<typeof soundValues>[0];
+type ChordLaneSound = Parameters<typeof soundValues>[1];

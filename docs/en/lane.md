@@ -10,7 +10,7 @@ The pages of each lane are gathered into groups, and a group has its own pad col
 
 - **Orange is pattern.** Where the hits sit, and how they break up. Generators, rolls, runs.
 - **Turquoise is notes.** Pitch, octave, note length. The drums don't have this group.
-- **Blue is sound.** The timbre of the voice. Eight or ten knobs, two to a page, then one SAMPLE page. Zero is the built-in voice. Above that, the drums pick a recording from the machine library, and the bass, the lead, and the chords pick a GM preset. The cell shows the index. While the knob is held, the header shows the name.
+- **Blue is sound.** The timbre of the voice. Eight or ten knobs, two to a page, then one SAMPLE page with two knobs: category and instrument. Category zero is the built-in voice. Above that, the drums pick a family from the machine library, and the bass, the lead, and the chords pick a GM family. Instrument walks the recordings inside that family. The cell shows the index. While the knob is held, the header shows the name.
 - **Green is the filter and the sends.** Cutoff and resonance, then the send to the reverb and the delay.
 
 The recordings live in `samples.bin` next to the module. If that file is missing, or it is not the bank this version expects, startup downloads it and the screen shows a bar until the file is ready. Until then the voice stays on the built-in synthesizer. A failed download says FAILED; any pad or key clears the plate and the synth keeps playing.

@@ -321,5 +321,11 @@ for (const chunk of pcmChunks) {
 }
 
 const bank = assembleBank(counts, slots, packedZones, pcm);
-writeFileSync(OUT, encodeBank(bank));
-console.log(`samples.bin ${counts.join(" ")} slots, ${packedZones.length} zones, ${pcmFrames} frames`);
+const encoded = encodeBank(bank);
+writeFileSync(OUT, encoded);
+const manifestPath = path.join(ROOT, "assets", "samples", "bank.json");
+const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as { url?: string; bytes?: number; sha256?: string };
+manifest.bytes = encoded.length;
+manifest.sha256 = createHash("sha256").update(encoded).digest("hex");
+writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+console.log(`samples.bin ${counts.join(" ")} slots, ${packedZones.length} zones, ${pcmFrames} frames, ${encoded.length} bytes`);
