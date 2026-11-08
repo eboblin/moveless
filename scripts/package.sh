@@ -21,7 +21,7 @@ stage=dist/moveless
 rm -rf "$stage"
 mkdir -p "$stage"
 cp module.json ui.js dsp.so "$stage/"
-cp assets/font.png assets/font.png.dat assets/factory.json "$stage/"
+cp assets/font.png assets/font.png.dat assets/factory.json assets/samples/bank.json "$stage/"
 mkdir -p "$stage/licenses"
 cp assets/samples/NOTICE.md assets/samples/licenses/* "$stage/licenses/"
 if [[ -f samples.bin ]]; then
@@ -34,7 +34,7 @@ rm -f dist/moveless-module.tar.gz
 tar -czf dist/moveless-module.tar.gz -C dist moveless
 
 listing=$(tar -tf dist/moveless-module.tar.gz)
-for name in moveless/module.json moveless/ui.js moveless/dsp.so moveless/font.png moveless/font.png.dat moveless/factory.json moveless/licenses/NOTICE.md moveless/licenses/FluidR3.md moveless/licenses/GeneralUser-GS.txt moveless/licenses/tidal-drum-machines.md; do
+for name in moveless/module.json moveless/ui.js moveless/dsp.so moveless/font.png moveless/font.png.dat moveless/factory.json moveless/bank.json moveless/licenses/NOTICE.md moveless/licenses/FluidR3.md moveless/licenses/GeneralUser-GS.txt moveless/licenses/tidal-drum-machines.md; do
   grep -qx "$name" <<<"$listing" || { echo "в архиве нет $name" >&2; exit 1; }
 done
 

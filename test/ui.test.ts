@@ -13,7 +13,8 @@ import { bindingFor, deckPage, lanePages, mixerPage, pageCount, pageGroup, pageG
 import { LED, advancePulseClock, blinkHalfMs, directionLit, dropLed, faceButtonLed, ledColorAt, menuLed, modeButtonLed, offColor, offerLed, padLeds, padPackets, PLAY_LED_ON, playLed, PULSE_CLOCK_IDLE, sceneShadeStep, shadeColor, stepIconColors, stepLampKey, stepLed, stepLeds, takeLeds, trackLeds } from "../src/ui/leds.ts";
 import { DIGIT_H, displayAmount, fractionFromLabel, plotAmount } from "../src/ui/digits.ts";
 import { lettersWidth, plotLetters } from "../src/ui/letters.ts";
-import { CAPTION_GAP, CAPTION_LANE_Y, CAPTION_OUTLINE, CAPTION_PAGE_Y, CAPTION_SINGLE_Y, DIGIT_Y, FONT_H, HEADER_H, HEIGHT, MIX_METER_BOTTOM, MIX_METER_TOP, MIX_METER_X, NAME_Y, PAGER_Y, PARAM_COL_W, PARAM_H, SEP_Y, TITLE_Y, VALUE_Y, VIZ_H, WIDTH, laneMark, loadWidth, pageTitlePaintKey, pageTitleTravel, pixel, renderScreen, type Screen } from "../src/ui/screen.ts";
+import { parseBankParam } from "../src/core/bank.ts";
+import { BANK_BAR, CAPTION_GAP, CAPTION_LANE_Y, CAPTION_OUTLINE, CAPTION_PAGE_Y, CAPTION_SINGLE_Y, DIGIT_Y, FONT_H, HEADER_H, HEIGHT, MIX_METER_BOTTOM, MIX_METER_TOP, MIX_METER_X, NAME_Y, PAGER_Y, PARAM_COL_W, PARAM_H, SEP_Y, TITLE_Y, VALUE_Y, VIZ_H, WIDTH, coverBank, laneMark, loadWidth, pageTitlePaintKey, pageTitleTravel, pixel, renderScreen, type Screen } from "../src/ui/screen.ts";
 import { WAVE_HOP, emptyWave, type WaveTape } from "../src/ui/wave.ts";
 import { defaultUi, HOLD_MS, HOLD_TICKS, openSetMode, PAGE_TITLE_MS, PAGE_TITLE_SLIDE_MS, restoreUi, settleWheel, WHEEL_RELEASE_MS, type DetentHold } from "../src/ui/state.ts";
 import { midiMessage, reduce, relDelta, settleTrackPeek, type Session } from "../src/ui/input.ts";
@@ -3896,6 +3897,32 @@ describe("page title", () => {
     assert.equal(pageTitlePaintKey(letGoSlide.ui, until), -1);
     const upSlide = settleWheel(letGoSlide.ui, (letGoSlide.ui.wheelReleaseMs ?? 0) + WHEEL_RELEASE_MS);
     assert.equal(pageTitlePaintKey(upSlide, until), -1);
+  });
+});
+
+describe("sample bank plate", () => {
+  it("reads the voice report", () => {
+    assert.deepEqual(parseBankParam(null), { phase: "off", percent: 0 });
+    assert.deepEqual(parseBankParam("ok"), { phase: "ok", percent: 100 });
+    assert.deepEqual(parseBankParam("fail"), { phase: "fail", percent: 0 });
+    assert.deepEqual(parseBankParam("042"), { phase: "load", percent: 42 });
+  });
+
+  it("draws a bar while the bank arrives and leaves a quiet screen alone", () => {
+    const quiet = new Uint8Array(WIDTH * HEIGHT);
+    coverBank(quiet, { phase: "ok", percent: 100 });
+    assert.equal(quiet.some((value) => value !== 0), false);
+    const loading = new Uint8Array(WIDTH * HEIGHT);
+    coverBank(loading, { phase: "load", percent: 0 });
+    const at = (x: number, y: number) => loading[y * WIDTH + x];
+    assert.equal(at(BANK_BAR.x, BANK_BAR.y), 1);
+    assert.equal(at(BANK_BAR.x + 2, BANK_BAR.y + 2), 0);
+    coverBank(loading, { phase: "load", percent: 100 });
+    assert.equal(at(BANK_BAR.x + 2, BANK_BAR.y + 2), 1);
+    assert.equal(at(BANK_BAR.x + BANK_BAR.w - 3, BANK_BAR.y + 2), 1);
+    const failed = new Uint8Array(WIDTH * HEIGHT);
+    coverBank(failed, { phase: "fail", percent: 0 });
+    assert.equal(failed.some((value) => value !== 0), true);
   });
 });
 

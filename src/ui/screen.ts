@@ -9,6 +9,7 @@ import { isPitched, isVoice, LANES, LANE_CODE, type RandomizeDepth, type Randomi
 import { DIGIT_H, displayAmount, divisionCell, type BigAmount, type DisplayAmount } from "./digits.ts";
 import { readControl } from "./controls.ts";
 import { bindingFor, deckPage, livePage, mixerPage, pageTitle, pagesFor, type Binding, type Page } from "../core/pages.ts";
+import { type BankView } from "../core/bank.ts";
 import { sampleCount, sampleIndex, sampleLabel } from "../core/samples.ts";
 import { focusVisible, macroReturnValue, PAGE_TITLE_SLIDE_MS, screenPlace, type CaptureLine, type RandomizeLine, type UiState } from "./state.ts";
 import { lettersWidth, plotLetters } from "./letters.ts";
@@ -77,6 +78,47 @@ export interface Screen {
   digits: DigitCell[];
   /** Knob columns whose gesture is not using them. The host punches a checker through the cell. */
   dim: number[];
+}
+
+/** Startup plate while the sample bank is fetched. The bar sits under the title. */
+export const BANK_BAR = { x: 16, y: 36, w: 96, h: 8 };
+
+const BANK_PLATE = { x: 6, y: 10, w: 116, h: 44 };
+
+function bankPixel(pixels: Uint8Array, x: number, y: number, value: number): void {
+  if (x < 0 || y < 0 || x >= WIDTH || y >= HEIGHT) return;
+  pixels[y * WIDTH + x] = value;
+}
+
+/** Covers the picture with the sample-bank plate. `ok` and `off` leave the buffer alone. */
+export function coverBank(pixels: Uint8Array, view: BankView): void {
+  if (view.phase !== "load" && view.phase !== "fail") return;
+  const plate = BANK_PLATE;
+  for (let y = plate.y; y < plate.y + plate.h; y++) {
+    for (let x = plate.x; x < plate.x + plate.w; x++) {
+      const edge = x === plate.x || y === plate.y || x === plate.x + plate.w - 1 || y === plate.y + plate.h - 1;
+      bankPixel(pixels, x, y, edge ? 1 : 0);
+    }
+  }
+  const title = "SAMPLES";
+  plotLetters(title, Math.floor((WIDTH - lettersWidth(title)) / 2), plate.y + 4, (x, y) => bankPixel(pixels, x, y, 1));
+  if (view.phase === "fail") {
+    const word = "FAILED";
+    plotLetters(word, Math.floor((WIDTH - lettersWidth(word)) / 2), plate.y + 22, (x, y) => bankPixel(pixels, x, y, 1));
+    return;
+  }
+  const bar = BANK_BAR;
+  for (let y = bar.y; y < bar.y + bar.h; y++) {
+    for (let x = bar.x; x < bar.x + bar.w; x++) {
+      const edge = x === bar.x || y === bar.y || x === bar.x + bar.w - 1 || y === bar.y + bar.h - 1;
+      bankPixel(pixels, x, y, edge ? 1 : 0);
+    }
+  }
+  const inner = bar.w - 2;
+  const fill = Math.round((inner * Math.max(0, Math.min(100, view.percent))) / 100);
+  for (let i = 0; i < fill; i++) {
+    for (let y = bar.y + 1; y < bar.y + bar.h - 1; y++) bankPixel(pixels, bar.x + 1 + i, y, 1);
+  }
 }
 
 /** Lit pixels of the 1 px load bar. 0 is empty, 99 fills the width. */

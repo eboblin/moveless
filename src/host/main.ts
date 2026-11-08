@@ -1,3 +1,4 @@
+import { parseBankParam, type BankView } from "../core/bank.ts";
 import { SAMPLE_RATE, SIXTEENTH_TICKS, tickToSample } from "../core/clock.ts";
 import { defaultProject } from "../core/defaults.ts";
 import { holdNote, latchStamp, releaseChannel, resetLatch, settleLatch } from "../core/latch.ts";
@@ -27,6 +28,7 @@ import {
   VIZ_H,
   cellTextX,
   deckFrame,
+  coverBank,
   loadWidth,
   laneMark,
   nudgePlayhead,
@@ -112,6 +114,9 @@ let voiceStep = -1;
 let voiceMorph = false;
 let projectDirty = false;
 let dirtySinceMs = 0;
+let bank: BankView = { phase: "off", percent: 0 };
+let bankDismissed = false;
+let bankAt = 0;
 
 /** Glide so a new reading moves the line instead of jumping it. */
 const LOAD_TAU_MS = 450;
@@ -499,6 +504,19 @@ function ledsChanged(gates: readonly number[]): boolean {
   return true;
 }
 
+function bankCovered(): boolean {
+  if (bank.phase === "load") return true;
+  return bank.phase === "fail" && !bankDismissed;
+}
+
+function pollBank(force: boolean): void {
+  const now = Date.now();
+  if (!force && now - bankAt < 100) return;
+  bankAt = now;
+  const next = parseBankParam(readParam("bank"));
+  if (next.phase !== bank.phase || next.percent !== bank.percent) bank = next;
+}
+
 function readParam(key: string): string | null {
   const host = globalThis as HostGlobals;
   const raw = host.host_module_get_param?.(key) ?? host.shadow_get_param?.(0, `overtake_dsp:${key}`);
@@ -524,7 +542,9 @@ function paintScreen(): void {
     applyWavePages(wave, [readParam("wave0"), readParam("wave1")]);
   }
   const screen = renderScreen(session.project, session.ui, session.tick, session.playing, Date.now(), frame, sent.load, wave, mixerMeters());
+  if (bankCovered()) coverBank(frame, bank);
   blit(screen.pixels);
+  if (bankCovered()) return;
   paintHostReadout(screen);
 }
 
@@ -877,7 +897,12 @@ function ledPacketKey(led: { color: number; blink: boolean; blinkTo?: number }):
 function paint(): void {
   paintPulseClock();
   const now = Date.now();
-  if (deckVisible(session.ui) && !deckOverlay(session.ui, now)) {
+  if (bankCovered()) {
+    deckFastLatched = false;
+    deckCoverKey = "";
+    mixerFastLatched = false;
+    paintScreen();
+  } else if (deckVisible(session.ui) && !deckOverlay(session.ui, now)) {
     mixerFastLatched = false;
     if (deckCoverKey !== "") {
       deckFastLatched = false;
@@ -1005,14 +1030,19 @@ export function init(): void {
   ledPlaying = false;
   ledPeek = null;
   pulseClock = PULSE_CLOCK_IDLE;
+  bank = { phase: "off", percent: 0 };
+  bankDismissed = false;
+  bankAt = 0;
   const host = globalThis as HostGlobals;
   host.set_font?.(MODULE_FONT);
   syncVoice(true);
+  pollBank(true);
   paint();
 }
 
 export function tick(): void {
   const now = Date.now();
+  pollBank(false);
   pollAudioLoad(now);
   settleLatch(now);
   advanceClock();
@@ -1038,6 +1068,7 @@ export function onMidiMessageExternal(data: number[]): void {
 }
 
 export function onMidiMessageInternal(data: number[]): void {
+  if (bank.phase === "fail" && !bankDismissed) bankDismissed = true;
   const msg = midiMessage(data[0] ?? 0, data[1] ?? 0, data[2] ?? 0);
   if (!msg) return;
   const before = session.project;

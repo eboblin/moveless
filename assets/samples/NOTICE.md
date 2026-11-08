@@ -1,4 +1,4 @@
-Moveless can ship two sample libraries next to the synthesizer. They are not in git. `npm run pack-samples` downloads the same files Strudel plays and writes `samples.bin`. The module copies that file when it is present, and always copies this notice.
+Moveless can ship two sample libraries next to the synthesizer. They are not in git. `npm run pack-samples` downloads the same files Strudel plays and writes `samples.bin`. The module copies that file when it is present, and always copies this notice. A build also ships `bank.json` with the file size and the release URL. On startup the module downloads that file when the copy beside it is missing or a different size.
 
 Drums: [tidal-drum-machines](https://github.com/geikha/tidal-drum-machines), the map Strudel loads as `tidal-drum-machines.json`. The repository note is `tidal-drum-machines.md`.
 

@@ -15,7 +15,7 @@ void *create_instance(const char *module_dir, const char *json_defaults) {
     engine->beats = 4.0f;
     engine->glue_gain = 1.0f;
     ensure_wave_table();
-    samples_load(engine, module_dir);
+    samples_boot(engine, module_dir);
     if (!fx_init(engine)) {
         samples_free(engine);
         fx_free(engine);
@@ -50,6 +50,7 @@ void set_param(void *instance, const char *key, const char *val) {
 void destroy_instance(void *instance) {
     Engine *engine = instance;
     if (!engine) return;
+    samples_stop(engine);
     samples_free(engine);
     fx_free(engine);
     free(engine->phrase_text);
@@ -98,12 +99,20 @@ int cpu_key(const char *key) {
     return strcmp(colon ? colon + 1 : key, "cpu") == 0;
 }
 
+static int bank_key(const char *key) {
+    const char *colon;
+    if (!key) return 0;
+    colon = strrchr(key, ':');
+    return strcmp(colon ? colon + 1 : key, "bank") == 0;
+}
+
 int get_param(void *instance, const char *key, char *buf, int buf_len) {
     Engine *engine = instance;
     if (!engine || !buf || buf_len < 1) return -1;
     int page = wave_key(key);
     if (page >= 0) return wave_page(engine, page, buf, buf_len);
     if (meter_key(key)) return meter_page(engine, buf, buf_len);
+    if (bank_key(key)) return samples_bank_text(engine, buf, buf_len);
     if (!cpu_key(key) || buf_len < 3) return -1;
     int pct = engine->cpu_pct;
     if (pct < 0) pct = 0;

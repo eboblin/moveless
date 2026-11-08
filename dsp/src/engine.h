@@ -173,6 +173,15 @@ typedef struct {
     size_t map_len;
 } SampleBank;
 
+/* The bank is published from the fetch poll while the callback may be reading it. */
+static inline int bank_is_ready(const SampleBank *bank) {
+    return bank && __atomic_load_n(&bank->ready, __ATOMIC_ACQUIRE);
+}
+
+static inline void bank_publish(SampleBank *bank) {
+    __atomic_store_n(&bank->ready, 1, __ATOMIC_RELEASE);
+}
+
 typedef struct {
     int param;
     int pattern;
@@ -305,6 +314,13 @@ typedef struct {
     float meter_hold[METER_N];
     SampleBank samples;
     float lane_sample_rate[LANE_COUNT];
+    /* Sample bank fetch. dir and url stay for the curl child and the poll. */
+    char bank_dir[768];
+    char bank_url[768];
+    int64_t bank_bytes;
+    int bank_pid;
+    int bank_phase;
+    int bank_pct;
 } Engine;
 
 typedef struct {
@@ -353,8 +369,17 @@ typedef struct {
     int index;
 } Fire;
 
+#define BANK_OFF 0
+#define BANK_OK 1
+#define BANK_LOAD 2
+#define BANK_FAIL 3
+
 void samples_load(Engine *engine, const char *module_dir);
 void samples_free(Engine *engine);
+void samples_boot(Engine *engine, const char *module_dir);
+void samples_pump(Engine *engine);
+void samples_stop(Engine *engine);
+int samples_bank_text(Engine *engine, char *buf, int buf_len);
 int sample_zone_for(const SampleBank *bank, int slot, int midi);
 float sample_take(const SampleBank *bank, int zone, float *pos, float inc);
 void arm_sample_drum(Engine *engine, Drum *drum, const char *params, float pitch);

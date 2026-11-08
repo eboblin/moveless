@@ -281,7 +281,7 @@ static void slew_sample(Note *note) {
 
 static float sample_inc(const SampleBank *bank, const Note *note, float ratio) {
     float sr;
-    if (!bank->ready || note->sample_zone < 0 || note->sample_zone >= bank->zone_count) return 0;
+    if (!bank_is_ready(bank) || note->sample_zone < 0 || note->sample_zone >= bank->zone_count) return 0;
     sr = bank->zones[note->sample_zone].sample_rate;
     if (!(sr > 1.0f)) sr = SR;
     return ratio * sr / SR;
@@ -308,7 +308,7 @@ void note_sample(Engine *engine, Note *note, float *left, float *right) {
     slew_note(note);
     inc = (TWO_PI * note->freq) / SR;
     open = note->wide > 1e-4f;
-    if (note->sample_on && engine->samples.ready) {
+    if (note->sample_on && bank_is_ready(&engine->samples)) {
         float base;
         slew_sample(note);
         base = sample_inc(&engine->samples, note, note->sample_rate);

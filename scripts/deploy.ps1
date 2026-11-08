@@ -68,6 +68,11 @@ if (-not (Test-Path $factory)) {
     throw "нет assets/factory.json — сними журнал с Move: npm run pull-project"
 }
 Copy-Item $factory $Stage
+$bank = Join-Path $Root "assets\samples\bank.json"
+if (-not (Test-Path $bank)) {
+    throw "нет assets/samples/bank.json"
+}
+Copy-Item $bank $Stage
 $licenses = Join-Path $Stage "licenses"
 New-Item -ItemType Directory -Path $licenses | Out-Null
 Copy-Item (Join-Path $Root "assets\samples\NOTICE.md") $licenses
@@ -82,7 +87,7 @@ if (Test-Path $Tarball) { Remove-Item -Force $Tarball }
 Invoke-Checked { tar -czf $Tarball -C (Join-Path $Root "dist") moveless }
 
 $listing = tar -tf $Tarball
-foreach ($name in @("moveless/module.json", "moveless/ui.js", "moveless/dsp.so", "moveless/font.png", "moveless/font.png.dat", "moveless/factory.json", "moveless/licenses/NOTICE.md", "moveless/licenses/FluidR3.md", "moveless/licenses/GeneralUser-GS.txt", "moveless/licenses/tidal-drum-machines.md")) {
+foreach ($name in @("moveless/module.json", "moveless/ui.js", "moveless/dsp.so", "moveless/font.png", "moveless/font.png.dat", "moveless/factory.json", "moveless/bank.json", "moveless/licenses/NOTICE.md", "moveless/licenses/FluidR3.md", "moveless/licenses/GeneralUser-GS.txt", "moveless/licenses/tidal-drum-machines.md")) {
     if ($listing -notcontains $name) {
         throw "в архиве нет $name"
     }

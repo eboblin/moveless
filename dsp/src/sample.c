@@ -29,7 +29,7 @@ void samples_load(Engine *engine, const char *module_dir) {
     uint32_t version, slots, zones, frames, need;
     int i, start;
     if (!engine) return;
-    memset(&engine->samples, 0, sizeof engine->samples);
+    samples_free(engine);
     if (!module_dir || !module_dir[0]) return;
     wrote = snprintf(path, sizeof path, "%s/samples.bin", module_dir);
     if (wrote < 0 || wrote >= (int)sizeof path) return;
@@ -66,7 +66,7 @@ void samples_load(Engine *engine, const char *module_dir) {
     engine->samples.slots = (SampleSlot *)(bytes + 40);
     engine->samples.zones = (SampleZone *)(bytes + 40 + slots * 8u);
     engine->samples.pcm = (const int16_t *)(bytes + 40 + slots * 8u + zones * 36u);
-    engine->samples.ready = 1;
+    bank_publish(&engine->samples);
 }
 
 static int sample_index(float unit, int count) {
@@ -82,7 +82,7 @@ static int sample_index(float unit, int count) {
 int sample_zone_for(const SampleBank *bank, int slot, int midi) {
     SampleSlot *entry;
     int nearest, best, i;
-    if (!bank || !bank->ready || slot < 0 || slot >= bank->slot_count) return -1;
+    if (!bank_is_ready(bank) || slot < 0 || slot >= bank->slot_count) return -1;
     entry = &bank->slots[slot];
     if (entry->zone_count < 1) return -1;
     nearest = (int)entry->zone_index;
@@ -109,7 +109,7 @@ float sample_take(const SampleBank *bank, int zone, float *pos, float inc) {
     SampleZone *row;
     float p, next, frac, a, b;
     int i;
-    if (!bank || !bank->ready || !pos || zone < 0 || zone >= bank->zone_count) return 0;
+    if (!bank_is_ready(bank) || !pos || zone < 0 || zone >= bank->zone_count) return 0;
     row = &bank->zones[zone];
     p = *pos;
     next = p + inc;
@@ -137,7 +137,7 @@ void arm_sample_drum(Engine *engine, Drum *drum, const char *params, float pitch
     drum->sample_pos = 0;
     drum->sample_inc = 0;
     bank = &engine->samples;
-    if (!bank->ready) return;
+    if (!bank_is_ready(bank)) return;
     cat = drum->lane < 4 ? drum->lane : 4;
     index = sample_index(read_param(params, "sample", 0.0f), bank->catalog_count[cat]);
     if (index <= 0) return;
@@ -156,7 +156,7 @@ void arm_sample_note(Engine *engine, Note *note, const char *params, int midi, i
     SampleBank *bank = &engine->samples;
     int index, slot, zone, same;
     float base, ratio, remembered;
-    if (!bank->ready) {
+    if (!bank_is_ready(bank)) {
         note->sample_on = 0;
         return;
     }
