@@ -3,7 +3,7 @@ import { defaultDeck, focusedGroup, groupIndex, stickDeckFocus } from "./deck.ts
 import { defaultBus, defaultGlobal, defaultProgression, defaultProject } from "./defaults.ts";
 import { nodeAt, setPath } from "./fields.ts";
 import { hash01 } from "./hash.ts";
-import { bindingFor, laneScopePaths } from "./pages.ts";
+import { bindingFor, bindingOn, laneScopePaths } from "./pages.ts";
 import {
   LANES,
   SCALE_IDS,
@@ -72,8 +72,8 @@ interface KnobSpec {
   weight: number;
 }
 
-function knobSpec(path: string): KnobSpec | null {
-  const binding = bindingFor(path);
+function knobSpec(path: string, lane?: PatternId): KnobSpec | null {
+  const binding = lane ? bindingOn(lane, path) : bindingFor(path);
   if (!binding) return null;
   // Pattern below zero names a voice. A roll stays in motif ids.
   let min = path.endsWith(".pattern") ? Math.max(0, binding.min) : binding.min;
@@ -97,13 +97,13 @@ function spendPage(project: Project, lane: PatternId, paths: string[], tag: stri
   const depth = project.randomizeDepth;
   const intensity = project.randomizeIntensity;
   if (intensity === "clear") return project;
-  const eligible = paths.filter((path) => depthAllows(path, depth) && knobSpec(path));
+  const eligible = paths.filter((path) => depthAllows(path, depth) && knobSpec(path, lane));
   if (!eligible.length) return project;
   const nonce = project.randomizeNonce + 1;
   const working = clone(project.working);
   const roll = (...parts: (string | number)[]) =>
     hash01(project.global.seed, "capture", nonce, lane, tag, intensity, depth, ...parts);
-  applySplitBudget(working[lane], factoryLane(lane), eligible, roll, intensity);
+  applySplitBudget(working[lane], factoryLane(lane), eligible, roll, intensity, lane);
   return { ...project, working, randomizeNonce: nonce };
 }
 
@@ -114,13 +114,14 @@ function applySplitBudget(
   paths: string[],
   roll: (...parts: (string | number)[]) => number,
   intensity: Exclude<RandomizeIntensity, "clear">,
+  lane?: PatternId,
 ): void {
   const budget = PAGE_BUDGET[intensity];
   const cap = BUDGET_CAP[intensity];
   const generators = paths.filter(isGeneratorPath);
   const values = paths.filter((path) => !isGeneratorPath(path));
-  if (generators.length) applyBudget(root, homes, generators, roll, budget, cap);
-  if (values.length) applyBudget(root, homes, values, roll, budget, cap);
+  if (generators.length) applyBudget(root, homes, generators, roll, budget, cap, lane);
+  if (values.length) applyBudget(root, homes, values, roll, budget, cap, lane);
 }
 
 function applyBudget(
@@ -130,6 +131,7 @@ function applyBudget(
   roll: (...parts: (string | number)[]) => number,
   budget: number,
   capFraction: number,
+  lane?: PatternId,
 ): void {
   const ordered = paths
     .map((path) => ({ path, rank: roll("ord", path) }))
@@ -138,7 +140,7 @@ function applyBudget(
   const cap = budget * capFraction;
   for (const { path } of ordered) {
     if (left <= 1e-9) break;
-    const spec = knobSpec(path);
+    const spec = knobSpec(path, lane);
     let current = readNumber(root, path);
     let home = readNumber(homes, path);
     if (!spec || current === null || home === null) continue;

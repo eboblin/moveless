@@ -4,3 +4,5 @@ dist/
 input data/
 ui.js
 dsp.so
+samples.bin
+samples-cache/

@@ -1,4 +1,5 @@
 import { DECK_GROUPS, deckSlots, defaultDeck, rowKnobName, slotKnobName, type DeckGroup, type DeckKnobs, type DeckSlot } from "./deck.ts";
+import { sampleDetents, sampleStep } from "./samples.ts";
 import {
   LANE_CODE,
   LANES,
@@ -20,7 +21,7 @@ import {
 export type MorphKind = "lerp" | "switch";
 export type KnobStore = "lane" | "progression" | "global" | "mixer" | "macro" | "bus" | "deck";
 /** How the screen draws a knob. `number` is the plain 0..99 cell. */
-export type KnobDisplay = "number" | "pitch" | "octave" | "note" | "scale" | "division" | "chordTone" | "slice" | "count" | "time" | "fade" | "rollTone" | "span" | "spread" | "flow";
+export type KnobDisplay = "number" | "pitch" | "octave" | "note" | "scale" | "division" | "chordTone" | "slice" | "count" | "time" | "fade" | "rollTone" | "span" | "spread" | "flow" | "sample";
 
 export interface Binding {
   path: string;
@@ -416,6 +417,16 @@ function lengthPage(): Page {
   ]);
 }
 
+/** One VPCA after the timbre pairs. Value steps one library entry and morphs by switch. */
+function samplePage(lane: LaneId): Page {
+  const step = sampleStep(lane);
+  const field: FieldSpec = { label: "SAMPLE", weight: 2, display: "sample", step, detent: sampleDetents(lane), macro: [] };
+  const item = page("sample", "SAMPLE", ["SAMPLE", null], "sound", vpca("sound.sample", field, "sound"));
+  const value = item.bindings[0];
+  if (value) value.morph = "switch";
+  return item;
+}
+
 function soundPages(ids: readonly FieldId[]): Page[] {
   const pages: Page[] = [];
   for (let i = 0; i < ids.length; i += 2) {
@@ -458,6 +469,7 @@ function drumPages(lane: DrumId): Page[] {
     pair("ratchet.count", FIELD.count, "ratchet.rate", FIELD.rate, "pattern"),
     pair("ratchet.fade", FIELD.fade, "ratchet.tone", ROLL_TONE, "pattern"),
     ...soundPages(SOUND[lane]),
+    samplePage(lane),
     filterPage(),
     sendPage(),
   ];
@@ -472,6 +484,7 @@ function pitchedPages(lane: PitchedId): Page[] {
     pair("pitch", { ...FIELD.pitch, detent: [0.5] }, "octave", FIELD.octave, "notes"),
     lengthPage(),
     ...soundPages(SOUND[lane]),
+    samplePage(lane),
     filterPage(),
     sendPage(),
   ];
@@ -501,6 +514,7 @@ function chordPages(): Page[] {
     pair("tone", FIELD.tone, "octave", FIELD.octave, "notes"),
     pair("spread", FIELD.spread, "flow", FIELD.flow, "notes"),
     ...soundPages(SOUND.chords),
+    samplePage("chords"),
     filterPage(),
     sendPage(),
   ];
@@ -902,6 +916,16 @@ export function pageGroupColor(context: ContextId, index: number): number {
 /** First binding with this path. Ranges are the same on every lane that has the knob. */
 export function bindingFor(path: string): Binding | null {
   return byPath.get(path) ?? null;
+}
+
+/** This lane's own binding. Sample step and detents differ by catalog. */
+export function bindingOn(context: ContextId, path: string): Binding | null {
+  for (const item of pagesFor(context)) {
+    for (const binding of item.bindings) {
+      if (binding?.path === path) return binding;
+    }
+  }
+  return bindingFor(path);
 }
 
 for (const context of STEPS) pagesFor(context);

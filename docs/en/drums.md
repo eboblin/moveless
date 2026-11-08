@@ -1,6 +1,6 @@
 # Drums
 
-Four red buttons: kick, snare, hat, perc. They are built the same way, and they differ in the sound. Ten pages in three groups.
+Four red buttons: kick, snare, hat, perc. They are built the same way, and they differ in the sound. Eleven pages in three groups.
 
 ![A finger on the jog with kick selected: four orange pattern pads, four blue sound pads, two green pads for the filter and the sends. The first orange one is blinking — the current page](../images/shot-2.png)
 
@@ -30,7 +30,9 @@ Four pages, two knobs each. Each drum has its own set.
 
 **Perc**: pitch, material, decay, bend, fm, ratio, attack, damp. Material is membrane, wood, cavity, bell, metal, digital. Fm and ratio are a second tone in the nord style, with detents on whole intervals. Damp kills the top.
 
-All of these knobs are a full VPCA, so the timbre can breathe along a motif, or listen to another lane. For example, a kick decay with pattern -2 will shorten on every snare.
+**Sample** is the page after those four. One knob, the other four encoders empty. Zero keeps the drum synthesizer. Above zero is a recording from the drum-machine library, split by the lane: kicks, snares, hats, and everything else. The pitch knob then transposes that recording by up to an octave either way, and 50 plays it at the recorded pitch. Decay, drive, the hat pan, the filter, and the sends still apply.
+
+All of these knobs are a full VPCA, so the timbre can breathe along a motif, or listen to another lane. For example, a kick decay with pattern -2 will shorten on every snare. The sample index is read when the hit lands, so a pattern on SAMPLE picks the recording of the next hit.
 
 ## Green: filter and sends
 

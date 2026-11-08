@@ -8,6 +8,8 @@ import { applyMorph, handoffGain, morphHandoffs } from "../src/core/morph.ts";
 import { clone } from "../src/core/clone.ts";
 import { launchScene, record } from "../src/core/performance.ts";
 import { mapFilter, mapKick, mapSend, mapSound } from "../src/dsp/map.ts";
+import { assembleBank, decodeBank, encodeBank, zoneForNote, type SampleZone } from "../src/dsp/bank.ts";
+import { sampleLabel } from "../src/core/samples.ts";
 import { eventsInBlock, formatDucks, laneDucks, phraseLoop, soundMotions } from "../src/dsp/schedule.ts";
 import { envelopeTable, laneEnvelopeAt, melodyContour, melodyLevel, readEnvelope } from "../src/dsp/envelope.ts";
 import { applyDeckCommand, applyDeckTone, createEngine, filterSample, formatBus, glideSeconds, loadPhrase, melodyCutoff, meterPage, packBlock, packPhrase, packPhraseBody, parseMeterPage, placeClock, renderBlock, renderClock, renderDryBlock } from "../src/dsp/voice.ts";
@@ -1776,6 +1778,162 @@ function impulsePeak(knobs: FxReverb): number {
   }
   return best;
 }
+
+function renderStereo(events: Parameters<typeof loadPhrase>[1], frames: number, bank: ReturnType<typeof assembleBank> | null): Float32Array {
+  const engine = createEngine();
+  engine.bank = bank;
+  loadPhrase(engine, events, 120, true);
+  const out = new Float32Array(frames * 2);
+  let at = 0;
+  while (at < frames) {
+    const n = Math.min(128, frames - at);
+    out.set(renderDryBlock(engine, n), at * 2);
+    at += n;
+  }
+  return out;
+}
+
+function toneHz(stereo: Float32Array, from: number, to: number): number {
+  let crosses = 0;
+  let prev = 0;
+  for (let i = from; i < to; i++) {
+    const x = stereo[i * 2] ?? 0;
+    if (prev <= 0 && x > 0) crosses += 1;
+    prev = x;
+  }
+  return (crosses * SAMPLE_RATE) / (to - from);
+}
+
+function sinePcm(frames: number, hz: number): Int16Array {
+  const pcm = new Int16Array(frames);
+  for (let i = 0; i < frames; i++) pcm[i] = Math.round(Math.sin((2 * Math.PI * hz * i) / SAMPLE_RATE) * 20000);
+  return pcm;
+}
+
+function zone(over: Partial<SampleZone> & Pick<SampleZone, "offset" | "length">): SampleZone {
+  return {
+    loopStart: 0,
+    loopEnd: 0,
+    originalPitch: 6900,
+    coarseTune: 0,
+    fineTune: 0,
+    sampleRate: SAMPLE_RATE,
+    keyLo: 0,
+    keyHi: 127,
+    hasLoop: false,
+    ...over,
+  };
+}
+
+describe("sample reader", () => {
+  it("keeps index 0 on the current synth", () => {
+    const loop = SAMPLE_RATE;
+    const kick = {
+      sample: 0,
+      loop,
+      lane: "kick" as const,
+      note: 36,
+      velocity: 110,
+      lengthTicks: SIXTEENTH_TICKS,
+      params: mapKick({ pitch: 0.4, decay: 0.4, bend: 0.4, bendTime: 0.3, body: 0.2, click: 0.4, noise: 0.1, drive: 0.1 }),
+    };
+    const withZero = {
+      ...kick,
+      params: [...kick.params, { id: "sample", value: 0 }],
+    };
+    const bank = assembleBank(
+      [1, 0, 0, 0, 0],
+      [{ zoneIndex: 0, zoneCount: 1 }],
+      [zone({ offset: 0, length: 32, originalPitch: 6000 })],
+      new Int16Array(32),
+    );
+    const plain = renderStereo([kick], 256, null);
+    const held = renderStereo([withZero], 256, bank);
+    assert.equal(held.length, plain.length);
+    for (let i = 0; i < plain.length; i++) assert.equal(held[i], plain[i]);
+  });
+
+  it("plays a root zone at the note frequency", () => {
+    const frames = 8000;
+    const pcm = sinePcm(frames, 440);
+    const low = new Int16Array(frames);
+    const bank = assembleBank(
+      [0, 0, 0, 0, 1],
+      [{ zoneIndex: 0, zoneCount: 2 }],
+      [zone({ offset: 0, length: frames, keyHi: 59 }), zone({ offset: frames, length: frames, keyLo: 60 })],
+      (() => {
+        const all = new Int16Array(frames * 2);
+        all.set(low, 0);
+        all.set(pcm, frames);
+        return all;
+      })(),
+    );
+    assert.equal(zoneForNote(bank, 0, 69), 1);
+    assert.equal(zoneForNote(bank, 0, 40), 0);
+    const loop = SAMPLE_RATE * 2;
+    const note = {
+      sample: 0,
+      loop,
+      lane: "bass" as const,
+      note: 69,
+      velocity: 100,
+      lengthTicks: 64 * SIXTEENTH_TICKS,
+      params: [
+        ...mapSound("bass", { wave: 0, glide: 0, sync: 0, fold: 0, drive: 0, wide: 0, attack: 0, release: 0, sustain: 1, env: 0, sample: 1 }),
+        ...mapFilter({ cutoff: 0.5, resonance: 0 }),
+        ...mapSend({ reverb: 0, delay: 0 }),
+      ],
+    };
+    const audio = renderStereo([note], 6000, bank);
+    const hz = toneHz(audio, 2000, 5000);
+    assert.ok(Math.abs(hz - 440) < 2, `root zone played ${hz} Hz`);
+    const bytes = encodeBank(bank);
+    const back = decodeBank(bytes);
+    assert.ok(back);
+    assert.equal(back.counts[4], 1);
+    assert.equal(back.zones[1]?.originalPitch, 6900);
+    assert.equal(back.pcm[frames], pcm[0]);
+  });
+
+  it("restarts a drum buffer when the hit retriggers", () => {
+    const pcm = new Int16Array(400);
+    pcm[0] = 28000;
+    const bank = assembleBank(
+      [1, 0, 0, 0, 0],
+      [{ zoneIndex: 0, zoneCount: 1 }],
+      [zone({ offset: 0, length: pcm.length, originalPitch: 6000 })],
+      pcm,
+    );
+    const hit = (at: number) => ({
+      sample: at,
+      loop: SAMPLE_RATE,
+      lane: "kick" as const,
+      note: 36,
+      velocity: 127,
+      lengthTicks: SIXTEENTH_TICKS,
+      params: mapKick({ pitch: 0.5, decay: 0.9, bend: 0, bendTime: 0.2, body: 0, click: 0, noise: 0, drive: 0, sample: 1 }),
+    });
+    const audio = renderStereo([hit(0), hit(90)], 200, bank);
+    const spike = (at: number) => Math.abs(audio[at * 2] ?? 0);
+    assert.ok(spike(0) > 0.2, `first hit ${spike(0)}`);
+    assert.ok(spike(90) > spike(0) * 0.5, `retrigger ${spike(90)} against ${spike(0)}`);
+    let gap = 0;
+    for (let i = 20; i < 80; i++) gap += Math.abs(audio[i * 2] ?? 0);
+    assert.ok(gap < spike(0), `gap ${gap} against ${spike(0)}`);
+    assert.equal(sampleLabel("kick", 0), "SYNTH");
+  });
+
+  it("does not rewrite the sample while a note is held", () => {
+    const project = defaultProject();
+    project.working.kick.gen1 = { ...project.working.kick.gen1, hits: 4 };
+    project.working.bass.sound.sample = { ...project.working.bass.sound.sample, amount: 1, pattern: 2, cycle: 8 };
+    const motions = soundMotions(project);
+    assert.equal(motions.some((motion) => motion.id === "sample"), false);
+    const hit = phraseLoop(project).find((event) => event.lane === "kick");
+    assert.ok(hit);
+    assert.ok(hit.params.some((param) => param.id === "sample" && param.value === 0));
+  });
+});
 
 function sideDifference(width: number): number {
   const audio = renderBlock(createEngine(), [{

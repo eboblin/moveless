@@ -9,6 +9,7 @@ import { isPitched, isVoice, LANES, LANE_CODE, type RandomizeDepth, type Randomi
 import { DIGIT_H, displayAmount, divisionCell, type BigAmount, type DisplayAmount } from "./digits.ts";
 import { readControl } from "./controls.ts";
 import { bindingFor, deckPage, livePage, mixerPage, pageTitle, pagesFor, type Binding, type Page } from "../core/pages.ts";
+import { sampleCount, sampleIndex, sampleLabel } from "../core/samples.ts";
 import { focusVisible, macroReturnValue, PAGE_TITLE_SLIDE_MS, screenPlace, type CaptureLine, type RandomizeLine, type UiState } from "./state.ts";
 import { lettersWidth, plotLetters } from "./letters.ts";
 import { readEnvelope } from "../dsp/envelope.ts";
@@ -1252,6 +1253,9 @@ function figureHeader(project: Project, context: ContextId, binding: Binding, st
     case "slice":
       if (context !== "chords") return null;
       return restingSliceLabel(project.working.chords, project.global);
+    case "sample":
+      if (context === "fx" || context === "aux") return null;
+      return sampleLabel(context, readControl(project, context, binding.path));
     case "spread":
     case "flow": {
       if (context !== "chords") return null;
@@ -1279,6 +1283,12 @@ function knobAmount(project: Project, context: ContextId, binding: Binding, ui: 
       return { kind: "wide", text: scaleShort(project.global.scale), negative: false };
     case "count":
       return { kind: "big", n: countFromUnit(readControl(project, context, binding.path)), negative: false };
+    case "sample": {
+      if (context === "fx" || context === "aux") break;
+      const n = sampleIndex(readControl(project, context, binding.path), sampleCount(context));
+      if (n <= 99) return { kind: "big", n, negative: false };
+      return { kind: "wide", text: String(n), negative: false };
+    }
     case "division": {
       const unit = readControl(project, context, binding.path);
       if (context === "chords" && unit <= 0) return { kind: "wide", text: "BLK", negative: false };

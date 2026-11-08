@@ -3,6 +3,7 @@ import { THROW_DELAY, throwPreset, type DeckCommand, type ThrowDelay } from "../
 import { defaultBus, defaultFx } from "../core/defaults.ts";
 import { applyVoiceEnvelope, evalModulated, voiceLane } from "../core/modulate.ts";
 import { DRUM_HZ, isDrum, LANES, type Bus, type DrumId, type Fx, type LaneId } from "../core/types.ts";
+import { frameInc, readFrame, resolveSample, type SampleBank } from "./bank.ts";
 import { commandDeck, createDeckRuntime, deckTargetLead, deckThrow, hearDeck, writeDeckBlock, type DeckRuntime } from "./deck.ts";
 import { envelopeTable, hatBodySeconds, hatDecaySeconds, kickDecaySeconds, melodyContour, melodyLevel, melodyReleaseSeconds, melodySustain, percDecaySeconds, readEnvelope, snareBodyDecaySeconds, snareClickSamples, snareNoiseDecaySeconds, type EnvelopeTable } from "./envelope.ts";
 import type { EngineParam } from "./map.ts";
@@ -122,6 +123,10 @@ export interface Engine {
   deckShadow: Engine | null;
   /** Last sounded frequency of each lane, so a fresh glide still starts from it. */
   laneFreq: number[];
+  /** Last sample playback ratio of each lane. Glide starts from here. */
+  laneSampleRate: number[];
+  /** Null until a bank is installed. Index 0 still plays the synth. */
+  bank: SampleBank | null;
   /** Voices claimed while arming one sample. */
   armSerial: number;
   armClock: number;
@@ -218,6 +223,11 @@ interface DrumVoice {
   clickK: number;
   /** Hit level. Body and noise envelopes already start here; the transient has its own shape and uses this as a gain. */
   gain: number;
+  /** Library slot is playing instead of the procedural body. */
+  sampleOn: boolean;
+  sampleZone: number;
+  samplePos: number;
+  sampleInc: number;
   /** Short stereo delay for perc. Kick, snare and hat leave it unused. */
   haas: Float32Array;
   haasI: number;
@@ -294,6 +304,13 @@ interface NoteVoice {
   lane: number;
   /** MIDI note, stamped at note on. Chord spread reads it. */
   pitch: number;
+  /** Library zone is playing instead of the wavetable. */
+  sampleOn: boolean;
+  sampleZone: number;
+  samplePos: number[];
+  /** Current and destination playback ratios. Glide slews one toward the other. */
+  sampleRate: number;
+  sampleTarget: number;
   loop: number;
   /** Short stereo delay for the lead. Bass and chords leave it unused. */
   haas: Float32Array;
@@ -343,6 +360,8 @@ export function createEngine(): Engine {
     deck: createDeckRuntime(),
     deckShadow: null,
     laneFreq: Array.from({ length: LANE_COUNT }, () => 0),
+    laneSampleRate: Array.from({ length: LANE_COUNT }, () => 0),
+    bank: null,
     armSerial: 0,
     armClock: -1,
     env: Array.from({ length: 7 }, () => null),
@@ -880,14 +899,18 @@ function cloneDeckShadow(engine: Engine): Engine {
   const savedShadow = engine.deckShadow;
   const ringL = engine.deck.ringL;
   const ringR = engine.deck.ringR;
+  const bank = engine.bank;
   engine.deckShadow = null;
+  engine.bank = null;
   engine.deck.ringL = new Float32Array(0);
   engine.deck.ringR = new Float32Array(0);
   const copy = structuredClone(engine);
   engine.deckShadow = savedShadow;
+  engine.bank = bank;
   engine.deck.ringL = ringL;
   engine.deck.ringR = ringR;
   copy.deckShadow = null;
+  copy.bank = bank;
   copy.deck.bypass = true;
   copy.deck.ringL = ringL;
   copy.deck.ringR = ringR;
@@ -1033,7 +1056,7 @@ function trigger(engine: Engine, event: BlockEvent | LoopEvent, tempo: number): 
   if (event.lane === "kick" || event.lane === "snare" || event.lane === "hat" || event.lane === "perc") {
     const drum = engine.drums[drumIndex(event.lane)];
     const pitch = read(event.params, ["freq"], 0.5);
-    armDrum(drum, event, pitch, loop);
+    armDrum(engine, drum, event, pitch, loop);
     if (event.lane === "kick") engine.pumpEnv = 1;
     if (event.lane === "perc") clearHaas(drum);
     return;
@@ -1042,7 +1065,7 @@ function trigger(engine: Engine, event: BlockEvent | LoopEvent, tempo: number): 
   armNote(engine, event, samples, loop);
 }
 
-function armDrum(drum: DrumVoice, event: BlockEvent | LoopEvent, pitch: number, loop: number): void {
+function armDrum(engine: Engine, drum: DrumVoice, event: BlockEvent | LoopEvent, pitch: number, loop: number): void {
   const lane = drumIndex(event.lane);
   const vel = event.velocity / 127;
   drum.gain = vel;
@@ -1123,6 +1146,7 @@ function armDrum(drum: DrumVoice, event: BlockEvent | LoopEvent, pitch: number, 
   drum.reverb = read(event.params, ["reverb"], 0);
   drum.delay = read(event.params, ["delay"], 0);
   refreshDrumEnv(drum);
+  armDrumSample(engine, drum, event, pitch);
 }
 
 function midiFreq(pitch: number): number {
@@ -1224,6 +1248,7 @@ function armNote(engine: Engine, event: BlockEvent | LoopEvent, samples: number,
   if (glide <= 1e-4) note.freq = note.target;
   note.claim = serial;
   stampNote(engine, note);
+  armNoteSample(engine, note, event, legato);
   return note;
 }
 
@@ -1237,16 +1262,56 @@ function armFresh(engine: Engine, note: NoteVoice, event: LoopEvent, samples: nu
   note.freq = note.target;
   note.claim = serial;
   stampNote(engine, note);
+  armNoteSample(engine, note, event, false);
   return note;
 }
 
+function armDrumSample(engine: Engine, drum: DrumVoice, event: BlockEvent | LoopEvent, pitch: number): void {
+  const picked = resolveSample(engine.bank, drum.lane, knob(event, "sample", 0), event.note, false, pitch);
+  const zone = picked && engine.bank ? engine.bank.zones[picked.zone] : undefined;
+  drum.sampleOn = false;
+  drum.samplePos = 0;
+  drum.sampleInc = 0;
+  if (!picked || !zone) return;
+  drum.sampleOn = true;
+  drum.sampleZone = picked.zone;
+  drum.sampleInc = frameInc(zone, picked.ratio, SAMPLE_RATE);
+}
+
+function armNoteSample(engine: Engine, note: NoteVoice, event: BlockEvent | LoopEvent, legato: boolean): void {
+  const picked = resolveSample(engine.bank, note.lane, knob(event, "sample", 0), event.note, true, 0.5);
+  const zone = picked && engine.bank ? engine.bank.zones[picked.zone] : undefined;
+  if (!picked || !zone) {
+    note.sampleOn = false;
+    return;
+  }
+  const same = legato && note.sampleOn && note.sampleZone === picked.zone;
+  note.sampleTarget = picked.ratio;
+  if (!same) {
+    note.samplePos = [0, 0, 0];
+    const remembered = engine.laneSampleRate[note.lane] ?? 0;
+    note.sampleRate = note.glide > 1e-4 && remembered > 0 ? remembered : picked.ratio;
+  }
+  note.sampleOn = true;
+  note.sampleZone = picked.zone;
+}
+
 function drumSample(engine: Engine, drum: DrumVoice): [number, number] {
-  const freq = drum.freq * 2 ** (drum.bend * drum.pitchEnv);
-  const body = drum.lane === 2 ? hatBody(drum, freq) : tonalBody(drum, freq);
-  const noisy = noiseSample(engine, drum) * drum.noiseEnv;
-  const click = transientSample(engine, drum) * drum.gain;
-  let mid = body.mid * drum.env + noisy + click;
-  let side = body.side * drum.env;
+  let mid = 0;
+  let side = 0;
+  if (drum.sampleOn && engine.bank) {
+    const read = readFrame(engine.bank, drum.sampleZone, drum.samplePos, drum.sampleInc);
+    drum.samplePos = read.pos;
+    mid = read.value * drum.env;
+    drum.clickEnv *= drum.clickK;
+  } else {
+    const freq = drum.freq * 2 ** (drum.bend * drum.pitchEnv);
+    const body = drum.lane === 2 ? hatBody(drum, freq) : tonalBody(drum, freq);
+    const noisy = noiseSample(engine, drum) * drum.noiseEnv;
+    const click = transientSample(engine, drum) * drum.gain;
+    mid = body.mid * drum.env + noisy + click;
+    side = body.side * drum.env;
+  }
   if (drum.drive > 1e-4) {
     const amount = drum.drive * drum.drive;
     mid = shapeDrive(mid, amount);
@@ -1325,13 +1390,62 @@ function slewNote(note: NoteVoice): void {
   note.freq = Math.exp(logF + (logT - logF) * k);
 }
 
+function slewSample(note: NoteVoice): void {
+  const tau = glideSeconds(note.glide);
+  if (!(tau > 0) || !(note.sampleRate > 0)) {
+    note.sampleRate = note.sampleTarget;
+    return;
+  }
+  const k = 1 - Math.exp(-1 / (tau * SAMPLE_RATE));
+  const logF = Math.log(note.sampleRate);
+  const logT = Math.log(Math.max(note.sampleTarget, 1e-6));
+  note.sampleRate = Math.exp(logF + (logT - logF) * k);
+}
+
 function noteSample(engine: Engine, note: NoteVoice): [number, number] {
   slewNote(note);
   const inc = (TWO_PI * note.freq) / SAMPLE_RATE;
   const open = note.wide > 1e-4;
   let mid = 0;
   let side = 0;
-  if (!open) {
+  if (note.sampleOn && engine.bank) {
+    slewSample(note);
+    const zone = engine.bank.zones[note.sampleZone];
+    const base = zone ? frameInc(zone, note.sampleRate, SAMPLE_RATE) : 0;
+    if (!open) {
+      const read = readFrame(engine.bank, note.sampleZone, note.samplePos[1] ?? 0, base);
+      note.samplePos[1] = read.pos;
+      mid = shapeNote(read.value, 0, note.drive);
+    } else {
+      if (note.wideKey !== note.wide) {
+        const w = note.wide * note.wide;
+        const cents = note.wide * UNI_CENTS;
+        note.sideW = w;
+        note.uniNorm = 1 / Math.sqrt(1 + 2 * w * w);
+        note.ratioLo = 2 ** (-cents / 1200);
+        note.ratioHi = 2 ** (cents / 1200);
+        note.wideKey = note.wide;
+      }
+      const w = note.sideW;
+      const norm = note.uniNorm;
+      const center = readFrame(engine.bank, note.sampleZone, note.samplePos[1] ?? 0, base);
+      note.samplePos[1] = center.pos;
+      mid = shapeNote(center.value, 0, note.drive);
+      const low = readFrame(engine.bank, note.sampleZone, note.samplePos[0] ?? 0, base * note.ratioLo);
+      note.samplePos[0] = low.pos;
+      const lowScaled = shapeNote(low.value, 0, note.drive) * w;
+      mid += lowScaled;
+      side += lowScaled * -UNI_PAN;
+      const high = readFrame(engine.bank, note.sampleZone, note.samplePos[2] ?? 0, base * note.ratioHi);
+      note.samplePos[2] = high.pos;
+      const highScaled = shapeNote(high.value, 0, note.drive) * w;
+      mid += highScaled;
+      side += highScaled * UNI_PAN;
+      mid *= norm;
+      side *= norm;
+    }
+    if (note.lane >= 0 && note.lane < LANE_COUNT) engine.laneSampleRate[note.lane] = note.sampleRate;
+  } else if (!open) {
     mid = shapeNote(advanceOsc(note, 1, inc, note.sync, note.bend, note.wave), note.fold, note.drive);
   } else {
     // Three readers. The detune ratio and the mip stay put until wide, wave or frequency moves.
@@ -2213,6 +2327,7 @@ function emptyDrum(): DrumVoice {
     decay: 0.2, noiseDecay: 0.05, bendTime: 0.08, bend: 0, body: 0, noise: 0, tone: 0.3,
     click: 0, drive: 0, fm: 0, ratio: 1, ring: 0, pos: 0.5, damp: 0,
     cutoff: 0.5, resonance: 0, reverb: 0, delay: 0, nlp: 0, nhp: 0, flt: 0, band: 0, loop: 0,
+    sampleOn: false, sampleZone: 0, samplePos: 0, sampleInc: 0,
     envK: 1, noiseK: 1, pitchK: 1, clickK: 1, gain: 0,
     haas: new Float32Array(HAAS_N), haasI: 0,
   };
@@ -2226,6 +2341,7 @@ function emptyNote(): NoteVoice {
     glide: 0, sustain: 1, envAmt: 0, filterEnv: 0, target: 0, claim: 0,
     cutoff: 0.5, resonance: 0, reverb: 0, delay: 0, attack: 0, release: 0.4, gain: 0,
     low: 0, band: 0, lane: 0, pitch: 0, loop: 0,
+    sampleOn: false, sampleZone: 0, samplePos: [0, 0, 0], sampleRate: 0, sampleTarget: 0,
     haas: new Float32Array(HAAS_N), haasI: 0,
   };
 }

@@ -1,6 +1,6 @@
 # Bass and lead
 
-Two yellow buttons, the same instrument at a different pitch. The bass is in the third octave by default, the lead in the fourth. Twelve pages in four groups, and the second line of pages runs onto the second row of pads.
+Two yellow buttons, the same instrument at a different pitch. The bass is in the third octave by default, the lead in the fourth. Thirteen pages in four groups, and the second line of pages runs onto the second row of pads.
 
 ![A finger on the jog with bass selected. Top row: three orange pattern pads, a white blinking one — the current pitch / octave page, a turquoise length pad, three blue sound pads. Second row: two more blue ones and two green ones — the filter and the sends. The screen says PITCH / OCTAVE](../images/shot-11.png)
 
@@ -31,6 +31,8 @@ Five pages, two knobs each, the same for the bass, the lead, and the chords. The
 - **Drive / wide**. Drive is a soft clip. Wide is two side copies, detuned outward: a chorus that doesn't lose volume.
 - **Attack / sustain**. Attack is the share of the note length up to the peak. Sustain is the volume at the end of the note: 0 is a pluck, 1 is a shelf.
 - **Release / flt env**. Release is the tail after the note ends. Env is how far the filter opens on the attack and closes toward the end of the note.
+
+**Sample** follows those five. Zero is the wavetable. Above zero, the bass, the lead, and the chords share one GM list. The note picks the zone that covers its pitch. Attack, sustain, release, env, drive, glide, and wide stay on the recording.
 
 The volume envelope is tied to the note length: a long note is a long attack, a short note is a short one. A short length and a high release is a stab.
 

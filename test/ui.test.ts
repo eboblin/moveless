@@ -143,22 +143,27 @@ function vizInk(pixels: Uint8Array, x: number): boolean {
 }
 
 describe("pages and leds", () => {
-  it("gives drums ten pages and bass twelve", () => {
-    assert.equal(pageCount("kick"), 10);
-    assert.equal(pageCount("bass"), 12);
-    assert.equal(pageCount("lead"), 12);
-    assert.equal(pageCount("chords"), 12);
+  it("gives drums eleven pages and bass thirteen", () => {
+    assert.equal(pageCount("kick"), 11);
+    assert.equal(pageCount("bass"), 13);
+    assert.equal(pageCount("lead"), 13);
+    assert.equal(pageCount("chords"), 13);
     assert.equal(pageGroup("chords", 0), "pattern");
     assert.equal(pageGroup("chords", 1), "pattern");
-    assert.equal(pageGroup("kick", 8), "fx");
+    assert.equal(pageGroup("kick", 8), "sound");
+    assert.equal(lanePages("kick")[8]?.title, "SAMPLE");
     assert.equal(pageGroup("kick", 9), "fx");
+    assert.equal(pageGroup("kick", 10), "fx");
     assert.equal(pageGroup("bass", 9), "sound");
     assert.equal(lanePages("bass")[8]?.title, "ATTACK / SUSTAIN");
     assert.equal(lanePages("bass")[9]?.title, "RELEASE / FLT ENV");
     assert.deepEqual(lanePages("bass")[9]?.groups, ["RELEASE", "FLT ENV"]);
     assert.equal(lanePages("bass")[9]?.bindings[4]?.label, "ENV V");
-    assert.equal(pageGroup("bass", 10), "fx");
+    assert.equal(pageGroup("bass", 10), "sound");
+    assert.equal(lanePages("bass")[10]?.title, "SAMPLE");
+    assert.equal(lanePages("bass")[10]?.bindings[0]?.morph, "switch");
     assert.equal(pageGroup("bass", 11), "fx");
+    assert.equal(pageGroup("bass", 12), "fx");
     assert.equal(pageGroup("chords", 2), "pattern");
     assert.equal(pageGroupColor("chords", 2), 3);
     assert.equal(pageGroup("chords", 3), "notes");
@@ -174,9 +179,11 @@ describe("pages and leds", () => {
     assert.equal(lanePages("chords")[4]?.title, "SPREAD / FLOW");
     assert.equal(pageGroup("chords", 8), "sound");
     assert.equal(pageGroup("chords", 9), "sound");
-    assert.equal(pageGroup("chords", 10), "fx");
+    assert.equal(pageGroup("chords", 10), "sound");
+    assert.equal(lanePages("chords")[10]?.title, "SAMPLE");
     assert.equal(pageGroup("chords", 11), "fx");
-    assert.equal(pageGroupColor("kick", 8), 9);
+    assert.equal(pageGroup("chords", 12), "fx");
+    assert.equal(pageGroupColor("kick", 9), 9);
     assert.equal(lanePages("bass").at(-1)?.groups[0], "REV");
     assert.equal(lanePages("bass").at(-1)?.groups[1], "DLY");
     assert.equal(lanePages("bass").at(-2)?.groups[0], "FLT CUTOFF");
@@ -532,7 +539,8 @@ describe("pages and leds", () => {
     assert.equal(wheel[24].color, 3);
     assert.equal(wheel[24].blink, true);
     assert.equal(wheel[25].color, 3);
-    assert.equal(wheel[16].color, offColor(9));
+    assert.equal(wheel[16].color, offColor(20));
+    assert.equal(wheel[17].color, offColor(9));
     assert.equal(wheel[0].color, shadeColor(LED.yellow, 0.2));
     assert.equal(wheel[0].blink, false);
     assert.equal(wheel[1].color, LED.yellow);
@@ -560,7 +568,8 @@ describe("pages and leds", () => {
     assert.equal(bass[30].color, offColor(20));
     assert.equal(bass[16].color, offColor(20));
     assert.equal(bass[17].color, offColor(20));
-    assert.equal(bass[18].color, offColor(9));
+    assert.equal(bass[18].color, offColor(20));
+    assert.equal(bass[19].color, offColor(9));
     const chords = padLeds(project, "journal", { ...defaultUi(), wheelTouch: true, context: "chords" });
     assert.equal(chords[24].color, 3);
     assert.equal(chords[26].color, 3);
@@ -1191,9 +1200,9 @@ describe("surface", () => {
     const paging = renderScreen(state.project, { ...state.ui, wheelTouch: true }, 0);
     assert.equal(pixel(paging, 0, PAGER_Y), 1);
     assert.equal(pixel(paging, 1, PAGER_Y), 1);
-    assert.equal(pixel(paging, 14, PAGER_Y), 1);
-    assert.equal(pixel(paging, 16, PAGER_Y), 1);
-    assert.equal(pixel(paging, 17, PAGER_Y), 0);
+    assert.equal(pixel(paging, 10, PAGER_Y), 0);
+    assert.equal(pixel(paging, 11, PAGER_Y), 1);
+    assert.equal(pixel(paging, 12, PAGER_Y), 0);
     assert.equal(pixel(screen, 0, HEADER_H), 0);
     assert.equal(pixel(screen, 0, HEADER_H + VIZ_H - 2), 0);
     assert.ok(columnSpan(screen, 0) > 0);
@@ -1492,7 +1501,7 @@ describe("surface", () => {
     assert.equal(pixel(full, 0, PAGER_Y), 1);
     assert.equal(pixel(full, WIDTH - 1, PAGER_Y), 1);
     assert.equal(pixel(covered, 1, PAGER_Y), 1);
-    assert.equal(pixel(covered, 17, PAGER_Y), 0);
+    assert.equal(pixel(covered, 12, PAGER_Y), 0);
     const names = screen.labels.filter((label) => label.y === NAME_Y);
     assert.deepEqual(names.map((label) => label.text), ["LEN", "HIT", "ROT", "PRB", "V", "P", "C", "A"]);
     assert.equal(NAME_Y, HEIGHT - FONT_H - 1);
@@ -1525,8 +1534,9 @@ describe("surface", () => {
     assert.equal(pixel(screen, 60, HEADER_H), 0);
     const turned = renderScreen(defaultProject(), { ...defaultUi(), page: 2, wheelTouch: true }, 0);
     assert.equal(pixel(turned, 1, PAGER_Y), 0);
-    assert.equal(pixel(turned, 36, PAGER_Y), 1);
-    assert.equal(pixel(turned, 37, PAGER_Y), 0);
+    assert.equal(pixel(turned, 23, PAGER_Y), 1);
+    assert.equal(pixel(turned, 24, PAGER_Y), 1);
+    assert.equal(pixel(turned, 36, PAGER_Y), 0);
     const mix = renderScreen(defaultProject(), { ...openMixer(session()).ui, wheelTouch: true }, 0);
     assert.equal(pixel(mix, 0, PAGER_Y), 1);
     assert.equal(pixel(mix, 1, PAGER_Y), 0);
@@ -2037,7 +2047,7 @@ describe("surface", () => {
     const named = renderScreen(project, {
       ...defaultUi(),
       context: "kick",
-      page: 8,
+      page: 9,
       focus: { label: "CUTOFF P", path: "filter.cutoff.pattern", generator: "filter.cutoff", showPattern: true, held: true, untilTick: 0, untilMs: 0 },
     }, 0);
     assert.ok(named.labels.some((label) => label.text === "KCK" && label.cell === 1));
@@ -2045,7 +2055,7 @@ describe("surface", () => {
     const flat = {
       ...defaultUi(),
       context: "kick" as const,
-      page: 8,
+      page: 9,
       focus: { label: "CUTOFF V", path: "filter.cutoff.value", generator: "filter.cutoff", showPattern: false, held: true, untilTick: 0, untilMs: 0 },
     };
     const screen = renderScreen(project, flat, 0);
@@ -2063,7 +2073,7 @@ describe("surface", () => {
     const ui = {
       ...defaultUi(),
       context: "kick" as const,
-      page: 8,
+      page: 9,
       focus: { label: "CUTOFF V", path: "filter.cutoff.value", generator: "filter.cutoff", showPattern: false, held: true, untilTick: 0, untilMs: 0 },
     };
     const screen = renderScreen(project, ui, 0);
@@ -2554,10 +2564,10 @@ describe("surface", () => {
     assert.deepEqual(sound.project.working.kick.filter, heard.filter);
 
     let fx = session();
-    for (let n = 0; n < 8; n++) fx = reduce(fx, { kind: "cc", data1: 14, data2: 1 });
+    for (let n = 0; n < 9; n++) fx = reduce(fx, { kind: "cc", data1: 14, data2: 1 });
     const open = fx.project.working.kick;
     fx = loop(fx);
-    assert.equal(fx.ui.page, 8);
+    assert.equal(fx.ui.page, 9);
     assert.notDeepEqual(fx.project.working.kick.filter, open.filter);
     assert.deepEqual(fx.project.working.kick.sound, open.sound);
     assert.deepEqual(fx.project.working.kick.gen1, open.gen1);

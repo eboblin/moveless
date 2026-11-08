@@ -1,7 +1,6 @@
 #include "engine.h"
 
 void *create_instance(const char *module_dir, const char *json_defaults) {
-    (void)module_dir;
     (void)json_defaults;
     Engine *engine = calloc(1, sizeof(Engine));
     if (!engine) return NULL;
@@ -16,7 +15,9 @@ void *create_instance(const char *module_dir, const char *json_defaults) {
     engine->beats = 4.0f;
     engine->glue_gain = 1.0f;
     ensure_wave_table();
+    samples_load(engine, module_dir);
     if (!fx_init(engine)) {
+        samples_free(engine);
         fx_free(engine);
         free(engine->phrase_text);
         free(engine);
@@ -49,6 +50,7 @@ void set_param(void *instance, const char *key, const char *val) {
 void destroy_instance(void *instance) {
     Engine *engine = instance;
     if (!engine) return;
+    samples_free(engine);
     fx_free(engine);
     free(engine->phrase_text);
     free(engine);

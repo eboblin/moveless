@@ -1,6 +1,6 @@
 # Chords
 
-The third yellow button. The chords don't choose what to play — that is decided by the [harmony](harmony.md) on the purple button. The chords lane decides how: when to take them, how long to hold them, as a block or as a run through, and with what voice. Twelve pages in four groups.
+The third yellow button. The chords don't choose what to play — that is decided by the [harmony](harmony.md) on the purple button. The chords lane decides how: when to take them, how long to hold them, as a block or as a run through, and with what voice. Thirteen pages in four groups.
 
 ![A finger on the jog with chords selected: three orange, two turquoise, five blue, two green pads](../images/shot-23.png)
 
@@ -26,7 +26,7 @@ Tone with a pattern and an amount is the arpeggiator: the shape walks the voice 
 
 ## Blue: sound
 
-The same five pages as [bass and lead](bass-and-lead.md): wave / glide, sync / fold, drive / wide, attack / sustain, release / flt env.
+The same five pages as [bass and lead](bass-and-lead.md): wave / glide, sync / fold, drive / wide, attack / sustain, release / flt env. SAMPLE follows them and uses the same GM list. Each note of a chord reads its own zone of that preset.
 
 Wide is especially useful here: in a block it spreads the copies and makes the pad wide.
 

@@ -203,6 +203,7 @@ void arm_drum(Engine *engine, int lane, int note, int velocity, const char *para
     drum->reverb = read_param(params, "reverb", 0.0f);
     drum->delay = read_param(params, "delay", 0.0f);
     refresh_drum_env(drum);
+    arm_sample_drum(engine, drum, params, pitch);
 }
 
 /* Peaks above the passband squash into a thick acid tone instead of a spike. */
@@ -486,14 +487,19 @@ float shape_drive(float sample, float drive) {
 }
 
 void drum_sample(Engine *engine, Drum *drum, float *left, float *right) {
-    float freq = drum->freq * powf(2.0f, drum->bend * drum->pitch_env);
-    float mid = 0, side = 0, noisy, click, filtered;
-    if (drum->lane == 2) hat_body(drum, freq, &mid, &side);
-    else tonal_body(drum, freq, &mid, &side);
-    noisy = noise_sample(engine, drum) * drum->noise_env;
-    click = transient_sample(engine, drum) * drum->gain;
-    mid = mid * drum->env + noisy + click;
-    side *= drum->env;
+    float freq, mid = 0, side = 0, noisy, click, filtered;
+    if (drum->sample_on) {
+        mid = sample_take(&engine->samples, drum->sample_zone, &drum->sample_pos, drum->sample_inc) * drum->env;
+        drum->click_env *= drum->click_k;
+    } else {
+        freq = drum->freq * powf(2.0f, drum->bend * drum->pitch_env);
+        if (drum->lane == 2) hat_body(drum, freq, &mid, &side);
+        else tonal_body(drum, freq, &mid, &side);
+        noisy = noise_sample(engine, drum) * drum->noise_env;
+        click = transient_sample(engine, drum) * drum->gain;
+        mid = mid * drum->env + noisy + click;
+        side *= drum->env;
+    }
     if (drum->drive > 1e-4f) {
         float amount = drum->drive * drum->drive;
         mid = shape_drive(mid, amount);

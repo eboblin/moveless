@@ -229,6 +229,7 @@ Note *arm_note(Engine *engine, int note_num, int velocity, int ticks, const char
     if (glide <= 1e-4f) note->freq = note->target;
     note->claim = serial;
     stamp_note(engine, note);
+    arm_sample_note(engine, note, params, note_num, legato);
     return note;
 }
 
@@ -247,6 +248,7 @@ Note *arm_fresh(Engine *engine, Note *note, int note_num, int velocity, int tick
     note->freq = note->target;
     note->claim = serial;
     stamp_note(engine, note);
+    arm_sample_note(engine, note, params, note_num, 0);
     return note;
 }
 
@@ -262,6 +264,27 @@ float shape_note(float sample, float fold, float drive) {
         mix = driven / (1.0f + amount * fabsf(mix));
     }
     return mix;
+}
+
+static void slew_sample(Note *note) {
+    float tau = glide_seconds(note->glide);
+    float k, log_f, log_t;
+    if (!(tau > 0.0f) || !(note->sample_rate > 0.0f)) {
+        note->sample_rate = note->sample_target;
+        return;
+    }
+    k = 1.0f - expf(-1.0f / (tau * SR));
+    log_f = logf(note->sample_rate);
+    log_t = logf(note->sample_target > 1e-6f ? note->sample_target : 1e-6f);
+    note->sample_rate = expf(log_f + (log_t - log_f) * k);
+}
+
+static float sample_inc(const SampleBank *bank, const Note *note, float ratio) {
+    float sr;
+    if (!bank->ready || note->sample_zone < 0 || note->sample_zone >= bank->zone_count) return 0;
+    sr = bank->zones[note->sample_zone].sample_rate;
+    if (!(sr > 1.0f)) sr = SR;
+    return ratio * sr / SR;
 }
 
 void slew_note(Note *note) {
@@ -285,7 +308,40 @@ void note_sample(Engine *engine, Note *note, float *left, float *right) {
     slew_note(note);
     inc = (TWO_PI * note->freq) / SR;
     open = note->wide > 1e-4f;
-    if (!open) {
+    if (note->sample_on && engine->samples.ready) {
+        float base;
+        slew_sample(note);
+        base = sample_inc(&engine->samples, note, note->sample_rate);
+        if (!open) {
+            mid = shape_note(sample_take(&engine->samples, note->sample_zone, &note->sample_pos[1], base), 0.0f, note->drive);
+        } else {
+            float w, cents, shaped, scaled;
+            if (note->wide_key != note->wide) {
+                w = note->wide * note->wide;
+                cents = note->wide * UNI_CENTS;
+                note->side_w = w;
+                note->uni_norm = 1.0f / sqrtf(1.0f + 2.0f * w * w);
+                note->ratio_lo = powf(2.0f, -cents / 1200.0f);
+                note->ratio_hi = powf(2.0f, cents / 1200.0f);
+                note->wide_key = note->wide;
+            }
+            w = note->side_w;
+            norm = note->uni_norm;
+            shaped = shape_note(sample_take(&engine->samples, note->sample_zone, &note->sample_pos[1], base), 0.0f, note->drive);
+            mid = shaped;
+            shaped = shape_note(sample_take(&engine->samples, note->sample_zone, &note->sample_pos[0], base * note->ratio_lo), 0.0f, note->drive);
+            scaled = shaped * w;
+            mid += scaled;
+            side += scaled * (-UNI_PAN);
+            shaped = shape_note(sample_take(&engine->samples, note->sample_zone, &note->sample_pos[2], base * note->ratio_hi), 0.0f, note->drive);
+            scaled = shaped * w;
+            mid += scaled;
+            side += scaled * UNI_PAN;
+            mid *= norm;
+            side *= norm;
+        }
+        if (note->lane >= 0 && note->lane < LANE_COUNT) engine->lane_sample_rate[note->lane] = note->sample_rate;
+    } else if (!open) {
         /* Center voice only. Weight is 1, so the unison norm and the detune pow drop out. */
         mid = shape_note(advance_osc(note, 1, inc, note->sync, note->bend, note->wave), note->fold, note->drive);
     } else {

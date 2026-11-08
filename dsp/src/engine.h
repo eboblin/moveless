@@ -106,6 +106,10 @@ typedef struct {
     int loop;
     float haas[HAAS_N];
     int haas_i;
+    int sample_on;
+    int sample_zone;
+    float sample_pos;
+    float sample_inc;
 } Drum;
 
 typedef struct {
@@ -126,7 +130,48 @@ typedef struct {
     int age, left, gate, lane, pitch, loop, claim, legato;
     float haas[HAAS_N];
     int haas_i;
+    int sample_on;
+    int sample_zone;
+    float sample_pos[3];
+    float sample_rate;
+    float sample_target;
 } Note;
+
+/* Packed the same way src/dsp/bank.ts writes samples.bin. */
+typedef struct __attribute__((packed)) {
+    uint32_t offset;
+    uint32_t length;
+    uint32_t loop_start;
+    uint32_t loop_end;
+    float original_pitch;
+    float coarse_tune;
+    float fine_tune;
+    float sample_rate;
+    uint8_t key_lo;
+    uint8_t key_hi;
+    uint8_t has_loop;
+    uint8_t pad;
+} SampleZone;
+
+typedef struct __attribute__((packed)) {
+    uint32_t zone_index;
+    uint16_t zone_count;
+    uint16_t pad;
+} SampleSlot;
+
+typedef struct {
+    int ready;
+    int slot_count;
+    int zone_count;
+    int pcm_frames;
+    int catalog_count[5];
+    int catalog_start[5];
+    SampleSlot *slots;
+    SampleZone *zones;
+    const int16_t *pcm;
+    void *map;
+    size_t map_len;
+} SampleBank;
 
 typedef struct {
     int param;
@@ -258,6 +303,8 @@ typedef struct {
     float meter_level[METER_N];
     float meter_peak[METER_N];
     float meter_hold[METER_N];
+    SampleBank samples;
+    float lane_sample_rate[LANE_COUNT];
 } Engine;
 
 typedef struct {
@@ -306,6 +353,12 @@ typedef struct {
     int index;
 } Fire;
 
+void samples_load(Engine *engine, const char *module_dir);
+void samples_free(Engine *engine);
+int sample_zone_for(const SampleBank *bank, int slot, int midi);
+float sample_take(const SampleBank *bank, int zone, float *pos, float inc);
+void arm_sample_drum(Engine *engine, Drum *drum, const char *params, float pitch);
+void arm_sample_note(Engine *engine, Note *note, const char *params, int midi, int legato);
 float rng(Engine *engine);
 float read_param(const char *params, const char *suffix, float fallback);
 float soft(float sample);

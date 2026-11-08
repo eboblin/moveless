@@ -485,13 +485,13 @@ describe("euclid generator", () => {
     project.working.kick.sound.pitch = modulated(0.35, -1, 8, 1);
     project.working.kick.filter.cutoff.pattern = -1;
     project.working.kick.filter.cutoff.cycle = 8;
-    const page = livePage(project, "kick", 8);
+    const page = livePage(project, "kick", 9);
     assert.equal(page?.bindings[1]?.path, "filter.cutoff.pattern");
     assert.equal(page?.bindings[2], null);
     assert.equal(page?.bindings[3]?.path, "filter.cutoff.amount");
     assert.equal(project.working.kick.filter.cutoff.cycle, 8);
     project.working.kick.filter.cutoff.pattern = 2;
-    assert.equal(livePage(project, "kick", 8)?.bindings[2]?.path, "filter.cutoff.cycle");
+    assert.equal(livePage(project, "kick", 9)?.bindings[2]?.path, "filter.cutoff.cycle");
     const kicks = generatePhrase(project).lanes.kick;
     assert.ok(kicks.length > 0);
     for (const event of kicks) assert.ok(event.sound.pitch > 0.35);

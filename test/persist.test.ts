@@ -65,6 +65,19 @@ describe("project persist", () => {
     assert.equal(parsed.ui.deckLayer, "tone");
   });
 
+  it("fills a missing sample knob with the synth", () => {
+    const project = defaultProject();
+    const raw = JSON.parse(serializeStored(project, { context: "kick", page: 0, mode: "journal", playing: true, sampleLatched: false, randomizeLatched: false, face: null, deckLayer: "group" })) as {
+      project: { working: { bass: { sound: Record<string, unknown> }; kick: { sound: Record<string, unknown> } } };
+    };
+    delete raw.project.working.bass.sound.sample;
+    delete raw.project.working.kick.sound.sample;
+    const parsed = parseStored(JSON.stringify(raw));
+    assert.ok(parsed);
+    assert.equal(parsed.project.working.bass.sound.sample.value, 0);
+    assert.equal(parsed.project.working.kick.sound.sample.value, 0);
+  });
+
   it("keeps a missing fx lane at the factory and ignores a stray fx field", () => {
     const project = defaultProject();
     const raw = JSON.parse(serializeStored(project, { context: "kick", page: 0, mode: "journal", playing: true, sampleLatched: false, randomizeLatched: false, face: null, deckLayer: "group" })) as {
@@ -229,7 +242,7 @@ describe("project persist", () => {
     assert.equal(parsed.project.global.bar, defaultProject().global.bar);
     assert.ok(parsed.project.working.kick);
     assert.equal(parsed.ui.context, "snare");
-    assert.equal(parsed.ui.page, 9);
+    assert.equal(parsed.ui.page, 10);
     assert.equal(parsed.ui.playing, true);
     assert.equal(parsed.ui.sampleLatched, false);
     assert.equal(parsed.ui.randomizeLatched, false);
