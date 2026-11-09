@@ -26,11 +26,11 @@ All five are a full VPCA. A melody in moveless is pitch with a shape. Pattern se
 
 Five pages, two knobs each, the same for the bass, the lead, and the chords. The voice is a unison wavetable.
 
+- **Attack / sustain**. Attack is the share of the note length up to the peak. Sustain is the volume at the end of the note: 0 is a pluck, 1 is a shelf.
+- **Release / flt env**. Release is the tail after the note ends. Env is how far the filter opens on the attack and closes toward the end of the note.
 - **Wave / glide**. Wave travels from a dark tone, through triangle, saw, and square, to a vowel. Glide is portamento: zero is a jump, higher, and the pitch catches up to the target.
 - **Sync / fold**. Hard sync and fold. Both do nothing at zero.
 - **Drive / wide**. Drive is a soft clip. Wide is two side copies, detuned outward: a chorus that doesn't lose volume.
-- **Attack / sustain**. Attack is the share of the note length up to the peak. Sustain is the volume at the end of the note: 0 is a pluck, 1 is a shelf.
-- **Release / flt env**. Release is the tail after the note ends. Env is how far the filter opens on the attack and closes toward the end of the note.
 
 **Sample** is the first blue page, before those five. Two knobs, category and instrument. Zero on the category is the wavetable. Above zero, the bass, the lead, and the chords share one GM list, split into families (piano, bass, pad). Instrument walks the programs inside the locked family, and the takes between detents are soundfonts. The note picks the zone that covers its pitch. Glide, wide, fold, drive, attack, sustain, release, and env stay on the recording. Wave and sync do not: their big digits are hatched until the category returns to zero, and the knobs can still be turned.
 

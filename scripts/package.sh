@@ -24,11 +24,7 @@ cp module.json ui.js dsp.so "$stage/"
 cp assets/font.png assets/font.png.dat assets/factory.json assets/samples/bank.json "$stage/"
 mkdir -p "$stage/licenses"
 cp assets/samples/NOTICE.md assets/samples/licenses/* "$stage/licenses/"
-if [[ -f samples.bin ]]; then
-  cp samples.bin "$stage/"
-else
-  echo "нет samples.bin — голос останется на синтезе. собери: npm run pack-samples" >&2
-fi
+# samples.bin качается на старте по адресу из bank.json и в модуль не входит.
 
 rm -f dist/moveless-module.tar.gz
 tar -czf dist/moveless-module.tar.gz -C dist moveless

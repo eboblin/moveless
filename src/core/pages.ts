@@ -232,15 +232,18 @@ type FieldId = keyof typeof FIELD;
 /**
  * Sound order for each lane. Pages, factory homes, and the voice map read this list.
  * A lane only chooses which fields it has; the spec above is shared.
+ * After sample: envelope, then pitch motion with pitch on the right, then source, then color.
+ * Kick splits bend and bend time across that boundary. Perc splits fm and ratio the same way,
+ * so material sits with body and metal.
  */
 export const SOUND = {
-  kick: ["pitch", "decay", "bend", "bendTime", "body", "click", "noise", "drive"],
-  snare: ["pitch", "body", "bodyDecay", "noise", "noiseDecay", "snap", "tone", "drive"],
-  hat: ["pitch", "metal", "noise", "color", "decay", "attack", "ring", "pos"],
-  perc: ["pitch", "material", "decay", "bend", "fm", "fmRatio", "attack", "damp"],
-  bass: ["wave", "glide", "sync", "fold", "drive", "wide", "attack", "sustain", "release", "env"],
-  lead: ["wave", "glide", "sync", "fold", "drive", "wide", "attack", "sustain", "release", "env"],
-  chords: ["wave", "glide", "sync", "fold", "drive", "wide", "attack", "sustain", "release", "env"],
+  kick: ["decay", "bend", "bendTime", "pitch", "body", "click", "noise", "drive"],
+  snare: ["bodyDecay", "noiseDecay", "snap", "pitch", "body", "noise", "tone", "drive"],
+  hat: ["attack", "decay", "ring", "pitch", "metal", "noise", "color", "pos"],
+  perc: ["attack", "decay", "bend", "pitch", "material", "fm", "fmRatio", "damp"],
+  bass: ["attack", "sustain", "release", "env", "wave", "glide", "sync", "fold", "drive", "wide"],
+  lead: ["attack", "sustain", "release", "env", "wave", "glide", "sync", "fold", "drive", "wide"],
+  chords: ["attack", "sustain", "release", "env", "wave", "glide", "sync", "fold", "drive", "wide"],
 } as const satisfies Record<LaneId, readonly FieldId[]>;
 
 /** Sum of the macro keys that feed one phrase field. Does not walk the page list. */

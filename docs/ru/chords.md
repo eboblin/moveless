@@ -26,7 +26,7 @@ tone с pattern и amount - это и есть арпеджиатор: рису�
 
 ## Голубые: звук
 
-те же пять страниц, что у [баса и лида](bass-and-lead.md): wave / glide, sync / fold, drive / wide, attack / sustain, release / flt env. сначала SAMPLE из того же списка GM: семья, потом программа. каждая нота аккорда читает свою зону этого пресета.
+те же пять страниц, что у [баса и лида](bass-and-lead.md): attack / sustain, release / flt env, wave / glide, sync / fold, drive / wide. сначала SAMPLE из того же списка GM: семья, потом программа. каждая нота аккорда читает свою зону этого пресета.
 
 wide здесь особенно полезен: в блоке он разводит копии и делает пэд широким.
 

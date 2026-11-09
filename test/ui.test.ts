@@ -161,11 +161,39 @@ describe("pages and leds", () => {
     assert.equal(lanePages("bass")[5]?.title, "SAMPLE");
     assert.equal(lanePages("bass")[5]?.bindings[0]?.morph, "switch");
     assert.equal(pageGroup("bass", 9), "sound");
-    assert.equal(lanePages("bass")[9]?.title, "ATTACK / SUSTAIN");
-    assert.equal(lanePages("bass")[10]?.title, "RELEASE / FLT ENV");
-    assert.deepEqual(lanePages("bass")[10]?.groups, ["RELEASE", "FLT ENV"]);
-    assert.equal(lanePages("bass")[10]?.bindings[4]?.label, "ENV V");
+    assert.equal(lanePages("bass")[6]?.title, "ATTACK / SUSTAIN");
+    assert.equal(lanePages("bass")[7]?.title, "RELEASE / FLT ENV");
+    assert.deepEqual(lanePages("bass")[7]?.groups, ["RELEASE", "FLT ENV"]);
+    assert.equal(lanePages("bass")[7]?.bindings[4]?.label, "ENV V");
     assert.equal(pageGroup("bass", 10), "sound");
+    assert.deepEqual(
+      lanePages("bass").slice(6, 11).map((page) => page.title),
+      ["ATTACK / SUSTAIN", "RELEASE / FLT ENV", "WAVE / GLIDE", "SYNC / FOLD", "DRIVE / WIDE"],
+    );
+    assert.deepEqual(
+      lanePages("lead").slice(6, 11).map((page) => page.title),
+      lanePages("bass").slice(6, 11).map((page) => page.title),
+    );
+    assert.deepEqual(
+      lanePages("chords").slice(6, 11).map((page) => page.title),
+      lanePages("bass").slice(6, 11).map((page) => page.title),
+    );
+    assert.deepEqual(
+      lanePages("kick").slice(5, 9).map((page) => page.title),
+      ["DECAY / BEND", "B TIME / PITCH", "BODY / CLICK", "NOISE / DRIVE"],
+    );
+    assert.deepEqual(
+      lanePages("snare").slice(5, 9).map((page) => page.title),
+      ["B DECAY / N DECAY", "SNAP / PITCH", "BODY / NOISE", "TONE / DRIVE"],
+    );
+    assert.deepEqual(
+      lanePages("hat").slice(5, 9).map((page) => page.title),
+      ["ATTACK / DECAY", "RESO / PITCH", "METAL / NOISE", "COLOR / POS"],
+    );
+    assert.deepEqual(
+      lanePages("perc").slice(5, 9).map((page) => page.title),
+      ["ATTACK / DECAY", "BEND / PITCH", "MATERIAL / FM", "RATIO / DAMP"],
+    );
     assert.equal(pageGroup("bass", 11), "fx");
     assert.equal(pageGroup("bass", 12), "fx");
     assert.equal(pageGroup("chords", 2), "pattern");

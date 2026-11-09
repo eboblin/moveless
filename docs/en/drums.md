@@ -22,13 +22,13 @@ So the usual setup: beat holds the skeleton, roll adds a roll in two or three pl
 
 Four pages, two knobs each. Each drum has its own set.
 
-**Kick**: pitch, decay, bend, bend time, body, click, noise, drive. Bend is how far the pitch falls after the hit, bend time is how long that takes. Body leads the spectrum from a sine to a drumhead, and on to a clip.
+**Kick**: decay, bend, bend time, pitch, body, click, noise, drive. Bend is how far the pitch falls after the hit, bend time is how long that takes. Body leads the spectrum from a sine to a drumhead, and on to a clip.
 
-**Snare**: pitch, body, body decay, noise, noise decay, snap, tone, drive. Two tails, separate: the body and the wires. Body goes from a single resonator, through an 808/909 pair, to wood, metal, and ring. Snap goes from a long tick to a short bright hit.
+**Snare**: body decay, noise decay, snap, pitch, body, noise, tone, drive. Two tails, separate: the body and the wires. Body goes from a single resonator, through an 808/909 pair, to wood, metal, and ring. Snap goes from a long tick to a short bright hit.
 
-**Hat**: pitch, metal, noise, color, decay, attack, reso, pos. Metal goes from noise, to a comb, and on to an inharmonic bank. Pos is the pan, the only one among the drums: 50 is the centre.
+**Hat**: attack, decay, reso, pitch, metal, noise, color, pos. Metal goes from noise, to a comb, and on to an inharmonic bank. Pos is the pan, the only one among the drums: 50 is the centre.
 
-**Perc**: pitch, material, decay, bend, fm, ratio, attack, damp. Material is membrane, wood, cavity, bell, metal, digital. Fm and ratio are a second tone in the nord style, with detents on whole intervals. Damp kills the top.
+**Perc**: attack, decay, bend, pitch, material, fm, ratio, damp. Material is membrane, wood, cavity, bell, metal, digital. Fm and ratio are a second tone in the nord style, with detents on whole intervals. Damp kills the top.
 
 **Sample** is the first blue page, before those four. Two knobs: category and instrument. Category zero keeps the drum synthesizer. Above zero picks a family on that lane (a kick machine group, a tom height, a clap). Instrument walks the recordings inside the family, and a pattern on it stays there while the category is locked. Pitch transposes the recording by up to an octave either way, and 50 plays it as recorded. Decay, the snare's body decay, hat ring, kick bend and bend time, perc bend, snare tone, hat color, perc damp, drive, and the hat pan still shape the recording. Bend drops the pitch after the hit. Tone and color are brightness, and 50 leaves the file as it was. Damp kills the top. The other sound knobs stay and can still be turned, but their big digits are hatched, so you can see the parameter is not reaching the recording. Category zero clears the hatch. The filter and the sends still apply.
 

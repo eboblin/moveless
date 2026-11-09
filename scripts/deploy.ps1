@@ -77,12 +77,7 @@ $licenses = Join-Path $Stage "licenses"
 New-Item -ItemType Directory -Path $licenses | Out-Null
 Copy-Item (Join-Path $Root "assets\samples\NOTICE.md") $licenses
 Copy-Item (Join-Path $Root "assets\samples\licenses\*") $licenses
-$samples = Join-Path $Root "samples.bin"
-if (Test-Path $samples) {
-    Copy-Item $samples $Stage
-} else {
-    Write-Host "нет samples.bin — голос останется на синтезе. собери: npm run pack-samples"
-}
+# samples.bin качается на старте по адресу из bank.json и в модуль не входит.
 if (Test-Path $Tarball) { Remove-Item -Force $Tarball }
 Invoke-Checked { tar -czf $Tarball -C (Join-Path $Root "dist") moveless }
 
