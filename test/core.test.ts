@@ -37,6 +37,7 @@ import {
 } from "../src/core/performance.ts";
 import { chordVoiceCaption, generatePhrase, unitForOctave } from "../src/core/phrase.ts";
 import { chordSymbol, degreeNumeral, pitchClassOfDegree, scaleOf } from "../src/core/harmony.ts";
+import { recordingIndex, sampleCatalog, unitsForRecording } from "../src/core/samples.ts";
 import { holdNote, latchedPcs, releaseChannel, resetLatch, settleLatch } from "../src/core/latch.ts";
 import { chordLabels, textPreview } from "../src/core/text-preview.ts";
 import { fieldsOf, getPath } from "../src/core/fields.ts";
@@ -1769,6 +1770,40 @@ describe("randomize, wander, sets", () => {
     assert.notDeepEqual(pattern.working.bass.gen1, bass.working.bass.gen1);
     assert.deepEqual(pattern.working.bass.pitch, bass.working.bass.pitch);
     assert.deepEqual(pattern.working.bass.sound, bass.working.bass.sound);
+  });
+
+  it("picks the synth half the time and otherwise one library file, evenly at every intensity", () => {
+    const count = sampleCatalog("kick").length;
+    for (let i = 0; i < count; i++) {
+      const units = unitsForRecording("kick", i);
+      assert.equal(recordingIndex("kick", units.sample, units.instrument), i);
+    }
+    const tally = (intensity: "soft" | "medium" | "hard") => {
+      let synth = 0;
+      const seen = new Set<number>();
+      const picks: number[] = [];
+      for (let seed = 1; seed <= 80; seed++) {
+        const project = setRandomizeIntensity(defaultProject(), intensity);
+        project.global.seed = seed;
+        const rolled = randomizeLane(project, "kick", "sound");
+        const sample = rolled.working.kick.sound.sample?.value ?? 0;
+        const instrument = rolled.working.kick.sound.instrument?.value ?? 0;
+        const index = recordingIndex("kick", sample, instrument);
+        picks.push(index);
+        if (index < 0) synth++;
+        else seen.add(index);
+      }
+      return { synth, seen: seen.size, picks };
+    };
+    const low = tally("soft");
+    const high = tally("hard");
+    assert.deepEqual(low.picks, high.picks);
+    assert.ok(low.synth > 20 && low.synth < 60, `synth rolls ${low.synth}`);
+    assert.ok(low.seen > 20, `recordings ${low.seen}`);
+    const generators = setRandomizeDepth(setRandomizeIntensity(defaultProject(), "hard"), "generators");
+    const untouched = randomizeLane(generators, "kick", "sound");
+    assert.equal(untouched.working.kick.sound.sample?.value ?? 0, 0);
+    assert.equal(untouched.working.kick.sound.instrument?.value ?? 0, 0);
   });
 
   it("rerolls pattern, notes and sound together when scope is all", () => {

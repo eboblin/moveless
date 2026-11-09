@@ -127,6 +127,40 @@ export function instrumentLabel(lane: LaneId, categoryUnit: number, instrumentUn
   return item ? recordingName(item) : "SYNTH";
 }
 
+/** Category and instrument units that land on one library file. `index` 0 is the first recording. */
+export function unitsForRecording(lane: LaneId, index: number): { sample: number; instrument: number } {
+  const families = FAMILIES[lane];
+  const list = CATALOG[lane];
+  if (list.length < 1 || families.length < 1) return { sample: 0, instrument: 0 };
+  let at = index;
+  if (at < 0) at = 0;
+  if (at >= list.length) at = list.length - 1;
+  let familyIndex = families.length - 1;
+  for (let i = 0; i < families.length; i++) {
+    const family = families[i];
+    if (family && at < family.start + family.items.length) {
+      familyIndex = i;
+      break;
+    }
+  }
+  const family = families[familyIndex];
+  const sample = (familyIndex + 1) / families.length;
+  const offset = family ? at - family.start : 0;
+  const count = family?.items.length ?? 1;
+  const instrument = count > 1 ? offset / (count - 1) : 0;
+  return { sample, instrument };
+}
+
+/** -1 is the synth. Otherwise the library file the two knobs resolve to. */
+export function recordingIndex(lane: LaneId, categoryUnit: number, instrumentUnit: number): number {
+  const families = FAMILIES[lane];
+  const category = sampleIndex(categoryUnit, families.length);
+  if (category <= 0) return -1;
+  const family = families[category - 1];
+  if (!family || family.items.length < 1) return -1;
+  return family.start + instrumentIndex(instrumentUnit, family.items.length);
+}
+
 /** 0 while the category is the synth, otherwise 1..recordings in the family. */
 export function instrumentNumber(lane: LaneId, categoryUnit: number, instrumentUnit: number): number {
   const family = familyAt(lane, categoryUnit);

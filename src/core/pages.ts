@@ -474,8 +474,8 @@ function drumPages(lane: DrumId): Page[] {
     drumGenPage(2),
     pair("ratchet.count", FIELD.count, "ratchet.rate", FIELD.rate, "pattern"),
     pair("ratchet.fade", FIELD.fade, "ratchet.tone", ROLL_TONE, "pattern"),
-    ...soundPages(SOUND[lane]),
     samplePage(lane),
+    ...soundPages(SOUND[lane]),
     filterPage(),
     sendPage(),
   ];
@@ -489,8 +489,8 @@ function pitchedPages(lane: PitchedId): Page[] {
     // Drum pitch has no center hold. Only the note pitch rests at 0.5.
     pair("pitch", { ...FIELD.pitch, detent: [0.5] }, "octave", FIELD.octave, "notes"),
     lengthPage(),
-    ...soundPages(SOUND[lane]),
     samplePage(lane),
+    ...soundPages(SOUND[lane]),
     filterPage(),
     sendPage(),
   ];
@@ -519,8 +519,8 @@ function chordPages(): Page[] {
     ]),
     pair("tone", FIELD.tone, "octave", FIELD.octave, "notes"),
     pair("spread", FIELD.spread, "flow", FIELD.flow, "notes"),
-    ...soundPages(SOUND.chords),
     samplePage("chords"),
+    ...soundPages(SOUND.chords),
     filterPage(),
     sendPage(),
   ];

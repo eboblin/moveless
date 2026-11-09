@@ -4,6 +4,7 @@ import { defaultBus, defaultGlobal, defaultProgression, defaultProject } from ".
 import { nodeAt, setPath } from "./fields.ts";
 import { hash01 } from "./hash.ts";
 import { bindingFor, bindingOn, laneScopePaths, tuneSampleBinding } from "./pages.ts";
+import { sampleCatalog, unitsForRecording } from "./samples.ts";
 import {
   LANES,
   SCALE_IDS,
@@ -12,6 +13,7 @@ import {
   type RandomizeDepth,
   type RandomizeIntensity,
   type RandomizeScope,
+  type LaneId,
   type Lanes,
   type PatternId,
   type Project,
@@ -104,8 +106,38 @@ function spendPage(project: Project, lane: PatternId, paths: string[], tag: stri
   const working = clone(project.working);
   const roll = (...parts: (string | number)[]) =>
     hash01(project.global.seed, "capture", nonce, lane, tag, intensity, depth, ...parts);
-  applySplitBudget(working[lane], factoryLane(lane), eligible, roll, intensity, lane, project);
+  const library = lane !== "fx" && eligible.includes("sound.sample.value");
+  const budgetPaths = library
+    ? eligible.filter((path) => path !== "sound.sample.value" && path !== "sound.instrument.value")
+    : eligible;
+  if (library) {
+    rollLibrary(working[lane], lane, hash01(project.global.seed, "capture", nonce, lane, tag, depth, "library", "coin"), hash01(project.global.seed, "capture", nonce, lane, tag, depth, "library", "pick"));
+  }
+  if (budgetPaths.length) applySplitBudget(working[lane], factoryLane(lane), budgetPaths, roll, intensity, lane, project);
   return { ...project, working, randomizeNonce: nonce };
+}
+
+/** Half the rolls stay on the synth. The other half pick one library file, evenly, ignoring intensity. */
+function rollLibrary(lane: Lanes[LaneId], id: LaneId, coin: number, pick: number): void {
+  const sound = lane.sound;
+  const sample = sound.sample;
+  const instrument = sound.instrument;
+  if (!sample || !instrument) return;
+  if (coin < 0.5) {
+    sound.sample = { ...sample, value: 0 };
+    sound.instrument = { ...instrument, value: 0 };
+    return;
+  }
+  const count = sampleCatalog(id).length;
+  if (count < 1) {
+    sound.sample = { ...sample, value: 0 };
+    sound.instrument = { ...instrument, value: 0 };
+    return;
+  }
+  const index = Math.min(count - 1, Math.floor(pick * count));
+  const units = unitsForRecording(id, index);
+  sound.sample = { ...sample, value: units.sample };
+  sound.instrument = { ...instrument, value: units.instrument };
 }
 
 /** Generators and values each receive the full page budget. They do not compete. */
