@@ -591,8 +591,35 @@ function laneTag(project: Project, context: ContextId): string {
 
 function laneHeader(project: Project, context: ContextId, page: Page | undefined): string {
   const tag = laneTag(project, context);
-  const [left, right] = page?.groups ?? [page?.title ?? null, null];
+  const [left, right] = shownGroups(project, context, page, tag);
   return [tag, left, right].filter(Boolean).join(" ");
+}
+
+/** Leading characters of `text` that fit in `pixels` at the header advance. */
+export function fitHeader(text: string, pixels: number): string {
+  const count = Math.max(0, Math.floor(pixels / CHAR_W));
+  return text.length <= count ? text : text.slice(0, count);
+}
+
+/** Width left for each half of the header. The right half stops before the lane tag. */
+function headerRoom(tag: string): { left: number; right: number } {
+  return {
+    left: halfLeftX(1) - halfLeftX(0) - 1,
+    right: rightEdgeX(tag) - halfLeftX(1) - 1,
+  };
+}
+
+/** Sample page headers are the live category and instrument. Other pages keep their group names. */
+function shownGroups(project: Project, context: ContextId, page: Page | undefined, tag: string): [string | null, string | null] {
+  const groups = page?.groups ?? [page?.title ?? null, null];
+  if (!page || page.id !== "sample" || !isVoice(context)) return [groups[0], groups[1]];
+  const sample = readControl(project, context, "sound.sample.value");
+  const instrument = readControl(project, context, "sound.instrument.value");
+  const room = headerRoom(tag);
+  return [
+    fitHeader(sampleLabel(context, sample), room.left),
+    fitHeader(instrumentLabel(context, sample, instrument), room.right),
+  ];
 }
 
 /** Left-align `text` inside a horizontal half of the header (0 = left, 1 = right). */
@@ -1418,7 +1445,7 @@ function drawLabels(
   if (focus) {
     labels.push({ x: 1, y: TITLE_Y, text: header.slice(0, LINE_LIMIT) });
   } else {
-    const [left, right] = page?.groups ?? [null, null];
+    const [left, right] = shownGroups(project, context, page, tag);
     if (left) labels.push({ x: halfLeftX(0), y: TITLE_Y, text: left });
     if (right) labels.push({ x: halfLeftX(1), y: TITLE_Y, text: right });
   }

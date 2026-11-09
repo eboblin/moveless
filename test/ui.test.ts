@@ -14,7 +14,8 @@ import { LED, advancePulseClock, blinkHalfMs, directionLit, dropLed, faceButtonL
 import { DIGIT_H, displayAmount, fractionFromLabel, plotAmount } from "../src/ui/digits.ts";
 import { lettersWidth, plotLetters } from "../src/ui/letters.ts";
 import { parseBankParam } from "../src/core/bank.ts";
-import { BANK_BAR, CAPTION_GAP, CAPTION_LANE_Y, CAPTION_OUTLINE, CAPTION_PAGE_Y, CAPTION_SINGLE_Y, DIGIT_Y, FONT_H, HEADER_H, HEIGHT, MIX_METER_BOTTOM, MIX_METER_TOP, MIX_METER_X, NAME_Y, PAGER_Y, PARAM_COL_W, PARAM_H, SEP_Y, TITLE_Y, VALUE_Y, VIZ_H, WIDTH, coverBank, laneMark, loadWidth, pageTitlePaintKey, pageTitleTravel, pixel, renderScreen, type Screen } from "../src/ui/screen.ts";
+import { BANK_BAR, CAPTION_GAP, CAPTION_LANE_Y, CAPTION_OUTLINE, CAPTION_PAGE_Y, CAPTION_SINGLE_Y, CHAR_W, DIGIT_Y, FONT_H, HEADER_H, HEIGHT, MIX_METER_BOTTOM, MIX_METER_TOP, MIX_METER_X, NAME_Y, PAGER_Y, PARAM_COL_W, PARAM_H, SEP_Y, TITLE_Y, VALUE_Y, VIZ_H, WIDTH, coverBank, fitHeader, halfLeftX, laneMark, loadWidth, pageTitlePaintKey, pageTitleTravel, pixel, renderScreen, rightEdgeX, type Screen } from "../src/ui/screen.ts";
+import { instrumentLabel, sampleCatalog, sampleLabel, unitsForRecording } from "../src/core/samples.ts";
 import { WAVE_HOP, emptyWave, type WaveTape } from "../src/ui/wave.ts";
 import { defaultUi, HOLD_MS, HOLD_TICKS, openSetMode, PAGE_TITLE_MS, PAGE_TITLE_SLIDE_MS, restoreUi, settleWheel, WHEEL_RELEASE_MS, type DetentHold } from "../src/ui/state.ts";
 import { midiMessage, reduce, relDelta, settleTrackPeek, type Session } from "../src/ui/input.ts";
@@ -296,6 +297,51 @@ describe("pages and leds", () => {
     const turned = writeControl(defaultProject(), "aux", glue, DETENT_CLICKS + Math.ceil(knobClicksPerStep(glue)));
     assert.ok(turned.project.bus.glue >= glue.step - 1e-9);
     assert.equal(aux.some((page) => page.title === "MACRO"), false);
+  });
+
+  it("names the sample headers with the category and the instrument, cut to the half", () => {
+    const factory = renderScreen(defaultProject(), { ...defaultUi(), context: "kick", page: 4 }, 0);
+    assert.equal(factory.header, "KCK SYNTH SYNTH");
+    assert.equal(factory.labels.find((label) => label.y === TITLE_Y && label.x === halfLeftX(0))?.text, "SYNTH");
+    assert.equal(factory.labels.find((label) => label.y === TITLE_Y && label.x === halfLeftX(1))?.text, "SYNTH");
+    const list = sampleCatalog("bass");
+    let at = 0;
+    for (let i = 1; i < list.length; i++) {
+      const longer = unitsForRecording("bass", i);
+      const current = unitsForRecording("bass", at);
+      if (instrumentLabel("bass", longer.sample, longer.instrument).length > instrumentLabel("bass", current.sample, current.instrument).length) at = i;
+    }
+    const units = unitsForRecording("bass", at);
+    const project = defaultProject();
+    const sound = project.working.bass.sound;
+    sound.sample = { ...sound.sample, value: units.sample };
+    sound.instrument = { ...sound.instrument, value: units.instrument };
+    const category = sampleLabel("bass", units.sample);
+    const instrument = instrumentLabel("bass", units.sample, units.instrument);
+    const open = renderScreen(project, { ...defaultUi(), context: "bass", page: 5 }, 0);
+    const leftRoom = halfLeftX(1) - halfLeftX(0) - 1;
+    const rightRoom = rightEdgeX("BAS") - halfLeftX(1) - 1;
+    const left = open.labels.find((label) => label.y === TITLE_Y && label.x === halfLeftX(0))?.text;
+    const right = open.labels.find((label) => label.y === TITLE_Y && label.x === halfLeftX(1))?.text;
+    assert.equal(left, fitHeader(category, leftRoom));
+    assert.equal(right, fitHeader(instrument, rightRoom));
+    assert.ok(category.startsWith(left ?? ""));
+    assert.ok(instrument.startsWith(right ?? ""));
+    assert.ok((left ?? "").length * CHAR_W <= leftRoom);
+    assert.ok((right ?? "").length * CHAR_W <= rightRoom);
+    assert.equal(open.header, `BAS ${left} ${right}`);
+    project.mute.bass = true;
+    const muted = renderScreen(project, { ...defaultUi(), context: "bass", page: 5 }, 0);
+    const mutedRight = muted.labels.find((label) => label.y === TITLE_Y && label.x === halfLeftX(1))?.text ?? "";
+    assert.equal(mutedRight, fitHeader(instrument, rightEdgeX("BASM") - halfLeftX(1) - 1));
+    assert.ok(mutedRight.length <= (right ?? "").length);
+    const held = renderScreen(project, {
+      ...defaultUi(),
+      context: "bass",
+      page: 5,
+      focus: { label: "INSTRUMENT V", path: "sound.instrument.value", generator: null, showPattern: false, held: true, untilTick: 0, untilMs: 0 },
+    }, 0);
+    assert.equal(held.header, instrument.slice(0, 24));
   });
 
   it("follows the lane lamp rules", () => {
