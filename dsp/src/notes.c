@@ -313,7 +313,7 @@ void note_sample(Engine *engine, Note *note, float *left, float *right) {
         slew_sample(note);
         base = sample_inc(&engine->samples, note, note->sample_rate);
         if (!open) {
-            mid = shape_note(sample_take(&engine->samples, note->sample_zone, &note->sample_pos[1], base), 0.0f, note->drive);
+            mid = shape_note(sample_take(&engine->samples, note->sample_zone, &note->sample_pos[1], base), note->fold, note->drive);
         } else {
             float w, cents, shaped, scaled;
             if (note->wide_key != note->wide) {
@@ -327,13 +327,13 @@ void note_sample(Engine *engine, Note *note, float *left, float *right) {
             }
             w = note->side_w;
             norm = note->uni_norm;
-            shaped = shape_note(sample_take(&engine->samples, note->sample_zone, &note->sample_pos[1], base), 0.0f, note->drive);
+            shaped = shape_note(sample_take(&engine->samples, note->sample_zone, &note->sample_pos[1], base), note->fold, note->drive);
             mid = shaped;
-            shaped = shape_note(sample_take(&engine->samples, note->sample_zone, &note->sample_pos[0], base * note->ratio_lo), 0.0f, note->drive);
+            shaped = shape_note(sample_take(&engine->samples, note->sample_zone, &note->sample_pos[0], base * note->ratio_lo), note->fold, note->drive);
             scaled = shaped * w;
             mid += scaled;
             side += scaled * (-UNI_PAN);
-            shaped = shape_note(sample_take(&engine->samples, note->sample_zone, &note->sample_pos[2], base * note->ratio_hi), 0.0f, note->drive);
+            shaped = shape_note(sample_take(&engine->samples, note->sample_zone, &note->sample_pos[2], base * note->ratio_hi), note->fold, note->drive);
             scaled = shaped * w;
             mid += scaled;
             side += scaled * UNI_PAN;

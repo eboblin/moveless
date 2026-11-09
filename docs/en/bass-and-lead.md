@@ -32,7 +32,7 @@ Five pages, two knobs each, the same for the bass, the lead, and the chords. The
 - **Attack / sustain**. Attack is the share of the note length up to the peak. Sustain is the volume at the end of the note: 0 is a pluck, 1 is a shelf.
 - **Release / flt env**. Release is the tail after the note ends. Env is how far the filter opens on the attack and closes toward the end of the note.
 
-**Sample** follows those five. Two knobs, category and instrument. Zero on the category is the wavetable. Above zero, the bass, the lead, and the chords share one GM list, split into families (piano, bass, pad). Instrument walks the programs inside the locked family, and the takes between detents are soundfonts. The note picks the zone that covers its pitch. Attack, sustain, release, env, drive, glide, and wide stay on the recording.
+**Sample** follows those five. Two knobs, category and instrument. Zero on the category is the wavetable. Above zero, the bass, the lead, and the chords share one GM list, split into families (piano, bass, pad). Instrument walks the programs inside the locked family, and the takes between detents are soundfonts. The note picks the zone that covers its pitch. Glide, wide, fold, drive, attack, sustain, release, and env stay on the recording. Wave and sync do not: their big digits are hatched until the category returns to zero, and the knobs can still be turned.
 
 The volume envelope is tied to the note length: a long note is a long attack, a short note is a short one. A short length and a high release is a stab.
 

@@ -13,7 +13,7 @@ import { formatBus, formatGainSpans, packPhraseBody, parseMeterPage } from "../d
 import { midiMessage, reduce, settleTrackPeek, type Session } from "../ui/input.ts";
 import { CAPTURE_CC, DOWN_CC, isVoice, LANES, MENU_CC, MUTE_CC, PLAY_CC, SAMPLE_CC, TRACK_CC, UP_CC } from "../core/types.ts";
 import { advancePulseClock, blinkHalfMs, directionLit, dropLed, faceButtonLed, ledColorAt, menuLed, modeButtonLed, offerLed, padLeds, padPackets, playLed, PULSE_CLOCK_IDLE, sceneShadeStep, STEP_ICON_CC, stepIconColors, stepLampKey, stepLeds, takeLeds, trackLeds, type PulseClock } from "../ui/leds.ts";
-import { plotAmount, plotMinus } from "../ui/digits.ts";
+import { DIGIT_H, plotAmount, plotMinus } from "../ui/digits.ts";
 import {
   CAPTION_BOX_BOTTOM,
   CAPTION_BOX_TOP,
@@ -606,6 +606,16 @@ function paintHostReadout(screen: Screen): void {
       host.set_pixel?.(x, y, color);
     };
     plotAmount(digit.cell * PARAM_COL_W, PARAM_COL_W, DIGIT_Y, digit.amount, plot);
+  }
+  for (const digit of screen.digits) {
+    if (!digit.idle) continue;
+    const x0 = digit.cell * PARAM_COL_W;
+    const y1 = DIGIT_Y + DIGIT_H;
+    for (let y = DIGIT_Y; y < y1; y++) {
+      for (let x = x0; x < x0 + PARAM_COL_W; x++) {
+        if ((x + y) % 2 !== 0) host.set_pixel?.(x, y, 0);
+      }
+    }
   }
   for (const label of screen.labels) {
     const width = host.text_width?.(label.text) ?? label.text.length * CHAR_W;

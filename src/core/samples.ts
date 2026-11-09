@@ -47,6 +47,21 @@ const FAMILIES: Record<LaneId, readonly Family[]> = {
   chords: familiesOf(GM_SAMPLES),
 };
 
+/** Fields the recording ignores. The screen hatches their digits while a sample is selected. */
+const SAMPLE_IDLE: Record<LaneId, ReadonlySet<string>> = {
+  kick: new Set(["body", "click", "noise"]),
+  snare: new Set(["body", "noise", "noiseDecay", "snap"]),
+  hat: new Set(["metal", "noise", "attack"]),
+  perc: new Set(["material", "fm", "fmRatio", "attack"]),
+  bass: new Set(["wave", "sync"]),
+  lead: new Set(["wave", "sync"]),
+  chords: new Set(["wave", "sync"]),
+};
+
+export function sampleIgnores(lane: LaneId, field: string): boolean {
+  return SAMPLE_IDLE[lane].has(field);
+}
+
 export function sampleCatalog(lane: LaneId): readonly SampleName[] {
   return CATALOG[lane];
 }

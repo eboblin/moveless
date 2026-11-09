@@ -1296,13 +1296,37 @@ function armNoteSample(engine: Engine, note: NoteVoice, event: BlockEvent | Loop
   note.sampleZone = picked.zone;
 }
 
+/** Kick and perc fall the same way the synth does. Snare bend is written by body, so a recording stays put. */
+function sampleRateMul(drum: DrumVoice): number {
+  if (drum.lane !== 0 && drum.lane !== 3) return 1;
+  return 2 ** (drum.bend * drum.pitchEnv);
+}
+
+/** Tone and color: 0.5 is the file. One pole at 1.2 kHz, darker below, brighter above. Damp closes a lowpass. */
+function shapeRecording(drum: DrumVoice, x: number): number {
+  if (drum.lane === 1 || drum.lane === 2) {
+    const tilt = Math.max(0, Math.min(1, drum.tone));
+    const amount = (tilt - 0.5) * 2;
+    drum.nlp += (x - drum.nlp) * poleCoef(1200);
+    const high = x - drum.nlp;
+    if (amount < 0) x += (drum.nlp - x) * -amount;
+    else x += high * amount;
+  } else if (drum.lane === 3) {
+    const damp = Math.max(0, Math.min(1, drum.damp));
+    const hz = 18000 * (400 / 18000) ** damp;
+    drum.nhp += (x - drum.nhp) * poleCoef(hz);
+    x += (drum.nhp - x) * damp;
+  }
+  return x;
+}
+
 function drumSample(engine: Engine, drum: DrumVoice): [number, number] {
   let mid = 0;
   let side = 0;
   if (drum.sampleOn && engine.bank) {
-    const read = readFrame(engine.bank, drum.sampleZone, drum.samplePos, drum.sampleInc);
+    const read = readFrame(engine.bank, drum.sampleZone, drum.samplePos, drum.sampleInc * sampleRateMul(drum));
     drum.samplePos = read.pos;
-    mid = read.value * drum.env;
+    mid = shapeRecording(drum, read.value) * drum.env;
     drum.clickEnv *= drum.clickK;
   } else {
     const freq = drum.freq * 2 ** (drum.bend * drum.pitchEnv);
@@ -1415,7 +1439,7 @@ function noteSample(engine: Engine, note: NoteVoice): [number, number] {
     if (!open) {
       const read = readFrame(engine.bank, note.sampleZone, note.samplePos[1] ?? 0, base);
       note.samplePos[1] = read.pos;
-      mid = shapeNote(read.value, 0, note.drive);
+      mid = shapeNote(read.value, note.fold, note.drive);
     } else {
       if (note.wideKey !== note.wide) {
         const w = note.wide * note.wide;
@@ -1430,15 +1454,15 @@ function noteSample(engine: Engine, note: NoteVoice): [number, number] {
       const norm = note.uniNorm;
       const center = readFrame(engine.bank, note.sampleZone, note.samplePos[1] ?? 0, base);
       note.samplePos[1] = center.pos;
-      mid = shapeNote(center.value, 0, note.drive);
+      mid = shapeNote(center.value, note.fold, note.drive);
       const low = readFrame(engine.bank, note.sampleZone, note.samplePos[0] ?? 0, base * note.ratioLo);
       note.samplePos[0] = low.pos;
-      const lowScaled = shapeNote(low.value, 0, note.drive) * w;
+      const lowScaled = shapeNote(low.value, note.fold, note.drive) * w;
       mid += lowScaled;
       side += lowScaled * -UNI_PAN;
       const high = readFrame(engine.bank, note.sampleZone, note.samplePos[2] ?? 0, base * note.ratioHi);
       note.samplePos[2] = high.pos;
-      const highScaled = shapeNote(high.value, 0, note.drive) * w;
+      const highScaled = shapeNote(high.value, note.fold, note.drive) * w;
       mid += highScaled;
       side += highScaled * UNI_PAN;
       mid *= norm;

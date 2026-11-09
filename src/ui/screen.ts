@@ -10,7 +10,7 @@ import { DIGIT_H, displayAmount, divisionCell, type BigAmount, type DisplayAmoun
 import { readControl } from "./controls.ts";
 import { bindingFor, deckPage, livePage, mixerPage, pageTitle, pagesFor, type Binding, type Page } from "../core/pages.ts";
 import { type BankView } from "../core/bank.ts";
-import { instrumentLabel, instrumentNumber, sampleCount, sampleIndex, sampleLabel } from "../core/samples.ts";
+import { instrumentLabel, instrumentNumber, sampleCount, sampleIgnores, sampleIndex, sampleLabel } from "../core/samples.ts";
 import { focusVisible, macroReturnValue, PAGE_TITLE_SLIDE_MS, screenPlace, type CaptureLine, type RandomizeLine, type UiState } from "./state.ts";
 import { lettersWidth, plotLetters } from "./letters.ts";
 import { readEnvelope } from "../dsp/envelope.ts";
@@ -68,6 +68,8 @@ export interface DigitCell {
   cell: number;
   amount: BigAmount;
   invert: boolean;
+  /** The recording does not hear this knob. The host hatches the digits. */
+  idle?: boolean;
 }
 
 export interface Screen {
@@ -1447,14 +1449,17 @@ function drawLabels(
 
 function paramDigits(project: Project, context: ContextId, page: Page, focus: string | null, ui: UiState, now: number): DigitCell[] {
   const digits: DigitCell[] = [];
+  const recording = isVoice(context) && sampleIndex(readControl(project, context, "sound.sample.value"), sampleCount(context)) > 0;
   page.bindings.forEach((binding, index) => {
     if (!binding || index >= PARAM_COLS) return;
     const amount = knobAmount(project, context, binding, ui, now);
     if (amount.kind !== "big") return;
+    const field = binding.path.split(".")[1] ?? "";
     digits.push({
       cell: index,
       amount,
       invert: focus === binding.label,
+      idle: recording && isVoice(context) && sampleIgnores(context, field),
     });
   });
   return digits;

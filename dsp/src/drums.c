@@ -486,10 +486,36 @@ float shape_drive(float sample, float drive) {
     return driven / (1.0f + fabsf(driven));
 }
 
+/* Kick and perc fall the same way the synth does. Snare bend is written by body, so a recording stays put. */
+static float sample_rate_mul(const Drum *drum) {
+    if (drum->lane != 0 && drum->lane != 3) return 1.0f;
+    return powf(2.0f, drum->bend * drum->pitch_env);
+}
+
+/* Tone and color: 0.5 is the file. One pole at 1.2 kHz, darker below, brighter above. Damp closes a lowpass. */
+static float shape_recording(Drum *drum, float x) {
+    float tilt, amount, high, damp, hz;
+    if (drum->lane == 1 || drum->lane == 2) {
+        tilt = clampf01(drum->tone);
+        amount = (tilt - 0.5f) * 2.0f;
+        drum->nlp += (x - drum->nlp) * pole_coef(1200.0f);
+        high = x - drum->nlp;
+        if (amount < 0.0f) x += (drum->nlp - x) * (-amount);
+        else x += high * amount;
+    } else if (drum->lane == 3) {
+        damp = clampf01(drum->damp);
+        hz = 18000.0f * powf(400.0f / 18000.0f, damp);
+        drum->nhp += (x - drum->nhp) * pole_coef(hz);
+        x += (drum->nhp - x) * damp;
+    }
+    return x;
+}
+
 void drum_sample(Engine *engine, Drum *drum, float *left, float *right) {
     float freq, mid = 0, side = 0, noisy, click, filtered;
     if (drum->sample_on) {
-        mid = sample_take(&engine->samples, drum->sample_zone, &drum->sample_pos, drum->sample_inc) * drum->env;
+        float inc = drum->sample_inc * sample_rate_mul(drum);
+        mid = shape_recording(drum, sample_take(&engine->samples, drum->sample_zone, &drum->sample_pos, inc)) * drum->env;
         drum->click_env *= drum->click_k;
     } else {
         freq = drum->freq * powf(2.0f, drum->bend * drum->pitch_env);
